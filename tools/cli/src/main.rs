@@ -56,6 +56,8 @@ fn run(args: &[&str]) -> Result<()> {
             let (major, minor, patch) = info.firmware;
             let pins: Vec<String> = (0..64).filter(|p| info.usable_pins >> p & 1 == 1).map(|p| p.to_string()).collect();
             println!("firmware {major}.{minor}.{patch}, protocol {}, {:?}", info.protocol, info.mcu);
+            let uid: String = info.uid.iter().map(|b| format!("{b:02x}")).collect();
+            println!("chip id {uid}");
             println!("up to {} keys on {} layers", info.max_keys, info.max_layers);
             println!("usable pins: {}", pins.join(","));
             Ok(())

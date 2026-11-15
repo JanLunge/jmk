@@ -108,6 +108,10 @@ fn encode(config: &Config, buf: &mut [u8]) -> Option<usize> {
     put(buf, &mut used, &config.layer_count)?;
     put(buf, &mut used, &config.profiles)?;
     put(buf, &mut used, &config.combos)?;
+    put(buf, &mut used, &config.meta)?;
+    put(buf, &mut used, &config.layout)?;
+    put(buf, &mut used, &config.macro_ends)?;
+    put(buf, &mut used, &config.macro_steps)?;
     for layer in &config.actions[..config.layer_count as usize] {
         for action in layer {
             put(buf, &mut used, action)?;
@@ -129,6 +133,10 @@ fn decode(mut bytes: &[u8], config: &mut Config) -> Option<()> {
     }
     let profiles = take(&mut bytes)?;
     let combos = take(&mut bytes)?;
+    config.meta = take(&mut bytes)?;
+    config.layout = take(&mut bytes)?;
+    config.macro_ends = take(&mut bytes)?;
+    config.macro_steps = take(&mut bytes)?;
     for layer in &mut config.actions[..layer_count as usize] {
         for action in layer.iter_mut().take(MAX_KEYS) {
             *action = take(&mut bytes)?;

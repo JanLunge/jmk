@@ -7,6 +7,7 @@
 
 mod config;
 mod device;
+mod link;
 mod pins;
 mod probe;
 mod scan;
@@ -14,5 +15,6 @@ mod storage;
 
 pub use config::Config;
 pub use device::{Board, Device};
+pub use link::Link;
 pub use pins::{Pins, Pull};
 pub use storage::{Storage, STORAGE_SIZE};

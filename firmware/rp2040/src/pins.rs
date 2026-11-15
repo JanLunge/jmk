@@ -1,7 +1,7 @@
 use embassy_rp::gpio::{AnyPin, Flex, Pull as RpPull};
 use embassy_time::{block_for, Duration};
 use jmk_device::{Pins, Pull};
-use jmk_proto::Pin;
+use jmk_proto::{LinkConfig, Pin};
 
 const GPIO_COUNT: usize = 30;
 
@@ -50,6 +50,10 @@ impl Pins for RpPins {
 
     fn read(&mut self, pin: Pin) -> bool {
         self.pin(pin).is_some_and(|flex| flex.is_high())
+    }
+
+    fn supports_link(&self, link: &LinkConfig) -> bool {
+        crate::link::supported(link)
     }
 
     fn settle(&mut self) {

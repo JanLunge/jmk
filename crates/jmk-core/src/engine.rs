@@ -1,6 +1,6 @@
 use heapless::Vec;
 
-use crate::action::{Action, Basic, Combo, HoldTapFlavor, HoldTapProfile};
+use crate::action::{Action, Basic, Combo, HoldTapFlavor, HoldTapProfile, MacroStep};
 use crate::combo::ComboStage;
 use crate::keycode::modifier_bit;
 use crate::{Event, Millis, Source};
@@ -9,6 +9,9 @@ use crate::{Event, Millis, Source};
 pub const MAX_REPORT_KEYS: usize = 16;
 const MAX_HELD: usize = 32;
 const QUEUE_LEN: usize = 16;
+const MAX_MACRO_KEYS: usize = 8;
+/// Time between macro steps, so every report reaches the host in order.
+const MACRO_STEP_MS: Millis = 2;
 
 /// The keymap the engine reads from. Implemented by the firmware over its
 /// flash-backed storage and by plain arrays in tests.
@@ -19,6 +22,9 @@ pub trait Keymap {
         HoldTapProfile::default()
     }
     fn combos(&self) -> &[Combo] {
+        &[]
+    }
+    fn macro_steps(&self, _index: u8) -> &[MacroStep] {
         &[]
     }
 }
@@ -59,6 +65,16 @@ struct Held {
     action: Basic,
 }
 
+/// A macro being played back.
+#[derive(Clone, Copy)]
+struct Playback {
+    index: u8,
+    step: u16,
+    next: Millis,
+    /// Key to release before the next step (second half of a tap).
+    tapped: Option<u8>,
+}
+
 enum Decision {
     Tap,
     Hold,
@@ -75,6 +91,9 @@ pub struct Engine {
     oneshot_mods: u8,
     last_key_press: Option<Millis>,
     last_report: KeyboardReport,
+    playback: Option<Playback>,
+    /// Keys currently held down by the macro.
+    macro_keys: Vec<u8, MAX_MACRO_KEYS>,
 }
 
 impl Engine {
@@ -95,6 +114,7 @@ impl Engine {
         combos.tick(keymap.combos(), now, &mut |ev| self.push(keymap, out, ev, now));
         self.combos = combos;
         self.process(keymap, out, now, false);
+        self.play(keymap, out, now);
     }
 
     /// The earliest time at which [`Engine::tick`] has work to do.
@@ -105,10 +125,7 @@ impl Engine {
             }
             _ => None,
         });
-        match (hold_tap, self.combos.deadline(keymap.combos())) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [hold_tap, self.combos.deadline(keymap.combos()), self.playback.map(|p| p.next)].into_iter().flatten().min()
     }
 
     /// Forget all held keys and layers and tell the host nothing is pressed.
@@ -239,6 +256,12 @@ impl Engine {
             Basic::ToggleLayer(layer) => self.toggled_layers ^= layer_bit(layer),
             Basic::ToLayer(layer) => self.toggled_layers = layer_bit(layer),
             Basic::Custom(id) => out.custom(id, true),
+            Basic::Macro(index) => {
+                // One macro at a time; a second one is ignored until it ends.
+                if self.playback.is_none() {
+                    self.playback = Some(Playback { index, step: 0, next: ev.time, tapped: None });
+                }
+            }
             Basic::Mods(_) => self.report(out),
             Basic::MomentaryLayer(_) | Basic::None => {}
         }
@@ -254,6 +277,38 @@ impl Engine {
         }
     }
 
+    /// Run the next macro step if it is due.
+    fn play(&mut self, keymap: &impl Keymap, out: &mut impl Output, now: Millis) {
+        let Some(mut playback) = self.playback else { return };
+        if now < playback.next {
+            return;
+        }
+        playback.next = now + MACRO_STEP_MS;
+        if let Some(key) = playback.tapped.take() {
+            self.macro_keys.retain(|k| *k != key);
+        } else {
+            match keymap.macro_steps(playback.index).get(playback.step as usize) {
+                None => {
+                    self.macro_keys.clear();
+                    self.playback = None;
+                    return self.report(out);
+                }
+                Some(MacroStep::Tap(key)) => {
+                    let _ = self.macro_keys.push(*key);
+                    playback.tapped = Some(*key);
+                }
+                Some(MacroStep::Press(key)) => {
+                    let _ = self.macro_keys.push(*key);
+                }
+                Some(MacroStep::Release(key)) => self.macro_keys.retain(|k| k != key),
+                Some(MacroStep::DelayMs(ms)) => playback.next = now + *ms as Millis,
+            }
+            playback.step += 1;
+        }
+        self.playback = Some(playback);
+        self.report(out);
+    }
+
     /// Send the keyboard state if it differs from what the host last saw.
     fn report(&mut self, out: &mut impl Output) {
         let mut report = KeyboardReport { mods: self.oneshot_mods, keys: Vec::new() };
@@ -264,6 +319,9 @@ impl Engine {
             }
             None => {}
         };
+        for key in &self.macro_keys {
+            add_key(&mut report, *key);
+        }
         for held in &self.held {
             match held.action {
                 Basic::Key(key) => add_key(&mut report, key),

@@ -1,13 +1,17 @@
 use jmk_core::keycode::{self as kc, mods};
-use jmk_core::{Action, Basic, Combo, Engine, HoldTapFlavor, HoldTapProfile, KeyboardReport, Keymap, Output};
+use jmk_core::{Action, Basic, Combo, Engine, HoldTapFlavor, HoldTapProfile, KeyboardReport, Keymap, MacroStep, Output};
 
 struct Map {
     layers: Vec<Vec<Action>>,
     profile: HoldTapProfile,
     combos: Vec<Combo>,
+    macros: Vec<Vec<MacroStep>>,
 }
 
 impl Keymap for Map {
+    fn macro_steps(&self, index: u8) -> &[MacroStep] {
+        self.macros.get(index as usize).map_or(&[], |m| m)
+    }
     fn layer_count(&self) -> u8 {
         self.layers.len() as u8
     }
@@ -47,7 +51,7 @@ struct Rig {
 
 impl Rig {
     fn new(layers: Vec<Vec<Action>>) -> Self {
-        let map = Map { layers, profile: HoldTapProfile::default(), combos: vec![] };
+        let map = Map { layers, profile: HoldTapProfile::default(), combos: vec![], macros: vec![] };
         Rig { map, engine: Engine::new(), log: Log::default() }
     }
     fn flavor(mut self, flavor: HoldTapFlavor) -> Self {
@@ -371,4 +375,36 @@ fn boot_report_layout() {
         report.keys.push(key).unwrap();
     }
     assert_eq!(report.boot(), [0x02, 0, 4, 5, 6, 7, 8, 9]);
+}
+
+#[test]
+fn macro_types_its_steps_in_order() {
+    let mut rig = Rig::new(vec![vec![basic(Basic::Macro(0)), key(kc::Z)]]);
+    rig.map.macros = vec![vec![
+        MacroStep::Press(kc::LEFT_SHIFT),
+        MacroStep::Tap(kc::A),
+        MacroStep::Release(kc::LEFT_SHIFT),
+        MacroStep::DelayMs(50),
+        MacroStep::Tap(kc::B),
+    ]];
+    rig.press(0, 0);
+    rig.release(0, 1);
+    // Run the clock the way the firmware does: tick whenever a deadline passed.
+    for t in 0..100 {
+        if rig.engine.next_deadline(&rig.map).is_some_and(|d| t >= d) {
+            rig.tick(t);
+        }
+        if t == 30 {
+            assert_eq!(rig.out(), ["02:", "02:04", "02:", "00:"], "pauses at the delay");
+        }
+    }
+    assert_eq!(rig.out(), ["00:05", "00:"]);
+    assert_eq!(rig.engine.next_deadline(&rig.map), None);
+
+    // Normal typing still works while a macro is not running, and a key
+    // pressed during one is merged into the same report.
+    rig.press(0, 200);
+    rig.press(1, 200);
+    rig.tick(200);
+    assert_eq!(rig.out(), ["00:1d", "02:1d"]);
 }

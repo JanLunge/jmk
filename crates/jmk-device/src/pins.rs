@@ -1,4 +1,4 @@
-use jmk_proto::Pin;
+use jmk_proto::{LinkConfig, Pin};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pull {
@@ -16,6 +16,11 @@ pub trait Pins {
     fn drive_low(&mut self, pin: Pin);
     /// True if the pin reads high.
     fn read(&mut self, pin: Pin) -> bool;
+    /// Whether this chip can run a split link as described. Called before a
+    /// hardware configuration is accepted.
+    fn supports_link(&self, _link: &LinkConfig) -> bool {
+        false
+    }
     /// Wait for levels to settle after a pin changed (a few microseconds).
     fn settle(&mut self);
 }
