@@ -1,0 +1,15 @@
+[package]
+name = "jmk-device"
+version = "0.1.0"
+description = "Microcontroller-independent JMK keyboard logic: scanning, wiring detection, storage and RPC"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+jmk-core = { path = "../jmk-core" }
+jmk-proto = { path = "../jmk-proto" }
+heapless.workspace = true
+serde.workspace = true
+postcard.workspace = true
+embedded-storage = "0.3"

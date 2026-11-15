@@ -1,0 +1,16 @@
+[package]
+name = "jmk-cli"
+version = "0.1.0"
+description = "Command-line client for the JMK configuration protocol (Linux hidraw)"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "jmk"
+path = "src/main.rs"
+
+[dependencies]
+jmk-core = { path = "../../crates/jmk-core" }
+jmk-proto = { path = "../../crates/jmk-proto" }
