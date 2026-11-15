@@ -25,6 +25,7 @@ app yet; `tools/cli` is the stand-in.
 | `firmware/rp2040` | The RP2040 port: Embassy, USB keyboard, and a vendor HID channel for the configurator. |
 | `tools/uf2` | Turns a firmware ELF file into a UF2 image. |
 | `tools/cli` | `jmk`, a command-line client for the configuration protocol (Linux). |
+| `server` | Registry server for shared keyboard definitions, keymaps and firmware images. Separate crate with its own lockfile; see `server/README.md`. |
 
 A port for a new chip implements `jmk_device::Pins`, supplies a flash driver
 and connects the transports. Everything else is shared.
@@ -64,7 +65,8 @@ configuration in the last 32 KiB.
   (Svalboard), plus pointing devices, encoders, displays and RGB.
 - Plugins as Rust crates, later sandboxed scripts that install without
   compiling.
-- An online registry of keyboard definitions.
+- A public instance of the registry in `server`, and the configurator's
+  catalogue that reads from it.
 
 ## License
 
