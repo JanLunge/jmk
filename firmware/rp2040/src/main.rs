@@ -11,8 +11,10 @@ mod usb;
 use embassy_executor::Spawner;
 use embassy_futures::join::join4;
 use embassy_futures::select::{select, Either};
+use embassy_futures::yield_now;
 use embassy_rp::flash::{Blocking, Flash};
 use embassy_rp::peripherals::FLASH;
+use embassy_rp::watchdog::Watchdog;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Ticker};
@@ -68,11 +70,21 @@ async fn main(_spawner: Spawner) {
         });
     };
 
+    // Resets the chip if the main loop stops, so a hang never needs a hand
+    // on the board. Saving to flash blocks for a few hundred milliseconds.
+    const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(3);
+    let mut watchdog = Watchdog::new(p.WATCHDOG);
+    watchdog.start(WATCHDOG_TIMEOUT);
+
     let run = async {
         let mut ticker = Ticker::every(Duration::from_millis(1));
         let mut assembler = Assembler::new();
         let mut reboot: Option<(Instant, bool)> = None;
         loop {
+            watchdog.feed(WATCHDOG_TIMEOUT);
+            // If a pass overruns its millisecond the ticker is ready again at
+            // once; yielding keeps USB and the other futures running.
+            yield_now().await;
             match select(ticker.next(), from_host.receive()).await {
                 Either::First(()) => {
                     let now = Instant::now();

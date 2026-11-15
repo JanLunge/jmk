@@ -34,15 +34,19 @@ struct SimState {
     modes: [PinMode; 64],
     /// Switches and whether each is closed.
     switches: Vec<(Wire, bool)>,
+    settles: usize,
 }
 
 impl Sim {
     fn new(switches: &[Wire]) -> Self {
         let switches = switches.iter().map(|w| (*w, false)).collect();
-        Sim(Rc::new(RefCell::new(SimState { modes: [PinMode::Untouched; 64], switches })))
+        Sim(Rc::new(RefCell::new(SimState { modes: [PinMode::Untouched; 64], switches, settles: 0 })))
     }
     fn set(&self, switch: usize, closed: bool) {
         self.0.borrow_mut().switches[switch].1 = closed;
+    }
+    fn settles(&self) -> usize {
+        self.0.borrow().settles
     }
     fn touched(&self) -> Vec<Pin> {
         let state = self.0.borrow();
@@ -93,7 +97,9 @@ impl Pins for Sim {
         let supplied = closed().any(|w| matches!(w, Wire::Supply(p) if p == pin));
         !low[pin as usize] && (supplied || state.modes[pin as usize] != PinMode::Input(Pull::Down))
     }
-    fn settle(&mut self) {}
+    fn settle(&mut self) {
+        self.0.borrow_mut().settles += 1;
+    }
 }
 
 #[derive(Clone, Default)]
@@ -221,6 +227,9 @@ fn pins(list: &[Pin]) -> heapless::Vec<Pin, 64> {
     list.iter().copied().collect()
 }
 
+/// Polls that are certain to contain one complete probe pass in these tests.
+const PASS: u64 = 20;
+
 /// 2x2 matrix, rows on 2 and 3, columns on 4 and 5, diodes column to row.
 fn diode_matrix() -> [Wire; 4] {
     let key = |col, row| Wire::Diode { anode: col, cathode: row };
@@ -314,16 +323,16 @@ fn watch_keys_reports_positions() {
 fn probe_finds_matrix_links_and_diode_direction() {
     let mut rig = Rig::new(&diode_matrix());
     rig.ok(Request::StartProbe(pins(&[2, 3, 4, 5, 6]).iter().copied().collect()));
-    rig.run(3);
+    rig.run(30);
     assert!(rig.events.is_empty(), "nothing pressed yet");
 
     rig.sim.set(1, true); // column 5, row 2
-    rig.run(1);
+    rig.run(PASS);
     let link = Contact::Link { driven: 2, sensed: 5 };
     assert_eq!(rig.events, [Event::Probe([link].into_iter().collect())]);
 
     rig.sim.set(1, false);
-    rig.run(1);
+    rig.run(PASS);
     assert_eq!(rig.events[1], Event::Probe(Default::default()));
     assert!(rig.out().is_empty(), "probing must not type");
 }
@@ -335,7 +344,7 @@ fn probe_finds_direct_and_diodeless_switches() {
     for switch in 0..3 {
         rig.sim.set(switch, true);
     }
-    rig.run(1);
+    rig.run(PASS);
     let expected = [
         Contact::Supply(8),
         Contact::Ground(7),
@@ -364,6 +373,19 @@ fn reserved_and_unusable_pins_are_never_touched() {
 
     rig.run(10);
     assert!(rig.sim.touched().is_empty());
+}
+
+#[test]
+fn probing_many_pins_keeps_each_poll_short() {
+    // Each poll may wait for levels to settle only a couple of times,
+    // however many pins are probed; a long poll starves USB on real hardware.
+    let mut rig = Rig::new(&[]);
+    rig.ok(Request::StartProbe((0..30).collect()));
+    for _ in 0..100 {
+        let before = rig.sim.settles();
+        rig.run(1);
+        assert!(rig.sim.settles() - before <= 2);
+    }
 }
 
 #[test]

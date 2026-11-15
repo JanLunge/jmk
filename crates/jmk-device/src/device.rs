@@ -3,12 +3,12 @@ use embedded_storage::nor_flash::NorFlash;
 use jmk_core::{Engine, Millis, Output};
 use jmk_proto::{
     Contact, Error, Event, HardwareConfig, Info, Mcu, Pin, Request, Response, ACTIONS_PER_CHUNK, MAX_CONTACTS,
-    MAX_HOLD_TAP_PROFILES, MAX_KEYS, MAX_LAYERS, MAX_PROBE_PINS, PROTOCOL_VERSION,
+    MAX_HOLD_TAP_PROFILES, MAX_KEYS, MAX_LAYERS, PROTOCOL_VERSION,
 };
 
 use crate::config::Config;
 use crate::pins::{is_usable, Pins, Pull};
-use crate::probe::probe;
+use crate::probe::Prober;
 use crate::scan::Scanner;
 use crate::storage::Storage;
 
@@ -22,7 +22,7 @@ pub struct Board {
 enum Mode {
     Typing,
     /// Wiring detection on these pins; normal scanning is off.
-    Probing(Vec<Pin, MAX_PROBE_PINS>),
+    Probing(Prober),
 }
 
 /// One keyboard (or one half of a split).
@@ -64,9 +64,9 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         }
     }
 
-    /// Call every millisecond.
+    /// Call every millisecond. Each call does a bounded amount of work.
     pub fn poll(&mut self, now: Millis, out: &mut impl Output, mut event: impl FnMut(Event)) {
-        match &self.mode {
+        match &mut self.mode {
             Mode::Typing => {
                 let Self { scanner, config, engine, pins, watch_keys, .. } = self;
                 let hardware = &config.hardware;
@@ -87,11 +87,12 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                     engine.tick(&**config, out, now);
                 }
             }
-            Mode::Probing(candidates) => {
-                let contacts = probe(candidates, &mut self.pins);
-                if contacts != self.contacts {
-                    self.contacts = contacts.clone();
-                    event(Event::Probe(contacts));
+            Mode::Probing(prober) => {
+                if let Some(contacts) = prober.step(&mut self.pins) {
+                    if contacts != self.contacts {
+                        self.contacts = contacts.clone();
+                        event(Event::Probe(contacts));
+                    }
                 }
             }
         }
@@ -188,7 +189,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 self.release_matrix_pins();
                 self.engine.reset(out);
                 self.contacts.clear();
-                self.mode = Mode::Probing(candidates);
+                self.mode = Mode::Probing(Prober::new(candidates));
                 Ok(Response::Ok)
             }
             Request::StopProbe => {
@@ -204,9 +205,9 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     }
 
     fn stop_probe(&mut self) {
-        if let Mode::Probing(candidates) = core::mem::replace(&mut self.mode, Mode::Typing) {
-            for pin in candidates {
-                self.pins.input(pin, Pull::None);
+        if let Mode::Probing(prober) = core::mem::replace(&mut self.mode, Mode::Typing) {
+            for pin in prober.candidates() {
+                self.pins.input(*pin, Pull::None);
             }
         }
     }
