@@ -187,3 +187,9 @@ export function describeStep(step: MacroStep): string {
   if ('Release' in step) return `Release ${keyName(step.Release)}`
   return `Wait ${step.DelayMs} ms`
 }
+
+/** The character a key produces on a US layout, if it is a printable one. */
+export function charFor(usage: number, shifted: boolean): string | undefined {
+  const char = (shifted ? SHIFTED : PLAIN)[usage - 0x04]
+  return char && char >= ' ' ? char : undefined
+}

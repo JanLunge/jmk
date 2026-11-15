@@ -2,7 +2,7 @@
 // The stand-in for a physical keyboard: click its keys to "press" them.
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { app, partnerOf } from '../lib/app'
-import { keyLabel, modsLabel } from '../lib/keycodes'
+import { charFor, keyLabel, modsLabel } from '../lib/keycodes'
 import type { Session } from '../lib/session'
 import { VirtualTransport } from '../lib/transport'
 import KeyboardView from './KeyboardView.vue'
@@ -47,10 +47,10 @@ const typed = computed(() => {
     const fresh = event.Keyboard.keys.filter((k) => !previous.includes(k))
     previous = event.Keyboard.keys
     for (const usage of fresh) {
-      const label = keyLabel(usage)
-      const mods = event.Keyboard.mods & ~0x22 ? modsLabel(event.Keyboard.mods & ~0x22) + '+' : ''
-      const shifted = event.Keyboard.mods & 0x22
-      out.push(mods + (label.length === 1 ? (shifted ? label : label.toLowerCase()) : `⟨${label}⟩`))
+      const shift = (event.Keyboard.mods & 0x22) !== 0
+      const others = event.Keyboard.mods & ~0x22
+      const char = charFor(usage, shift)
+      out.push((others ? modsLabel(others) + '+' : '') + (char ?? `⟨${keyLabel(usage)}⟩`))
     }
   }
   return out.slice(-40).join('')

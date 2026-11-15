@@ -53,12 +53,27 @@ impl Prober {
                 if self.is_free(driven) {
                     pins.drive_low(driven);
                     pins.settle();
+                    let mut low: Vec<Pin, MAX_PROBE_PINS> = Vec::new();
                     for sensed in &self.candidates {
                         if *sensed != driven && self.is_free(*sensed) && !pins.read(*sensed) {
-                            let _ = self.found.push(Contact::Link { driven, sensed: *sensed });
+                            let _ = low.push(*sensed);
                         }
                     }
                     pins.input(driven, Pull::Up);
+                    if !low.is_empty() {
+                        // A pin that stays low after the driven pin is let
+                        // go was pulled down by something else (a knob
+                        // contact closing just now), not through a switch.
+                        pins.settle();
+                        for sensed in low {
+                            if pins.read(sensed) {
+                                let _ = self.found.push(Contact::Link { driven, sensed });
+                            } else {
+                                self.fixed |= 1 << sensed;
+                                let _ = self.found.push(Contact::Ground(sensed));
+                            }
+                        }
+                    }
                 }
             }
         }

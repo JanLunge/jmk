@@ -70,6 +70,9 @@ describe('parseKle', () => {
       { x: 150, y: 100, w: 100, h: 100, r: 0 },
     ])
   })
+  it('accepts a single row on its own', () => {
+    expect(parseKle('["A","B",{"w":2},"C"]').map((k) => k.x)).toEqual([0, 100, 200])
+  })
   it('accepts the site\'s raw data without outer brackets', () => {
     expect(parseKle('["A","B"],\n[{w:2},"Space"]')).toHaveLength(3)
   })

@@ -64,12 +64,14 @@ export function parseKle(text: string): KeyGeometry[] {
     rows = JSON.parse(`[${trimmed.replace(/([{,])\s*([a-z][a-z0-9]*)\s*:/gi, '$1"$2":')}]`)
   }
   if (!Array.isArray(rows)) throw new Error('This does not look like a keyboard-layout-editor layout.')
+  // A single row pasted on its own is a list of keys, not a list of rows.
+  if (rows.some((item) => typeof item === 'string')) rows = [rows]
   const keys: KeyGeometry[] = []
   let y = 0
   let rotation = 0
   let originX = 0
   let originY = 0
-  for (const row of rows) {
+  for (const row of rows as unknown[]) {
     if (!Array.isArray(row)) continue // the metadata object
     let x = originX
     let w = 1

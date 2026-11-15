@@ -47,7 +47,7 @@ onMounted(reconnectUsb)
         <Wizard v-else-if="current.setup" :key="current.id + 'wizard'" :session="current" />
         <Editor v-else :key="current.id + role(current)" :session="current" />
       </Transition>
-      <Transition name="rise">
+      <Transition name="rise" mode="out-in">
         <VirtualBoard v-if="current?.demo && !current.closed" :key="current.id" :session="current" />
       </Transition>
     </main>

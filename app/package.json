@@ -13,7 +13,10 @@
     "preview": "vite preview --port 4173 --strictPort",
     "start": "electron .",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "prebuild": "npm run wasm",
+    "pretest": "npm run wasm",
+    "pree2e": "npm run build"
   },
   "dependencies": {
     "pinia": "^4.1.0",
