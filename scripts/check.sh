@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 cargo test --workspace
+(cd crates/jmk-embassy && cargo test)
 (cd server && cargo test)
 (cd firmware/rp2040 && cargo build --release)
 cargo run -q -p jmk-uf2 -- rp2040 \
