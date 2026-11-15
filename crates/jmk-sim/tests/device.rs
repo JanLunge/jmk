@@ -208,6 +208,32 @@ fn probe_finds_direct_and_diodeless_switches() {
 }
 
 #[test]
+fn probe_catches_the_short_pulses_of_a_knob() {
+    let mut rig = Rig::new(Wiring { encoders: vec![(10, 11)], ..Wiring::direct(&[7]) });
+    rig.ok(Request::StartProbe((0..26).collect()));
+    rig.run(PASS);
+    for _ in 0..3 {
+        rig.kb.turn_encoder(0, true);
+    }
+    rig.run(PASS);
+    let mut grounded: Vec<Pin> = rig
+        .events()
+        .into_iter()
+        .flat_map(|event| match event {
+            Event::Probe(contacts) => contacts.to_vec(),
+            _ => vec![],
+        })
+        .filter_map(|contact| match contact {
+            Contact::Ground(pin) => Some(pin),
+            _ => None,
+        })
+        .collect();
+    grounded.sort();
+    grounded.dedup();
+    assert_eq!(grounded, [10, 11]);
+}
+
+#[test]
 fn probing_many_pins_keeps_each_poll_short() {
     // Each poll may wait for levels to settle only a couple of times,
     // however many pins are probed; a long poll starves USB on real hardware.

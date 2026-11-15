@@ -46,6 +46,9 @@ impl Prober {
             }
             1 => self.note_fixed(pins, false),
             _ => {
+                // Look for grounded pins on every step, not once per pass:
+                // a turning knob closes its contacts only for a moment.
+                self.note_fixed(pins, false);
                 let driven = self.candidates[step - 2];
                 if self.is_free(driven) {
                     pins.drive_low(driven);

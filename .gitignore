@@ -3,3 +3,5 @@
 node_modules
 dist
 *.uf2
+app/test-results
+app/playwright-report
