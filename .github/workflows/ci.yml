@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv6m-none-eabi
+      - run: cargo build --release
+        working-directory: firmware/rp2040
+      - run: cargo run -p jmk-uf2 -- rp2040 firmware/rp2040/target/thumbv6m-none-eabi/release/jmk-rp2040 jmk-rp2040.uf2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jmk-rp2040
+          path: jmk-rp2040.uf2

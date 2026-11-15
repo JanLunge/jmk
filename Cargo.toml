@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/jmk-core", "crates/jmk-proto", "crates/jmk-device"]
+members = ["crates/jmk-core", "crates/jmk-proto", "crates/jmk-device", "tools/uf2"]
 # Firmware crates build for bare-metal targets and keep their own lockfiles.
 exclude = ["firmware"]
 

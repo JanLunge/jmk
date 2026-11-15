@@ -1,0 +1,8 @@
+[package]
+name = "jmk-uf2"
+version = "0.1.0"
+description = "Converts a firmware ELF file into a UF2 image for drag-and-drop flashing"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
