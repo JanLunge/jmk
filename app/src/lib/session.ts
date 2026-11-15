@@ -107,6 +107,11 @@ export async function openSession(transport: Transport, demo?: DemoHalf): Promis
   await refresh(session)
   await client.watchKeys(true)
   session.setup = !isConfigured(session)
+  if (isConfigured(session) && session.layout.length === 0) {
+    // Set up by other means (command line, older app): draw a grid so the
+    // keys can be seen and arranged.
+    await setLayout(session, starterLayout(session.hardware))
+  }
   return session
 }
 

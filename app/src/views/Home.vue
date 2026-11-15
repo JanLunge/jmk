@@ -1,11 +1,28 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import KeyboardView from '../components/KeyboardView.vue'
 import { app, connectUsb, openDemo } from '../lib/app'
 import { DEMOS } from '../lib/demos'
+import { desktop } from '../lib/desktop'
 import { usbSupported } from '../lib/transport'
 
 const canUsb = usbSupported()
+
+// Putting JMK on a board for the first time (desktop app only).
+const installing = ref<'idle' | 'waiting' | 'done'>('idle')
+const installError = ref('')
+async function install() {
+  installing.value = 'waiting'
+  installError.value = ''
+  try {
+    await desktop!.flash('rp2040')
+    // The board restarts as a JMK keyboard and opens by itself.
+    installing.value = 'done'
+  } catch (error) {
+    installing.value = 'idle'
+    installError.value = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : String(error)
+  }
+}
 // Both halves of the split side by side, the right one moved over.
 const previews = computed(() =>
   DEMOS.map((demo) => ({
@@ -53,6 +70,21 @@ const previews = computed(() =>
           <h3>{{ demo.name }}</h3>
           <p class="muted">{{ demo.blurb }}</p>
         </button>
+      </div>
+    </section>
+
+    <section v-if="desktop" class="card install col">
+      <h2>Put JMK on a new board</h2>
+      <p class="muted">
+        For a Raspberry Pi Pico or another RP2040 board. Unplug it, hold its BOOT (or BOOTSEL) button, plug it in, then
+        let go. It shows up as a drive; this app copies the firmware onto it.
+      </p>
+      <div class="row">
+        <button class="btn" :disabled="installing === 'waiting'" data-test="install" @click="install">
+          {{ installing === 'waiting' ? 'Looking for the board…' : 'Install firmware' }}
+        </button>
+        <span v-if="installing === 'done'" class="chip signal">Installed. Your keyboard opens in a moment.</span>
+        <span v-if="installError" class="muted">{{ installError }}</span>
       </div>
     </section>
 
@@ -125,6 +157,10 @@ const previews = computed(() =>
 
 .preview :deep(svg) {
   max-height: 120px;
+}
+
+.install {
+  max-width: 720px;
 }
 
 .steps {

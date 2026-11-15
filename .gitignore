@@ -6,3 +6,4 @@ dist
 app/test-results
 app/playwright-report
 app/src/wasm/jmk.wasm
+app/firmware

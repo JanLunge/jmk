@@ -7,7 +7,11 @@ import Editor from './views/Editor.vue'
 import Home from './views/Home.vue'
 import Wizard from './views/Wizard.vue'
 
-onMounted(reconnectUsb)
+onMounted(() => {
+  reconnectUsb()
+  // A keyboard plugged in later (or back from a firmware update) opens by itself.
+  if ('hid' in navigator) navigator.hid.addEventListener('connect', reconnectUsb)
+})
 </script>
 
 <template>
@@ -171,10 +175,12 @@ onMounted(reconnectUsb)
 
 .toasts {
   position: fixed;
-  right: 20px;
-  top: 20px;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 8px;
   z-index: 50;
 }

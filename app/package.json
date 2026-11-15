@@ -11,12 +11,13 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --port 4173 --strictPort",
-    "start": "electron .",
+    "start": "npm run build && electron .",
     "test": "vitest run",
     "e2e": "playwright test",
     "prebuild": "npm run wasm",
     "pretest": "npm run wasm",
-    "pree2e": "npm run build"
+    "pree2e": "npm run build",
+    "firmware": "mkdir -p firmware && cp ../target/jmk-rp2040.uf2 firmware/"
   },
   "dependencies": {
     "pinia": "^4.1.0",
