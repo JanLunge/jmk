@@ -5,10 +5,11 @@ use std::rc::Rc;
 use embedded_storage::nor_flash::{ErrorType, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash};
 use jmk_device::{Link, Pins, Pull};
 use jmk_proto::{LinkConfig, Pin};
+use serde::{Deserialize, Serialize};
 
 /// Something soldered between pins. Each wire is a switch that can be
 /// closed or open.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Wire {
     Ground(Pin),
     Supply(Pin),

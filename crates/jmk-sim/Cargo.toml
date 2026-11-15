@@ -11,3 +11,4 @@ jmk-core = { path = "../jmk-core" }
 jmk-proto = { path = "../jmk-proto" }
 jmk-device = { path = "../jmk-device" }
 embedded-storage = "0.3"
+serde = { version = "1", features = ["derive"] }

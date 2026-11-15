@@ -4,11 +4,12 @@ use jmk_core::{KeyboardReport, Output};
 use jmk_device::{Board, Config, Device, Storage, STORAGE_SIZE};
 use jmk_proto::frame::{self, Assembler, REPORT_SIZE};
 use jmk_proto::{DeviceMessage, Error, Mcu, Pin, Request, Response};
+use serde::{Deserialize, Serialize};
 
 use crate::hardware::{MemFlash, Pipe, SimPins, Wire};
 
 /// What the computer would receive from the keyboard.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HostEvent {
     /// Modifier bits and the keys held down.
     Keyboard { mods: u8, keys: Vec<u8> },
@@ -17,7 +18,7 @@ pub enum HostEvent {
 }
 
 /// How a simulated keyboard is soldered together.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Wiring {
     /// One wire per key switch, in the order the builder would press them.
     pub switches: Vec<Wire>,
