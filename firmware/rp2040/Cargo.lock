@@ -779,6 +779,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jmk-embassy"
+version = "0.1.0"
+dependencies = [
+ "embassy-futures",
+ "embassy-sync",
+ "embassy-time",
+ "embassy-usb",
+ "embedded-io-async 0.7.0",
+ "embedded-storage",
+ "jmk-core",
+ "jmk-device",
+ "jmk-proto",
+ "static_cell",
+]
+
+[[package]]
 name = "jmk-proto"
 version = "0.1.0"
 dependencies = [
@@ -797,13 +813,10 @@ dependencies = [
  "embassy-executor",
  "embassy-futures",
  "embassy-rp",
- "embassy-sync",
  "embassy-time",
- "embassy-usb",
- "embedded-io-async 0.7.0",
  "embedded-storage",
- "jmk-core",
  "jmk-device",
+ "jmk-embassy",
  "jmk-proto",
  "panic-halt",
  "portable-atomic",
