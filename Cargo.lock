@@ -44,6 +44,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jmk-cli"
+version = "0.1.0"
+dependencies = [
+ "jmk-core",
+ "jmk-proto",
+]
+
+[[package]]
 name = "jmk-core"
 version = "0.1.0"
 dependencies = [

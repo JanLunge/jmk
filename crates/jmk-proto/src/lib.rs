@@ -6,7 +6,7 @@
 
 pub mod frame;
 
-use heapless::Vec;
+pub use heapless::Vec;
 use jmk_core::{Action, Combo, HoldTapProfile};
 use serde::{Deserialize, Serialize};
 
