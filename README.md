@@ -10,8 +10,10 @@ clicks through a setup wizard that finds the wiring by asking them to press
 each key, and is done.
 
 **Status: early.** The keymap engine, the configuration protocol and the
-device logic exist and are tested on the PC. The RP2040 firmware builds but
-has not been run on hardware yet. There is no configurator app yet.
+device logic exist and are tested on the PC. The RP2040 firmware runs on a
+Raspberry Pi Pico: it enumerates, answers the configuration protocol, saves
+to flash and reflashes itself from the command line. There is no configurator
+app yet; `tools/cli` is the stand-in.
 
 ## Layout
 
@@ -22,6 +24,7 @@ has not been run on hardware yet. There is no configurator app yet.
 | `crates/jmk-device` | Matrix scanning, wiring detection, flash storage and request handling, written against small pin and flash traits. |
 | `firmware/rp2040` | The RP2040 port: Embassy, USB keyboard, and a vendor HID channel for the configurator. |
 | `tools/uf2` | Turns a firmware ELF file into a UF2 image. |
+| `tools/cli` | `jmk`, a command-line client for the configuration protocol (Linux). |
 
 A port for a new chip implements `jmk_device::Pins`, supplies a flash driver
 and connects the transports. Everything else is shared.
@@ -46,7 +49,8 @@ cargo run -p jmk-uf2 -- rp2040 \
 ```
 
 Hold BOOTSEL while plugging the board in and copy `jmk-rp2040.uf2` to the
-drive that appears. The image assumes 2 MB of flash and keeps the saved
+drive that appears. A board already running JMK is updated with
+`cargo run -p jmk-cli -- flash jmk-rp2040.uf2`. The image assumes 2 MB of flash and keeps the saved
 configuration in the last 32 KiB.
 
 ## Planned
