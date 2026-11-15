@@ -10,7 +10,7 @@ mod combo;
 mod engine;
 pub mod keycode;
 
-pub use action::{Action, Basic, Combo, HoldTapFlavor, HoldTapProfile};
+pub use action::{Action, Basic, Combo, HoldTapFlavor, HoldTapProfile, MacroStep, MAX_COMBO_KEYS};
 pub use engine::{Engine, KeyboardReport, Keymap, Output, MAX_REPORT_KEYS};
 
 /// Milliseconds since boot.

@@ -2,13 +2,13 @@ use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::{Driver, InterruptHandler};
 use embassy_rp::Peri;
-use embassy_usb::class::hid::{Config as HidConfig, HidBootProtocol, HidReaderWriter, HidSubclass, State};
+use embassy_usb::class::hid::{Config as HidConfig, HidBootProtocol, HidReaderWriter, HidSubclass, HidWriter, State};
 use embassy_usb::{Builder, Config, UsbDevice};
 use embassy_futures::join::join;
 use jmk_proto::frame::REPORT_SIZE;
 use static_cell::StaticCell;
 
-use crate::{FrameQueue, KeyboardQueue};
+use crate::{ConsumerQueue, FrameQueue, KeyboardQueue};
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
@@ -29,6 +29,13 @@ const KEYBOARD_DESCRIPTOR: &[u8] = &[
     0xC0,
 ];
 
+/// Media keys: one 16-bit consumer usage, 0 when nothing is pressed.
+const CONSUMER_DESCRIPTOR: &[u8] = &[
+    0x05, 0x0C, 0x09, 0x01, 0xA1, 0x01, // Consumer, Consumer Control, Application
+    0x15, 0x00, 0x26, 0xFF, 0x03, 0x19, 0x00, 0x2A, 0xFF, 0x03, 0x75, 0x10, 0x95, 0x01, 0x81, 0x00,
+    0xC0,
+];
+
 /// Vendor-defined 64-byte reports in both directions for the configurator.
 const CONFIG_DESCRIPTOR: &[u8] = &[
     0x06, 0x4A, 0xFF, 0x09, 0x01, 0xA1, 0x01, // Vendor page 0xFF4A, usage 1, Application
@@ -43,10 +50,12 @@ type RpDriver = Driver<'static, USB>;
 pub struct Usb {
     pub device: UsbDevice<'static, RpDriver>,
     pub keyboard: Keyboard,
+    pub consumer: Consumer,
     pub config: ConfigChannel,
 }
 
 pub struct Keyboard(HidReaderWriter<'static, RpDriver, 1, 8>);
+pub struct Consumer(HidWriter<'static, RpDriver, 2>);
 pub struct ConfigChannel(HidReaderWriter<'static, RpDriver, REPORT_SIZE, REPORT_SIZE>);
 
 impl Usb {
@@ -55,6 +64,7 @@ impl Usb {
         static BOS_DESC: StaticCell<[u8; 64]> = StaticCell::new();
         static CONTROL_BUF: StaticCell<[u8; 128]> = StaticCell::new();
         static KEYBOARD_STATE: StaticCell<State> = StaticCell::new();
+        static CONSUMER_STATE: StaticCell<State> = StaticCell::new();
         static CONFIG_STATE: StaticCell<State> = StaticCell::new();
 
         let mut config = Config::new(VID, PID);
@@ -83,6 +93,18 @@ impl Usb {
                 hid_boot_protocol: HidBootProtocol::Keyboard,
             },
         );
+        let consumer = HidWriter::new(
+            &mut builder,
+            CONSUMER_STATE.init(State::new()),
+            HidConfig {
+                report_descriptor: CONSUMER_DESCRIPTOR,
+                request_handler: None,
+                poll_ms: 4,
+                max_packet_size: 8,
+                hid_subclass: HidSubclass::No,
+                hid_boot_protocol: HidBootProtocol::None,
+            },
+        );
         let config = HidReaderWriter::new(
             &mut builder,
             CONFIG_STATE.init(State::new()),
@@ -96,7 +118,12 @@ impl Usb {
             },
         );
 
-        Usb { device: builder.build(), keyboard: Keyboard(keyboard), config: ConfigChannel(config) }
+        Usb {
+            device: builder.build(),
+            keyboard: Keyboard(keyboard),
+            consumer: Consumer(consumer),
+            config: ConfigChannel(config),
+        }
     }
 }
 
@@ -120,6 +147,16 @@ impl Keyboard {
             }
         };
         join(send, leds).await;
+    }
+}
+
+impl Consumer {
+    /// Send queued media key changes to the host.
+    pub async fn run(mut self, queue: &ConsumerQueue) {
+        loop {
+            let usage = queue.receive().await;
+            let _ = self.0.write(&usage.to_le_bytes()).await;
+        }
     }
 }
 

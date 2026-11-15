@@ -1,0 +1,13 @@
+[package]
+name = "jmk-sim"
+version = "0.1.0"
+description = "Simulated keyboard hardware running the real JMK device logic"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+jmk-core = { path = "../jmk-core" }
+jmk-proto = { path = "../jmk-proto" }
+jmk-device = { path = "../jmk-device" }
+embedded-storage = "0.3"

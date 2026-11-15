@@ -24,6 +24,8 @@ pub enum Basic {
     ToLayer(u8),
     /// Modifiers that apply to the next key press only.
     OneShotMods(u8),
+    /// Play the macro with this index.
+    Macro(u8),
     /// Handed to the firmware's plugin hooks via [`crate::Output::custom`].
     Custom(u16),
 }
@@ -81,4 +83,14 @@ pub struct Combo {
     pub keys: Vec<u16, MAX_COMBO_KEYS>,
     pub action: Action,
     pub timeout_ms: u16,
+}
+
+/// One step of a macro. Steps run a couple of milliseconds apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MacroStep {
+    /// Press and release a key (HID usage, modifiers included).
+    Tap(u8),
+    Press(u8),
+    Release(u8),
+    DelayMs(u16),
 }

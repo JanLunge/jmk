@@ -6,8 +6,8 @@
 
 pub mod frame;
 
-pub use heapless::Vec;
-use jmk_core::{Action, Combo, HoldTapProfile};
+pub use heapless::{String, Vec};
+use jmk_core::{Action, Combo, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -22,6 +22,13 @@ pub const MAX_DIRECT_PINS: usize = 64;
 pub const MAX_RESERVED_PINS: usize = 32;
 pub const MAX_PROBE_PINS: usize = 48;
 pub const MAX_CONTACTS: usize = 16;
+pub const MAX_ENCODERS: usize = 4;
+pub const MAX_MACROS: usize = 16;
+/// Steps shared by all macros.
+pub const MAX_MACRO_STEPS: usize = 512;
+pub const MACRO_STEPS_PER_CHUNK: usize = 32;
+pub const LAYOUT_KEYS_PER_CHUNK: usize = 16;
+pub const MAX_NAME: usize = 32;
 /// Actions per keymap read/write message.
 pub const ACTIONS_PER_CHUNK: usize = 16;
 /// Largest serialised message in either direction.
@@ -78,6 +85,47 @@ impl MatrixConfig {
     }
 }
 
+/// A rotary encoder. Each one adds two positions after the switches:
+/// counter-clockwise, then clockwise. A detent acts as a tap on that position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncoderConfig {
+    pub a: Pin,
+    pub b: Pin,
+    /// Signal changes per click, usually 4 (sometimes 2).
+    pub steps_per_detent: u8,
+}
+
+/// How two halves talk to each other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LinkConfig {
+    /// Serial cable, each side's `tx` wired to the other's `rx`.
+    Uart { tx: Pin, rx: Pin },
+    /// Bluetooth between the halves (chips with a radio only).
+    Ble,
+}
+
+/// The part this board plays in a split keyboard.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SplitConfig {
+    /// A keyboard in one piece.
+    #[default]
+    None,
+    /// Talks to the computer and holds the keymap. Positions of the other
+    /// half follow this half's own positions.
+    Central(LinkConfig),
+    /// Only reports its keys to the central half.
+    Peripheral(LinkConfig),
+}
+
+impl SplitConfig {
+    pub fn link(&self) -> Option<LinkConfig> {
+        match self {
+            SplitConfig::None => None,
+            SplitConfig::Central(link) | SplitConfig::Peripheral(link) => Some(*link),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HardwareConfig {
     pub matrix: MatrixConfig,
@@ -85,6 +133,47 @@ pub struct HardwareConfig {
     /// and wiring detection never touch them.
     pub reserved_pins: Vec<Pin, MAX_RESERVED_PINS>,
     pub debounce_ms: u8,
+    pub encoders: Vec<EncoderConfig, MAX_ENCODERS>,
+    pub split: SplitConfig,
+}
+
+impl HardwareConfig {
+    /// Positions this board produces itself: switches, then two per encoder.
+    pub fn local_positions(&self) -> usize {
+        self.matrix.key_count() + 2 * self.encoders.len()
+    }
+
+    /// Every pin the configuration puts to use.
+    pub fn used_pins(&self) -> impl Iterator<Item = Pin> + '_ {
+        let link = match self.split.link() {
+            Some(LinkConfig::Uart { tx, rx }) => [Some(tx), Some(rx)],
+            _ => [None, None],
+        };
+        self.matrix
+            .pins()
+            .chain(self.encoders.iter().flat_map(|e| [e.a, e.b]))
+            .chain(link.into_iter().flatten())
+    }
+}
+
+/// Where a key sits on the keyboard, for drawing it. Units are hundredths of
+/// a standard key width; rotation is in tenths of a degree around the key's
+/// centre.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyGeometry {
+    pub x: i16,
+    pub y: i16,
+    pub w: u16,
+    pub h: u16,
+    pub r: i16,
+}
+
+/// Descriptive data the firmware stores but does not interpret.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Meta {
+    pub name: String<MAX_NAME>,
+    /// Identifier of the controller board in the configurator's catalogue.
+    pub controller: String<MAX_NAME>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +194,16 @@ pub struct Info {
     pub usable_pins: u64,
     pub max_keys: u16,
     pub max_layers: u8,
+    /// Unique per chip, so the configurator can tell two halves apart.
+    pub uid: [u8; 8],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SplitStatus {
+    /// The other half was heard from recently.
+    pub connected: bool,
+    /// Positions the other half reports (central only).
+    pub remote_positions: u16,
 }
 
 /// An electrical connection seen during wiring detection.
@@ -121,7 +220,11 @@ pub enum Contact {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Request {
+    // The wire format numbers these in order. `GetInfo` and `Reboot` must
+    // keep their places for ever, so any configurator can identify and
+    // update any firmware; add new requests at the end.
     GetInfo,
+    Reboot { bootloader: bool },
     GetHardware,
     /// Replace the hardware configuration. Takes effect immediately.
     SetHardware(HardwareConfig),
@@ -134,6 +237,18 @@ pub enum Request {
     SetHoldTapProfile { index: u8, profile: HoldTapProfile },
     GetCombos,
     SetCombos(Vec<Combo, MAX_COMBOS>),
+    /// Read up to [`MACRO_STEPS_PER_CHUNK`] steps of a macro from `start`.
+    GetMacro { index: u8, start: u16 },
+    /// Replace a macro's steps from `start` to its end. Send the first chunk
+    /// with `start` 0 and continue with `start` at the length so far.
+    SetMacro { index: u8, start: u16, steps: Vec<MacroStep, MACRO_STEPS_PER_CHUNK> },
+    GetMeta,
+    SetMeta(Meta),
+    /// Read up to [`LAYOUT_KEYS_PER_CHUNK`] key shapes from `start`.
+    GetLayout { start: u16 },
+    /// Replace the stored key shapes from `start` to the end.
+    SetLayout { start: u16, keys: Vec<KeyGeometry, LAYOUT_KEYS_PER_CHUNK> },
+    GetSplitStatus,
     /// Write the current configuration to flash.
     Save,
     /// Erase the stored configuration and return to defaults.
@@ -144,11 +259,11 @@ pub enum Request {
     /// Reserved and unusable pins are rejected.
     StartProbe(Vec<Pin, MAX_PROBE_PINS>),
     StopProbe,
-    Reboot { bootloader: bool },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Response {
+    // `Ok`, `Error` and `Info` keep their places; add new replies at the end.
     Ok,
     Error(Error),
     Info(Info),
@@ -157,6 +272,12 @@ pub enum Response {
     Actions(Vec<Action, ACTIONS_PER_CHUNK>),
     HoldTapProfiles(Vec<HoldTapProfile, MAX_HOLD_TAP_PROFILES>),
     Combos(Vec<Combo, MAX_COMBOS>),
+    /// `total` is the macro's full length.
+    Macro { total: u16, steps: Vec<MacroStep, MACRO_STEPS_PER_CHUNK> },
+    Meta(Meta),
+    /// `total` is the number of stored key shapes.
+    Layout { total: u16, keys: Vec<KeyGeometry, LAYOUT_KEYS_PER_CHUNK> },
+    SplitStatus(SplitStatus),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +292,11 @@ pub enum Error {
     /// The same pin is used twice.
     DuplicatePin(Pin),
     TooManyKeys,
+    /// No room left, e.g. for macro steps.
+    Full,
+    /// The chip cannot do this, e.g. Bluetooth on a chip without a radio or
+    /// a serial link on pins that have no serial function.
+    Unsupported,
     Storage,
 }
 

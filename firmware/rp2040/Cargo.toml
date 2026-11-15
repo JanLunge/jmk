@@ -22,6 +22,7 @@ static_cell = "2"
 cortex-m = "0.7"
 portable-atomic = { version = "1", features = ["critical-section"] }
 embedded-storage = "0.3"
+embedded-io-async = "0.7"
 
 [profile.release]
 opt-level = "s"

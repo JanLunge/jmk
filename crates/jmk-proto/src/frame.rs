@@ -89,6 +89,7 @@ mod tests {
             matrix: MatrixConfig::Direct { pins: (100..164).collect(), active_high: false },
             reserved_pins: (0..32).collect(),
             debounce_ms: 5,
+            ..Default::default()
         });
         let (decoded, reports) = round_trip(&request);
         assert_eq!(decoded, request);

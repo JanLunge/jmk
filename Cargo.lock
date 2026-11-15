@@ -82,6 +82,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "jmk-sim"
+version = "0.1.0"
+dependencies = [
+ "embedded-storage",
+ "jmk-core",
+ "jmk-device",
+ "jmk-proto",
+]
+
+[[package]]
 name = "jmk-uf2"
 version = "0.1.0"
 
