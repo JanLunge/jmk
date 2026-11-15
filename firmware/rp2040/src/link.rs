@@ -4,15 +4,11 @@
 //! configuration selects the UART. The link is set up once at start; a
 //! changed link configuration takes effect after a restart.
 
-use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
 use embassy_rp::peripherals::{self, UART0, UART1};
 use embassy_rp::uart::{BufferedInterruptHandler, BufferedUart, Config, TxPin};
 use embassy_rp::Peri;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::pipe::Pipe;
-use embedded_io_async::{Read, Write};
-use jmk_device::Link;
+use jmk_embassy::link::{Queues, BAUD};
 use jmk_proto::{LinkConfig, Pin};
 use static_cell::StaticCell;
 
@@ -21,7 +17,6 @@ bind_interrupts!(struct Irqs {
     UART1_IRQ => BufferedInterruptHandler<UART1>;
 });
 
-const BAUD: u32 = 115_200;
 const UART0_TX: [Pin; 4] = [0, 12, 16, 28];
 const UART0_RX: [Pin; 4] = [1, 13, 17, 29];
 const UART1_TX: [Pin; 4] = [4, 8, 20, 24];
@@ -33,32 +28,6 @@ pub fn supported(link: &LinkConfig) -> bool {
             (UART0_TX.contains(tx) && UART0_RX.contains(rx)) || (UART1_TX.contains(tx) && UART1_RX.contains(rx))
         }
         LinkConfig::Ble => false,
-    }
-}
-
-type Bytes = Pipe<NoopRawMutex, 256>;
-
-/// The firmware's end: bytes queued here are moved by [`SerialLink::run`].
-pub struct Queues {
-    outgoing: Bytes,
-    incoming: Bytes,
-}
-
-impl Queues {
-    pub const fn new() -> Self {
-        Self { outgoing: Pipe::new(), incoming: Pipe::new() }
-    }
-}
-
-impl Link for &Queues {
-    fn send(&mut self, bytes: &[u8]) {
-        // A full queue means the cable is not draining; the state is sent
-        // again shortly anyway.
-        let _ = self.outgoing.try_write(bytes);
-    }
-
-    fn receive(&mut self, buf: &mut [u8]) -> usize {
-        self.incoming.try_read(buf).unwrap_or(0)
     }
 }
 
@@ -113,24 +82,7 @@ impl SerialLink {
 
     /// Move bytes between the cable and the queues, forever.
     pub async fn run(self, queues: &Queues) {
-        let (mut tx, mut rx) = self.0.split();
-        let send = async {
-            let mut buf = [0u8; 64];
-            loop {
-                let len = queues.outgoing.read(&mut buf).await;
-                let _ = tx.write_all(&buf[..len]).await;
-            }
-        };
-        let receive = async {
-            let mut buf = [0u8; 64];
-            loop {
-                if let Ok(len) = rx.read(&mut buf).await {
-                    // If the firmware is not taking bytes, drop them; the
-                    // other half repeats its state.
-                    let _ = queues.incoming.try_write(&buf[..len]);
-                }
-            }
-        };
-        join(send, receive).await;
+        let (tx, rx) = self.0.split();
+        jmk_embassy::link::run(tx, rx, queues).await;
     }
 }

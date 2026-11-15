@@ -1,0 +1,37 @@
+[package]
+name = "jmk-nrf52840"
+version = "0.1.0"
+description = "JMK keyboard firmware for nRF52840 boards"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+jmk-core = { path = "../../crates/jmk-core" }
+jmk-proto = { path = "../../crates/jmk-proto" }
+jmk-device = { path = "../../crates/jmk-device" }
+jmk-embassy = { path = "../../crates/jmk-embassy" }
+
+embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
+embassy-nrf = { version = "0.11", features = ["nrf52840", "time-driver-rtc1", "nfc-pins-as-gpio", "unstable-pac"] }
+embassy-time = "0.5"
+embassy-futures = "0.1"
+nrf-sdc = { version = "0.4", default-features = false, features = ["nrf52840", "peripheral"] }
+nrf-mpsl = { version = "0.4", default-features = false, features = ["nrf52840", "critical-section-impl"] }
+trouble-host = { version = "0.8", default-features = false, features = ["peripheral", "gatt", "derive", "security", "default-packet-pool"] }
+cortex-m-rt = { version = "0.7", features = ["set-vtor"] }
+panic-halt = "1"
+static_cell = "2"
+cortex-m = "0.7"
+embedded-storage = "0.3"
+
+[features]
+# Low-frequency clock from a 32.768 kHz crystal on P0.00/P0.01 instead of the
+# internal RC oscillator. Only for boards that have the crystal; see
+# `mod lfclk` in src/main.rs.
+lfxo = []
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = 2

@@ -1,0 +1,19 @@
+[package]
+name = "jmk-embassy"
+version = "0.1.0"
+description = "What every Embassy-based JMK port shares: USB interfaces, queues, the main loop and the split cable pump"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+jmk-core = { path = "../jmk-core" }
+jmk-proto = { path = "../jmk-proto" }
+jmk-device = { path = "../jmk-device" }
+embassy-usb = "0.6"
+embassy-sync = "0.8"
+embassy-futures = "0.1"
+embassy-time = "0.5"
+embedded-storage = "0.3"
+embedded-io-async = "0.7"
+static_cell = "2"

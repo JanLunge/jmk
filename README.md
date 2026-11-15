@@ -14,6 +14,9 @@ each key, and is done.
 - **Firmware for RP2040** (Raspberry Pi Pico and similar), run on a real
   Pico: USB keyboard and media keys, configuration channel, saving to flash,
   self-update from the app or command line.
+- **Firmware for nRF52840** (nice!nano and similar) with USB and Bluetooth.
+  It builds, but no board has run it yet; see
+  [firmware/nrf52840/README.md](firmware/nrf52840/README.md).
 - **Wiring**: diode matrix in either direction, one pin per key, rotary
   knobs. Pins are assigned at run time.
 - **Keymap engine**: layers, hold-tap in three flavours, combos, one-shot
@@ -37,7 +40,9 @@ See [Status](#status) for what has been tested where.
 | `crates/jmk-device` | Scanning, wiring detection, split link, flash storage and request handling, written against small pin, flash and link traits. |
 | `crates/jmk-sim` | Simulated wiring, flash and cable; virtual keyboards. |
 | `crates/jmk-wasm` | The above compiled for the configurator. |
+| `crates/jmk-embassy` | What the ports share: USB interfaces, queues, main loop, split cable. |
 | `firmware/rp2040` | The RP2040 port (Embassy). |
+| `firmware/nrf52840` | The nRF52840 port with Bluetooth. Untested on hardware. |
 | `app/` | The configurator. See its README. |
 | `server/` | The registry server for shared keyboards, keymaps and firmware. See its README. |
 | `tools/cli` | `jmk`, a command-line client for the protocol (Linux). |
@@ -60,8 +65,8 @@ weak pull resistors, so two probed pins cannot drive against each other.
 ./scripts/check.sh    # all tests, firmware build, app tests
 ```
 
-There is no hosted CI; this script is the gate. It leaves the firmware image
-at `target/jmk-rp2040.uf2`. Hold BOOTSEL while plugging the board in and copy
+There is no hosted CI; this script is the gate. It leaves the firmware images
+in `target/` (`jmk-rp2040.uf2`, `jmk-nrf52840.uf2`). Hold BOOTSEL while plugging the board in and copy
 the file to the drive that appears. A board already running JMK is updated
 with `cargo run -p jmk-cli -- flash target/jmk-rp2040.uf2` or from the app.
 The image assumes 2 MB of flash and keeps the saved configuration in the
@@ -91,8 +96,12 @@ on real diodeless or miswired boards; the watchdog recovering a hang.
 **Written but never run:** copying firmware to a bootloader drive from the
 desktop app; the app in Chrome on Windows and macOS; desktop installers.
 
+**Never run on hardware:** everything in `firmware/nrf52840`, including
+Bluetooth. Its README has the checklist to work through with a board.
+
 **Not built yet:**
-- Bluetooth, and split halves over Bluetooth.
+- Split halves over Bluetooth; Bluetooth pairing mode, several hosts,
+  battery measurement, power saving.
 - Displays, RGB lighting, pointing devices, mouse keys, tap dance, N-key
   rollover (reports carry six keys).
 - Mixing matrix and one-pin-per-key wiring on one board; shift registers,
