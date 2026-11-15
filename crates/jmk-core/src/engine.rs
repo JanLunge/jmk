@@ -111,6 +111,17 @@ impl Engine {
         }
     }
 
+    /// Forget all held keys and layers and tell the host nothing is pressed.
+    /// Used when the wiring changes underneath the engine.
+    pub fn reset(&mut self, out: &mut impl Output) {
+        let had_consumer = self.held.iter().any(|h| matches!(h.action, Basic::Consumer(_)));
+        *self = Self { last_report: core::mem::take(&mut self.last_report), ..Self::default() };
+        if had_consumer {
+            out.consumer(0);
+        }
+        self.report(out);
+    }
+
     /// Bitmask of active layers. Layer 0 is always active.
     pub fn active_layers(&self) -> u32 {
         let mut layers = 1 | self.toggled_layers;

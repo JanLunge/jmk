@@ -1,0 +1,13 @@
+[package]
+name = "jmk-proto"
+version = "0.1.0"
+description = "Configuration data model and wire protocol shared by JMK firmware and configurator"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+jmk-core = { path = "../jmk-core" }
+heapless.workspace = true
+serde.workspace = true
+postcard.workspace = true
