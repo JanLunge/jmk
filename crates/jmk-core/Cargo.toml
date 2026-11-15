@@ -1,0 +1,11 @@
+[package]
+name = "jmk-core"
+version = "0.1.0"
+description = "Hardware-independent keymap engine for the JMK keyboard firmware"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+heapless.workspace = true
+serde.workspace = true

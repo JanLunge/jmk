@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/jmk-core"]
+# Firmware crates build for bare-metal targets and keep their own lockfiles.
+exclude = ["firmware"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JanLunge/jmk"
+
+[workspace.dependencies]
+heapless = { version = "0.9", features = ["serde"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+postcard = { version = "1.1", default-features = false }
