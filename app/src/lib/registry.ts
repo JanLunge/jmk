@@ -18,7 +18,7 @@ export interface KeyboardSummary {
 }
 
 export interface KeymapSummary {
-  id: string
+  id: number
   name: string
   description: string
   author: string
@@ -129,14 +129,14 @@ export async function listKeymaps(slug: string): Promise<KeymapSummary[]> {
   return page.items
 }
 
-export async function fetchKeymap(id: string): Promise<Keymap> {
-  const data = await call<{ definition: Keymap }>(`/api/v1/keymaps/${encodeURIComponent(id)}`)
+export async function fetchKeymap(id: number): Promise<Keymap> {
+  const data = await call<{ definition: Keymap }>(`/api/v1/keymaps/${id}`)
   return data.definition
 }
 
 export async function publishKeymap(slug: string, details: Omit<Published, 'tags'>, keymap: Keymap): Promise<void> {
   const body = JSON.stringify({ ...details, definition: { schema: 1, ...keymap } })
-  const created = await call<{ id: string; edit_token: string }>(
+  const created = await call<{ id: number; edit_token: string }>(
     `/api/v1/keyboards/${encodeURIComponent(slug)}/keymaps`,
     { method: 'POST', body },
   )

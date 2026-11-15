@@ -88,7 +88,8 @@ const mine = computed(() => results.value?.find((r) => r.name === form.value.nam
 async function publish() {
   const tags = form.value.tags.split(/[,\s]+/).map((t) => t.toLowerCase().replace(/[^a-z0-9-]/g, '')).filter(Boolean)
   const details = { name: form.value.name.trim(), description: form.value.description.trim(), author: form.value.author.trim(), tags }
-  const slug = await attempt(() => publishKeyboard(details, definition(), mine.value?.slug))
+  // The file carries the published name, so whoever installs it sees the same one.
+  const slug = await attempt(() => publishKeyboard(details, { ...definition(), name: details.name }, mine.value?.slug))
   if (slug) {
     publishedSlug.value = slug
     toast(mine.value ? 'Published a new version' : 'Published')
