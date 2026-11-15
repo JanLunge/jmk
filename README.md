@@ -39,6 +39,7 @@ See [Status](#status) for what has been tested where.
 | `crates/jmk-wasm` | The above compiled for the configurator. |
 | `firmware/rp2040` | The RP2040 port (Embassy). |
 | `app/` | The configurator. See its README. |
+| `server/` | The registry server for shared keyboards, keymaps and firmware. See its README. |
 | `tools/cli` | `jmk`, a command-line client for the protocol (Linux). |
 | `tools/uf2` | Turns a firmware ELF file into a UF2 image. |
 

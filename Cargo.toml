@@ -2,7 +2,8 @@
 resolver = "2"
 members = ["crates/jmk-core", "crates/jmk-proto", "crates/jmk-device", "crates/jmk-sim", "crates/jmk-wasm", "tools/uf2", "tools/cli"]
 # Firmware crates build for bare-metal targets and keep their own lockfiles.
-exclude = ["firmware"]
+# The registry server has its own dependency tree and lockfile too.
+exclude = ["firmware", "server"]
 
 [workspace.package]
 edition = "2021"
