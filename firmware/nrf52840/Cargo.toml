@@ -3,7 +3,7 @@ name = "jmk-nrf52840"
 version = "0.1.0"
 description = "JMK keyboard firmware for nRF52840 boards"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 
 [dependencies]
 jmk-core = { path = "../../crates/jmk-core" }

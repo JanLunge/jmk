@@ -3,7 +3,7 @@ name = "jmk-rp2040"
 version = "0.1.0"
 description = "JMK keyboard firmware for RP2040 boards"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 
 [dependencies]
 jmk-proto = { path = "../../crates/jmk-proto" }

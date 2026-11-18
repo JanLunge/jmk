@@ -2,7 +2,7 @@
 name = "jmk-registry"
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 repository = "https://github.com/JanLunge/jmk"
 description = "Registry server for shared JMK keyboard definitions, keymaps and firmware images"
 publish = false

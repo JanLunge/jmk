@@ -3,7 +3,7 @@ name = "jmk-embassy"
 version = "0.1.0"
 description = "What every Embassy-based JMK port shares: USB interfaces, queues, the main loop and the split cable pump"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 repository = "https://github.com/JanLunge/jmk"
 
 [dependencies]

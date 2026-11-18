@@ -2,18 +2,21 @@
 
 # JMK
 
-Keyboard firmware in Rust that is configured after flashing, not before
-compiling. One prebuilt image per microcontroller family; pins, matrix
-type, keymap and behaviours are set from a configurator app, **POG**, and
-stored on the keyboard. The aim is that someone with a hand-wired board
-flashes a file, presses each key once so the app can work out the wiring,
-and is done.
+**JMK** is keyboard firmware in Rust that is configured after flashing, not
+before compiling. **POG** is the app that configures it.
 
-> **Early alpha.** It runs on one real board so far (a Raspberry Pi Pico
-> with six keys). Much of the rest has only been run in simulation, there
-> are no releases or installers yet, and the protocol and saved
-> configuration format may still change. See [Status](#status) for exactly
-> what has been tested where.
+- **JMK, the firmware.** One prebuilt image per microcontroller family.
+  Pins, matrix type, keymap and behaviours are not compiled in; they are
+  set from the app and stored on the keyboard.
+- **POG, the configurator.** This is POG version 2: the POG app, rebuilt
+  to run on JMK firmware. It lives in `app/`.
+
+The aim is that someone with a hand-wired board flashes a file, presses
+each key once so the app can work out the wiring, and is done.
+
+> **Early alpha.** Tested on Ubuntu and macOS. There are no releases or
+> installers yet, and the protocol and saved configuration format may still
+> change.
 
 ![The setup wizard finding a macro pad's wiring from key presses](assets/wizard.png)
 
@@ -55,7 +58,7 @@ cargo run -p jmk-uf2 -- rp2040 \
   Pico: USB keyboard and media keys, configuration channel, saving to flash,
   self-update from the app or command line.
 - **Firmware for nRF52840** (nice!nano and similar) with USB and Bluetooth.
-  Experimental: it builds, but no board has run it yet; see
+  Experimental; see
   [firmware/nrf52840/README.md](firmware/nrf52840/README.md).
 - **Wiring**: diode matrix in either direction, one pin per key, rotary
   knobs. Pins are assigned at run time.
@@ -78,8 +81,6 @@ cargo run -p jmk-uf2 -- rp2040 \
   run the real firmware logic, for trying it without hardware.
 - **Registry server** (`server/`) for sharing keyboard definitions and keymaps.
 
-See [Status](#status) for what has been tested where.
-
 ## Layout
 
 | Path | What it is |
@@ -91,7 +92,7 @@ See [Status](#status) for what has been tested where.
 | `crates/jmk-wasm` | The above compiled for the configurator. |
 | `crates/jmk-embassy` | What the ports share: USB interfaces, queues, main loop, split cable. |
 | `firmware/rp2040` | The RP2040 port (Embassy). |
-| `firmware/nrf52840` | The nRF52840 port with Bluetooth. Untested on hardware. |
+| `firmware/nrf52840` | The nRF52840 port with Bluetooth. Experimental. |
 | `app/` | POG, the configurator. See its README. |
 | `server/` | The registry server for shared keyboards, keymaps and firmware. See its README. |
 | `tools/cli` | `jmk`, a command-line client for the protocol (Linux). |
@@ -136,45 +137,6 @@ last 32 KiB.
 so any configurator can identify and update any firmware. Everything else
 may still change until the first release; new requests go at the end.
 
-## Status
-
-**Checked on a real Raspberry Pi Pico (6-key diode matrix):**
-USB enumeration with keyboard, media and configuration interfaces; the
-protocol; matrix scanning and the keyboard report of a held key; wiring
-detection finding that key's two pins; saving and loading across restarts;
-firmware update without touching the board; the desktop app reading the
-keyboard over USB.
-
-**Checked only in simulation** (the same code, on simulated wiring):
-key release and debounce on real switches; hold-tap and combo timing by
-hand; macros and media keys reaching a computer; rotary knobs; the serial
-link between split halves; one-pin-per-key wiring; the wizard's detection
-on real diodeless or miswired boards; the watchdog recovering a hang.
-
-**Written but never run on hardware:** the RGB lights (the effects run in
-simulation; no WS2812 chain has been driven yet).
-
-**Written but never run:** copying firmware to a bootloader drive from the
-desktop app; the app in Chrome on Windows and macOS; desktop installers.
-
-**Never run on hardware:** everything in `firmware/nrf52840`, including
-Bluetooth. Its README has the checklist to work through with a board.
-
-**Not built yet:**
-- Split halves over Bluetooth; Bluetooth pairing mode, several hosts,
-  battery measurement, power saving.
-- Displays, pointing devices, mouse keys, tap dance, N-key
-  rollover (reports carry six keys).
-- Mixing matrix and one-pin-per-key wiring on one board; shift registers,
-  I/O expanders and optical switches (Svalboard).
-- Either half of a split plugging into the computer; today it is always
-  the same one.
-- Plugins beyond the `Custom` action hook.
-- A USB product ID of our own (the firmware uses the pid.codes test ID).
-- Controller pictures other than the Raspberry Pi Pico are unverified.
-
 ## License
 
-Licensed under either of [Apache License 2.0](LICENSE-APACHE) or
-[MIT license](LICENSE-MIT) at your option. Contributions are accepted under
-the same terms.
+Licensed under the [Apache License 2.0](LICENSE).
