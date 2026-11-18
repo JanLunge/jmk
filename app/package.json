@@ -1,8 +1,9 @@
 {
-  "name": "jmk-configurator",
+  "name": "pog",
+  "productName": "POG",
   "version": "0.1.0",
   "private": true,
-  "description": "Configurator for JMK keyboards",
+  "description": "POG v2: the configurator for keyboards running JMK firmware",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "main": "electron/main.cjs",

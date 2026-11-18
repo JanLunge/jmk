@@ -10,7 +10,8 @@ pub use heapless::{String, Vec};
 use jmk_core::{Action, Combo, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+/// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours.
+pub const PROTOCOL_VERSION: u16 = 4;
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -29,6 +30,8 @@ pub const MAX_MACRO_STEPS: usize = 512;
 pub const MACRO_STEPS_PER_CHUNK: usize = 32;
 pub const LAYOUT_KEYS_PER_CHUNK: usize = 16;
 pub const MAX_NAME: usize = 32;
+/// Lights on one chain.
+pub const MAX_LEDS: usize = 120;
 /// Actions per keymap read/write message.
 pub const ACTIONS_PER_CHUNK: usize = 16;
 /// Largest serialised message in either direction.
@@ -156,6 +159,89 @@ impl HardwareConfig {
     }
 }
 
+/// The order in which a light chain expects its three colours.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorOrder {
+    /// WS2812 and SK6812, the usual keyboard lights.
+    #[default]
+    Grb,
+    Rgb,
+}
+
+/// One light on the chain, in chain order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Led {
+    /// The key position this light sits under, or [`Led::UNDERGLOW`] for a
+    /// light that shines out of the bottom of the case.
+    pub key: u8,
+    /// Where it sits, with 0..=255 spanning the longer side of the keyboard.
+    pub x: u8,
+    pub y: u8,
+}
+
+impl Led {
+    pub const UNDERGLOW: u8 = 255;
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Effect {
+    #[default]
+    Off,
+    /// One colour.
+    Solid,
+    /// One colour fading in and out.
+    Breathing,
+    /// All colours moving across the keyboard.
+    Rainbow,
+    /// Dark until a key is pressed: that key's light flashes and fades. The
+    /// underglow flashes on every key.
+    Reactive,
+}
+
+/// What one group of lights shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LightZone {
+    pub effect: Effect,
+    /// Colour as hue, saturation and brightness, each 0..=255.
+    pub hue: u8,
+    pub sat: u8,
+    pub val: u8,
+    pub speed: u8,
+}
+
+/// A chain of addressable RGB lights (WS2812 or compatible) on one pin.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LightingConfig {
+    /// The chain's data pin. The one pin the firmware drives high; a changed
+    /// pin takes effect after a restart.
+    pub pin: Option<Pin>,
+    pub order: ColorOrder,
+    /// Every colour is scaled by this over 255, so the lights cannot draw
+    /// more current than the USB port gives.
+    pub limit: u8,
+    pub leds: Vec<Led, MAX_LEDS>,
+    /// The lights under keys.
+    pub keys: LightZone,
+    pub underglow: LightZone,
+}
+
+impl LightingConfig {
+    pub const NONE: Self = Self {
+        pin: None,
+        order: ColorOrder::Grb,
+        limit: 80,
+        leds: Vec::new(),
+        keys: LightZone { effect: Effect::Off, hue: 0, sat: 0, val: 0, speed: 0 },
+        underglow: LightZone { effect: Effect::Off, hue: 0, sat: 0, val: 0, speed: 0 },
+    };
+}
+
+impl Default for LightingConfig {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
 /// Where a key sits on the keyboard, for drawing it. Units are hundredths of
 /// a standard key width; rotation is in tenths of a degree around the key's
 /// centre.
@@ -259,6 +345,23 @@ pub enum Request {
     /// Reserved and unusable pins are rejected.
     StartProbe(Vec<Pin, MAX_PROBE_PINS>),
     StopProbe,
+    /// Hold one pin low (`Some`) or let it go again (`None`). While a pin is
+    /// held the keyboard does not scan its keys. Used to find a wire to
+    /// another board, which sees the pin as grounded in its own wiring
+    /// detection. The caller must have ruled out pins tied to supply voltage,
+    /// e.g. with [`Request::StartProbe`] on this board first.
+    HoldLow(Option<Pin>),
+    GetLighting,
+    /// Replace the lighting configuration. Colours and effects change at
+    /// once; the pin after a restart.
+    SetLighting(LightingConfig),
+    /// Light one light of the chain on its own (`Some`), so the user can see
+    /// where it sits, or return to the configured effects (`None`).
+    IdentifyLed(Option<u8>),
+    GetLayerColors,
+    /// One colour number per layer, for whoever draws the keymap. The
+    /// keyboard only stores them; 0 means none was chosen.
+    SetLayerColors(Vec<u8, MAX_LAYERS>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +381,8 @@ pub enum Response {
     /// `total` is the number of stored key shapes.
     Layout { total: u16, keys: Vec<KeyGeometry, LAYOUT_KEYS_PER_CHUNK> },
     SplitStatus(SplitStatus),
+    Lighting(LightingConfig),
+    LayerColors(Vec<u8, MAX_LAYERS>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,6 +411,12 @@ pub enum Event {
     Key { pos: u16, pressed: bool },
     /// All contacts currently seen, sent whenever the set changes.
     Probe(Vec<Contact, MAX_CONTACTS>),
+    /// The pressed key at `pos` took its action from `layer`. Follows the
+    /// key's press event, later if a hold-tap had to be decided first.
+    Resolved { pos: u16, layer: u8 },
+    /// Bitmask of the layers now active. Sent when key watching starts and
+    /// whenever it changes.
+    Layers(u32),
 }
 
 /// Everything the device sends.

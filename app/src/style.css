@@ -1,22 +1,23 @@
 :root {
   color-scheme: dark;
-  --bg: #0e1014;
-  --panel: #161a21;
-  --panel-2: #1e232d;
-  --line: #2b3240;
-  --text: #e9ecf2;
-  --muted: #8e97aa;
-  --accent: #ffb347;
-  --accent-soft: rgba(255, 179, 71, 0.14);
-  --accent-ink: #1b1204;
+  /* The POG palette: neutral warm greys and its orange. */
+  --bg: #171717;
+  --panel: #1f1f1f;
+  --panel-2: #292929;
+  --line: #383838;
+  --text: #f0ece6;
+  --muted: #a19a91;
+  --accent: #ef8f4c;
+  --accent-soft: rgba(239, 143, 76, 0.16);
+  --accent-ink: #131616;
   /* Used wherever electricity is shown flowing. */
   --signal: #4fd1c5;
   --signal-soft: rgba(79, 209, 197, 0.16);
   --danger: #ff6b6b;
   --ok: #6ee7a0;
-  --cap: #2a313d;
-  --cap-top: #363e4d;
-  --cap-text: #e9ecf2;
+  --cap: #2a2a2a;
+  --cap-top: #3e3e3e;
+  --cap-text: #f0ece6;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   --radius: 14px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -32,10 +33,10 @@
     --panel: #ffffff;
     --panel-2: #f6f4ef;
     --line: #dedad0;
-    --text: #1d2026;
-    --muted: #6b7180;
-    --accent: #d97a00;
-    --accent-soft: rgba(217, 122, 0, 0.12);
+    --text: #211e1a;
+    --muted: #756f66;
+    --accent: #d9702a;
+    --accent-soft: rgba(217, 112, 42, 0.13);
     --accent-ink: #ffffff;
     --signal: #0f9e92;
     --signal-soft: rgba(15, 158, 146, 0.12);
@@ -43,7 +44,7 @@
     --ok: #1f9d55;
     --cap: #e4e0d6;
     --cap-top: #faf8f3;
-    --cap-text: #1d2026;
+    --cap-text: #211e1a;
     --shadow: 0 12px 32px rgba(40, 30, 10, 0.12);
   }
 }

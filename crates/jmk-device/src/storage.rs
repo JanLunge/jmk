@@ -5,7 +5,7 @@
 //! number, length, CRC-32) followed by the postcard-encoded configuration.
 
 use embedded_storage::nor_flash::NorFlash;
-use jmk_proto::{HardwareConfig, MAX_KEYS};
+use jmk_proto::{HardwareConfig, LightingConfig, MAX_KEYS};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::config::Config;
@@ -117,6 +117,9 @@ fn encode(config: &Config, buf: &mut [u8]) -> Option<usize> {
             put(buf, &mut used, action)?;
         }
     }
+    // Added later, so it comes last: older saves simply end before it.
+    put(buf, &mut used, &config.lighting)?;
+    put(buf, &mut used, &config.layer_colors)?;
     Some(used)
 }
 
@@ -142,6 +145,8 @@ fn decode(mut bytes: &[u8], config: &mut Config) -> Option<()> {
             *action = take(&mut bytes)?;
         }
     }
+    config.lighting = if bytes.is_empty() { LightingConfig::NONE } else { take(&mut bytes)? };
+    config.layer_colors = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
     config.hardware = hardware;
     config.layer_count = layer_count;
     config.profiles = profiles;

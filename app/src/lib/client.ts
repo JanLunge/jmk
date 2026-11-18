@@ -10,6 +10,7 @@ import type {
   HoldTapProfile,
   Info,
   KeyGeometry,
+  LightingConfig,
   MacroStep,
   Meta,
   Pin,
@@ -29,6 +30,8 @@ export class KeyboardError extends Error {}
 export class KeyboardClient {
   onKey: (pos: number, pressed: boolean) => void = () => {}
   onProbe: (contacts: Contact[]) => void = () => {}
+  onResolved: (pos: number, layer: number) => void = () => {}
+  onLayers: (layers: number) => void = () => {}
   private readonly channel = nextChannel++
   private queue: Promise<unknown> = Promise.resolve()
   private waiting: ((response: Response) => void) | undefined
@@ -56,7 +59,9 @@ export class KeyboardClient {
 
   private dispatch(event: DeviceEvent) {
     if ('Key' in event) this.onKey(event.Key.pos, event.Key.pressed)
-    else this.onProbe(event.Probe)
+    else if ('Probe' in event) this.onProbe(event.Probe)
+    else if ('Resolved' in event) this.onResolved(event.Resolved.pos, event.Resolved.layer)
+    else if ('Layers' in event) this.onLayers(event.Layers)
   }
 
   /** Send a request and wait for its reply. Requests run one after another. */
@@ -114,6 +119,12 @@ export class KeyboardClient {
   watchKeys = (on: boolean) => this.ok({ WatchKeys: on })
   startProbe = (pins: Pin[]) => this.ok({ StartProbe: pins })
   stopProbe = () => this.ok('StopProbe')
+  holdLow = (pin: Pin | null) => this.ok({ HoldLow: pin })
+  lighting = (): Promise<LightingConfig> => this.expect('GetLighting', 'Lighting')
+  setLighting = (lighting: LightingConfig) => this.ok({ SetLighting: lighting })
+  identifyLed = (led: number | null) => this.ok({ IdentifyLed: led })
+  layerColors = (): Promise<number[]> => this.expect('GetLayerColors', 'LayerColors')
+  setLayerColors = (colors: number[]) => this.ok({ SetLayerColors: colors })
   reboot = (bootloader: boolean) => this.ok({ Reboot: { bootloader } })
 
   async actions(layer: number, count: number): Promise<Action[]> {

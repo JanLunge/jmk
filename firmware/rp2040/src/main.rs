@@ -6,11 +6,12 @@
 #![no_std]
 #![no_main]
 
+mod lights;
 mod link;
 mod pins;
 
 use embassy_executor::Spawner;
-use embassy_futures::join::join3;
+use embassy_futures::join::join4;
 use embassy_rp::bind_interrupts;
 use embassy_rp::flash::{Blocking, Flash};
 use embassy_rp::peripherals::{FLASH, USB};
@@ -50,6 +51,7 @@ async fn main(_spawner: Spawner) {
     let storage = Storage::new(flash, STORAGE_OFFSET, STORAGE_BUF.take());
     let board = Board { mcu: Mcu::Rp2040, firmware: jmk_embassy::firmware_version!(), uid };
     let mut device = Device::new(board, pins::RpPins::new(), storage, CONFIG.take());
+    let light_pin = device.lighting().pin;
     let serial = device.hardware().split.link().and_then(|config| link::SerialLink::open(&config));
 
     // Saving to flash blocks for a few hundred milliseconds.
@@ -72,7 +74,8 @@ async fn main(_spawner: Spawner) {
             None => core::future::pending().await,
         }
     };
-    join3(run, usb.run(&hid_queues, &config_queues), cable).await;
+    let lights = lights::run(p.PIO0, p.DMA_CH0, light_pin);
+    join4(run, usb.run(&hid_queues, &config_queues), cable, lights).await;
 }
 
 fn reboot(bootloader: bool) -> ! {

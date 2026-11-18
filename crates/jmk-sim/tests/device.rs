@@ -3,8 +3,8 @@
 use jmk_core::keycode as kc;
 use jmk_core::{Action, Basic, MacroStep};
 use jmk_proto::{
-    Contact, DiodeDirection, EncoderConfig, Error, Event, HardwareConfig, KeyGeometry, LinkConfig, MatrixConfig,
-    Meta, Pin, Request, Response, SplitConfig, SplitStatus,
+    ColorOrder, Contact, DiodeDirection, Effect, EncoderConfig, Error, Event, HardwareConfig, KeyGeometry, Led,
+    LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, SplitConfig, SplitStatus,
 };
 use jmk_sim::{HostEvent, VirtualKeyboard, Wire, Wiring};
 
@@ -169,7 +169,54 @@ fn watch_keys_reports_positions() {
     rig.ok(Request::WatchKeys(true));
     rig.kb.set_key(3, true);
     rig.run(2);
-    assert_eq!(rig.events(), [Event::Key { pos: 3, pressed: true }]);
+    assert_eq!(
+        rig.events(),
+        [Event::Key { pos: 3, pressed: true }, Event::Resolved { pos: 3, layer: 0 }, Event::Layers(0b01)]
+    );
+}
+
+#[test]
+fn layer_hold_on_a_diode_matrix_reports_the_layer_used() {
+    // Three rows of two keys with the diodes from row to column.
+    let (rows, cols) = ([18, 19, 20], [16, 17]);
+    let mut rig = Rig::new(Wiring::matrix(&rows, &cols, false));
+    rig.ok(Request::SetHardware(hardware(MatrixConfig::Matrix {
+        rows: rows.into_iter().collect(),
+        cols: cols.into_iter().collect(),
+        diodes: DiodeDirection::Row2Col,
+    })));
+    rig.ok(Request::SetLayerCount(2));
+    rig.set_keys(0, &[kc::A, kc::B, kc::C, kc::D, kc::E, kc::F]);
+    rig.ok(Request::SetActions { layer: 0, pos: 4, actions: [Action::Basic(Basic::MomentaryLayer(1))].into_iter().collect() });
+    rig.ok(Request::SetActions { layer: 1, pos: 0, actions: [Action::key(kc::N1)].into_iter().collect() });
+    rig.ok(Request::WatchKeys(true));
+    rig.run(2);
+    assert_eq!(rig.events(), [Event::Layers(0b01)]);
+
+    rig.kb.set_key(4, true);
+    rig.run(10);
+    assert_eq!(
+        rig.events(),
+        [Event::Key { pos: 4, pressed: true }, Event::Resolved { pos: 4, layer: 0 }, Event::Layers(0b11)]
+    );
+    // Same column as the layer key: layer 1 has its own key here.
+    rig.kb.set_key(0, true);
+    rig.run(10);
+    assert_eq!(rig.events(), [Event::Key { pos: 0, pressed: true }, Event::Resolved { pos: 0, layer: 1 }]);
+    // Other column: see-through on layer 1, so the base layer's key.
+    rig.kb.set_key(1, true);
+    rig.run(10);
+    assert_eq!(rig.events(), [Event::Key { pos: 1, pressed: true }, Event::Resolved { pos: 1, layer: 0 }]);
+    assert_eq!(rig.out(), ["00:1e", "00:1e,05"]);
+
+    for key in [0, 1, 4] {
+        rig.kb.set_key(key, false);
+    }
+    rig.run(10);
+    assert_eq!(rig.events().last(), Some(&Event::Layers(0b01)));
+    rig.kb.set_key(0, true);
+    rig.run(10);
+    assert_eq!(rig.out(), ["00:05", "00:", "00:04"]);
 }
 
 #[test]
@@ -493,4 +540,157 @@ fn split_link_is_refused_where_the_chip_cannot_do_it() {
     let mut rig = Rig::wires(&[]);
     let hw = HardwareConfig { split: SplitConfig::Central(LinkConfig::Ble), ..hardware(MatrixConfig::None) };
     rig.refused(Request::SetHardware(hw), Error::Unsupported);
+}
+
+#[test]
+fn a_held_pin_is_seen_as_grounded_by_the_board_at_the_other_end_of_a_wire() {
+    let mut a = VirtualKeyboard::new(Wiring::direct(&[7]), [1; 8]);
+    let mut b = VirtualKeyboard::new(Wiring::direct(&[7]), [2; 8]);
+    VirtualKeyboard::connect_wired(&mut a, &mut b, &[(0, 1), (1, 0)]);
+    let grounded = |kb: &mut VirtualKeyboard| {
+        kb.advance(40);
+        let mut assembler = jmk_proto::frame::Assembler::new();
+        let mut last = None;
+        for report in kb.take_reports() {
+            if let Some(Ok(jmk_proto::DeviceMessage::Event(Event::Probe(contacts)))) = assembler.push(&report) {
+                last = Some(contacts.to_vec());
+            }
+        }
+        last
+    };
+    assert_eq!(b.request(Request::StartProbe((0..10).collect())), Response::Ok);
+    assert_eq!(grounded(&mut b), None);
+
+    assert_eq!(a.request(Request::HoldLow(Some(0))), Response::Ok);
+    assert_eq!(grounded(&mut b), Some(vec![Contact::Ground(1)]));
+    // Holding another pin lets go of the first.
+    assert_eq!(a.request(Request::HoldLow(Some(1))), Response::Ok);
+    assert_eq!(grounded(&mut b), Some(vec![Contact::Ground(0)]));
+    assert_eq!(a.request(Request::HoldLow(Some(5))), Response::Ok);
+    assert_eq!(grounded(&mut b), Some(vec![]));
+
+    // A held pin stops the keys; letting go brings them back.
+    a.request(Request::SetHardware(direct(&[7])));
+    a.request(Request::SetActions { layer: 0, pos: 0, actions: [Action::key(kc::A)].into_iter().collect() });
+    assert_eq!(a.request(Request::HoldLow(Some(0))), Response::Ok);
+    a.set_key(0, true);
+    a.advance(10);
+    assert!(a.take_host_events().is_empty());
+    assert_eq!(a.request(Request::HoldLow(None)), Response::Ok);
+    a.advance(10);
+    assert_eq!(a.take_host_events().len(), 1);
+    // Reserved pins are never driven.
+    let mut hw = direct(&[7]);
+    hw.reserved_pins = [3].into_iter().collect();
+    a.request(Request::SetHardware(hw));
+    assert_eq!(a.request(Request::HoldLow(Some(3))), Response::Error(Error::ReservedPin(3)));
+}
+
+fn lighting(keys: Effect, underglow: Effect) -> LightingConfig {
+    let zone = |effect| LightZone { effect, hue: 0, sat: 255, val: 255, speed: 100 };
+    let leds = [Led { key: 0, x: 0, y: 0 }, Led { key: 1, x: 128, y: 0 }, Led { key: Led::UNDERGLOW, x: 255, y: 0 }];
+    LightingConfig {
+        pin: Some(9),
+        order: ColorOrder::Grb,
+        limit: 255,
+        leds: leds.into_iter().collect(),
+        keys: zone(keys),
+        underglow: zone(underglow),
+    }
+}
+
+#[test]
+fn lights_show_each_zones_colour_in_the_chains_order() {
+    let mut rig = Rig::wires(&[Wire::Ground(2), Wire::Ground(3)]);
+    rig.ok(Request::SetHardware(direct(&[2, 3])));
+    let mut config = lighting(Effect::Solid, Effect::Off);
+    config.limit = 51;
+    rig.ok(Request::SetLighting(config.clone()));
+    rig.run(30);
+    // Red at a fifth of full brightness, sent green first.
+    assert_eq!(rig.kb.pins().lights(), [[0, 51, 0], [0, 51, 0], [0, 0, 0]]);
+
+    config.order = ColorOrder::Rgb;
+    config.underglow = LightZone { effect: Effect::Solid, hue: 0, sat: 0, val: 255, speed: 0 };
+    rig.ok(Request::SetLighting(config));
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights(), [[51, 0, 0], [51, 0, 0], [51, 51, 51]]);
+}
+
+#[test]
+fn a_pressed_key_lights_its_own_light_and_the_underglow() {
+    let mut rig = Rig::wires(&[Wire::Ground(2), Wire::Ground(3)]);
+    rig.ok(Request::SetHardware(direct(&[2, 3])));
+    rig.ok(Request::SetLighting(lighting(Effect::Reactive, Effect::Reactive)));
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights(), [[0, 0, 0]; 3]);
+    rig.kb.set_key(1, true);
+    rig.run(25);
+    let lit = rig.kb.pins().lights();
+    assert_eq!(lit[0], [0, 0, 0]);
+    assert!(lit[1][1] > 150 && lit[2][1] > 150, "{lit:?}");
+    rig.run(1000);
+    assert_eq!(rig.kb.pins().lights(), [[0, 0, 0]; 3]);
+}
+
+#[test]
+fn one_light_can_be_shown_alone_to_find_it() {
+    let mut rig = Rig::wires(&[Wire::Ground(2)]);
+    rig.ok(Request::SetLighting(lighting(Effect::Solid, Effect::Solid)));
+    rig.ok(Request::IdentifyLed(Some(2)));
+    rig.run(30);
+    let lit = rig.kb.pins().lights();
+    assert_eq!((lit[0], lit[1]), ([0; 3], [0; 3]));
+    assert!(lit[2].iter().all(|part| *part > 0));
+    rig.refused(Request::IdentifyLed(Some(3)), Error::OutOfRange);
+    rig.ok(Request::IdentifyLed(None));
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights()[0], [0, 255, 0]);
+}
+
+#[test]
+fn the_light_pin_cannot_double_as_a_key_pin() {
+    let mut rig = Rig::wires(&[Wire::Ground(2)]);
+    rig.ok(Request::SetHardware(direct(&[2, 3])));
+    let mut config = lighting(Effect::Solid, Effect::Off);
+    config.pin = Some(3);
+    rig.refused(Request::SetLighting(config.clone()), Error::DuplicatePin(3));
+    config.pin = Some(9);
+    rig.ok(Request::SetLighting(config));
+    rig.refused(Request::SetHardware(direct(&[2, 9])), Error::DuplicatePin(9));
+    rig.refused(Request::StartProbe(pins(&[2, 9])), Error::ReservedPin(9));
+    rig.refused(Request::HoldLow(Some(9)), Error::ReservedPin(9));
+    // The data pin belongs to the light driver; scanning leaves it alone.
+    rig.run(50);
+    assert!(!rig.kb.pins().touched().contains(&9));
+}
+
+#[test]
+fn lighting_is_saved_and_a_save_from_before_lighting_still_loads() {
+    let mut rig = Rig::wires(&[Wire::Ground(2)]);
+    rig.ok(Request::SetHardware(direct(&[2])));
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetLighting), Response::Lighting(LightingConfig::NONE));
+
+    let config = lighting(Effect::Rainbow, Effect::Breathing);
+    rig.ok(Request::SetLighting(config.clone()));
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetLighting), Response::Lighting(config));
+    assert_eq!(rig.kb.request(Request::GetHardware), Response::Hardware(direct(&[2])));
+    // The chain is driven again after the restart without being asked.
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights().len(), 3);
+}
+
+#[test]
+fn layer_colors_are_saved() {
+    let mut rig = Rig::wires(&[Wire::Ground(2)]);
+    rig.ok(Request::SetHardware(direct(&[2])));
+    assert_eq!(rig.kb.request(Request::GetLayerColors), Response::LayerColors([0; 8].into_iter().collect()));
+    rig.ok(Request::SetLayerColors([0, 3, 7].into_iter().collect()));
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetLayerColors), Response::LayerColors([0, 3, 7, 0, 0, 0, 0, 0].into_iter().collect()));
 }

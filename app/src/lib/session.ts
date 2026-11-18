@@ -3,6 +3,7 @@
 // to its flash when the user saves.
 
 import { markRaw, reactive, type Raw } from 'vue'
+import type { AddPlan } from './addkey'
 import { KeyboardClient } from './client'
 import type { DemoHalf } from './demos'
 import { localPositions } from './definition'
@@ -15,7 +16,9 @@ import type {
   HoldTapProfile,
   HostEvent,
   Info,
+  Pin,
   KeyGeometry,
+  LightingConfig,
   MacroStep,
   Meta,
   SplitStatus,
@@ -36,12 +39,34 @@ export interface Session {
   meta: Meta
   layout: KeyGeometry[]
   layers: Action[][]
+  /** A colour number per layer; 0 where none was chosen. */
+  layerColors: number[]
   profiles: HoldTapProfile[]
   combos: Combo[]
   macros: MacroStep[][]
   split: SplitStatus
+  lighting: LightingConfig
+  /** The light pin the firmware started with; a change needs a restart. */
+  bootLightPin: Pin | null
+  /** A virtual keyboard's lights as they shine right now, in chain order. */
+  lights: number[][]
   /** Positions currently held down, as reported by the keyboard. */
   pressed: Set<number>
+  /**
+   * The firmware reports which layers are active and which layer each press
+   * used. False on firmware from before it did; then only `pressed` is known.
+   */
+  layerAware: boolean
+  /** Bitmask of the layers active on the keyboard right now. */
+  activeLayers: number
+  /** For held keys the keyboard has acted on: the layer the action came from. */
+  usedLayer: Map<number, number>
+  /** The cable pins found for this half by looking for the wires (see cable.ts). */
+  cable?: { tx: Pin; rx: Pin }
+  /** The cable setting the firmware started with; a change needs a restart. */
+  bootLink: string
+  /** When the keyboard last reported a key going down or up (performance.now()). */
+  lastKeyAt: number
   /** Changes not yet written to the keyboard's flash. */
   unsaved: boolean
   /** What a virtual keyboard typed, newest last. */
@@ -49,9 +74,71 @@ export interface Session {
   closed: boolean
   /** The setup wizard is showing for this keyboard. */
   setup: boolean
+  /** It was told to restart or update; it will drop off and come back. */
+  restarting?: boolean
 }
 
 let counter = 0
+
+/** Protocol version from which the firmware runs RGB lights. */
+export const LIGHTING_PROTOCOL = 3
+export const canLight = (session: Session) => session.info.protocol >= LIGHTING_PROTOCOL
+
+export function noLighting(): LightingConfig {
+  const off = { effect: 'Off' as const, hue: 0, sat: 0, val: 0, speed: 0 }
+  return { pin: null, order: 'Grb', limit: 80, leds: [], keys: { ...off }, underglow: { ...off } }
+}
+
+/** Protocol version from which the firmware remembers a colour per layer. */
+export const LAYER_COLOR_PROTOCOL = 4
+export const canColorLayers = (session: Session) => session.info.protocol >= LAYER_COLOR_PROTOCOL
+
+// Settings that are replaced as a whole (the lights, the combos, a macro)
+// change in the app at once, so the next click builds on this one, and go to
+// the keyboard one after the other. Of several waiting only the newest is sent.
+const outboxes = new WeakMap<Session, Map<string, { busy: boolean; next?: () => Promise<void> }>>()
+
+async function sendNewest(session: Session, what: string, send: () => Promise<void>): Promise<void> {
+  session.unsaved = true
+  const boxes = outboxes.get(session) ?? new Map<string, { busy: boolean; next?: () => Promise<void> }>()
+  outboxes.set(session, boxes)
+  const box = boxes.get(what) ?? { busy: false }
+  boxes.set(what, box)
+  if (box.busy) {
+    box.next = send
+    return
+  }
+  box.busy = true
+  try {
+    for (let now: (() => Promise<void>) | undefined = send; now; ) {
+      await now()
+      now = box.next
+      box.next = undefined
+    }
+  } catch (error) {
+    box.next = undefined
+    box.busy = false
+    // The keyboard refused: show what it really has.
+    await refresh(session).catch(() => {})
+    throw error
+  } finally {
+    box.busy = false
+  }
+}
+
+/** Change the lights. Shows at once; the data pin takes effect after a save and restart. */
+export function setLighting(session: Session, lighting: LightingConfig): Promise<void> {
+  session.lighting = lighting
+  return sendNewest(session, 'lighting', () => session.client.setLighting(lighting))
+}
+
+/** Give a layer a colour number (see layers.ts). Firmware from before layer colours keeps it only until the app closes. */
+export function setLayerColor(session: Session, layer: number, color: number): Promise<void> {
+  const colors = [...Array(session.layers.length).keys()].map((index) => (index === layer ? color : (session.layerColors[index] ?? 0)))
+  session.layerColors = colors
+  if (!canColorLayers(session)) return Promise.resolve()
+  return sendNewest(session, 'layerColors', () => session.client.setLayerColors(colors))
+}
 
 /** Positions in the keymap: this half's own plus the other half's. */
 export function positionCount(session: Session): number {
@@ -83,28 +170,52 @@ export async function openSession(transport: Transport, demo?: DemoHalf): Promis
     meta: { name: '', controller: '' },
     layout: [],
     layers: [],
+    layerColors: [],
     profiles: [],
     combos: [],
     macros: [],
     split: { connected: false, remote_positions: 0 },
+    lighting: noLighting(),
+    bootLightPin: null,
+    lights: [],
     pressed: new Set<number>(),
+    layerAware: false,
+    activeLayers: 1,
+    usedLayer: new Map<number, number>(),
+    bootLink: '',
+    lastKeyAt: -Infinity,
     unsaved: false,
     typed: [],
     closed: false,
     setup: false,
   }) as Session
   client.onKey = (pos, pressed) => {
+    session.lastKeyAt = performance.now()
     if (pressed) session.pressed.add(pos)
-    else session.pressed.delete(pos)
+    else {
+      session.pressed.delete(pos)
+      session.usedLayer.delete(pos)
+    }
+  }
+  client.onResolved = (pos, layer) => {
+    // A tap can be decided only after its release; that is no longer held.
+    if (session.pressed.has(pos)) session.usedLayer.set(pos, layer)
+  }
+  client.onLayers = (layers) => {
+    session.layerAware = true
+    session.activeLayers = layers
   }
   transport.onClose = () => (session.closed = true)
   if (transport instanceof VirtualTransport) {
+    transport.onLights = (colors) => (session.lights = colors)
     transport.onHost = (event) => {
       session.typed.push(event)
       if (session.typed.length > 200) session.typed.splice(0, session.typed.length - 200)
     }
   }
   await refresh(session)
+  session.bootLink = linkOf(session.hardware)
+  session.bootLightPin = session.lighting.pin
   await client.watchKeys(true)
   session.setup = !isConfigured(session)
   if (isConfigured(session) && session.layout.length === 0) {
@@ -134,7 +245,10 @@ export async function refresh(session: Session): Promise<void> {
   const macros: MacroStep[][] = []
   for (let index = 0; index < LIMITS.macros; index++) macros.push(await client.macro(index))
   session.macros = macros
+  session.lighting = canLight(session) ? await client.lighting() : noLighting()
+  if (canColorLayers(session)) session.layerColors = await client.layerColors()
   session.pressed.clear()
+  session.usedLayer.clear()
 }
 
 /** Make sure every layer has an entry for every position. */
@@ -152,6 +266,7 @@ export async function setHardware(session: Session, hardware: HardwareConfig): P
   await session.client.setHardware(hardware)
   session.hardware = hardware
   session.pressed.clear()
+  session.usedLayer.clear()
   session.unsaved = true
   await fitLayers(session)
 }
@@ -195,16 +310,73 @@ export async function setProfile(session: Session, index: number, profile: HoldT
   session.unsaved = true
 }
 
-export async function setCombos(session: Session, combos: Combo[]): Promise<void> {
-  await session.client.setCombos(combos)
+export function setCombos(session: Session, combos: Combo[]): Promise<void> {
   session.combos = combos
-  session.unsaved = true
+  return sendNewest(session, 'combos', () => session.client.setCombos(combos))
 }
 
-export async function setMacro(session: Session, index: number, steps: MacroStep[]): Promise<void> {
-  await session.client.setMacro(index, steps)
+export function setMacro(session: Session, index: number, steps: MacroStep[]): Promise<void> {
   session.macros[index] = steps
+  return sendNewest(session, 'macro' + index, () => session.client.setMacro(index, steps))
+}
+
+/**
+ * Add the key a plan describes: extend the wiring if needed, draw the key
+ * and give it a starter letter. Everything already set up keeps its key,
+ * even where the positions are renumbered. Returns the key's position.
+ */
+export async function addKey(session: Session, plan: Extract<AddPlan, { ok: true }>): Promise<number> {
+  const { client } = session
+  const oldLength = Math.max(positionCount(session), session.layout.length, ...session.layers.map((l) => l.length))
+  const length = Math.max(plan.pos, ...[...Array(oldLength).keys()].map(plan.move)) + 1
+  const layout: KeyGeometry[] = Array.from({ length }, () => ({ ...NO_KEY }))
+  session.layout.forEach((key, old) => (layout[plan.move(old)] = key))
+  if (hasKey(layout[plan.pos])) throw new Error('That key is already part of the keyboard.')
+  const letters = layout.filter(hasKey).length
+  layout[plan.pos] = freeSpot(session.layout, plan)
+  const layers = session.layers.map((layer) => {
+    const moved: Action[] = Array(length).fill('Transparent')
+    layer.forEach((action, old) => (moved[plan.move(old)] = action))
+    return moved
+  })
+  const before = layers[0][plan.pos]
+  if (before === 'Transparent' || JSON.stringify(before) === JSON.stringify({ Basic: 'None' })) {
+    layers[0][plan.pos] = starterAction(letters)
+  }
+  const combos = session.combos.map((combo) => ({ ...combo, keys: combo.keys.map(plan.move) }))
+  try {
+    if (plan.rewired) await client.setHardware(plan.hardware)
+    await client.setLayout(layout)
+    for (const [index, layer] of layers.entries()) await client.setActions(index, 0, layer)
+    if (plan.rewired && combos.length) await client.setCombos(combos)
+  } catch (error) {
+    // Half applied: show what the keyboard really has now.
+    await refresh(session).catch(() => {})
+    throw error
+  }
+  session.hardware = plan.hardware
+  session.layout = layout
+  session.layers = layers
+  session.combos = combos
+  session.pressed.clear()
+  session.usedLayer.clear()
   session.unsaved = true
+  return plan.pos
+}
+
+/** A place to draw an added key: its spot in the grid if that is empty, else under the keyboard. */
+function freeSpot(layout: KeyGeometry[], plan: Extract<AddPlan, { ok: true }>): KeyGeometry {
+  const matrix = plan.hardware.matrix
+  const drawn = layout.filter(hasKey)
+  if (matrix !== 'None' && 'Matrix' in matrix) {
+    const cols = matrix.Matrix.cols.length
+    const spot = { x: (plan.pos % cols) * UNIT, y: Math.floor(plan.pos / cols) * UNIT, w: UNIT, h: UNIT, r: 0 }
+    const overlaps = (key: KeyGeometry) =>
+      key.x < spot.x + spot.w && spot.x < key.x + key.w && key.y < spot.y + spot.h && spot.y < key.y + key.h
+    if (!drawn.some(overlaps)) return spot
+  }
+  const box = bounds(drawn)
+  return { x: Math.round(box.x), y: Math.round(box.y + box.h + UNIT / 4), w: UNIT, h: UNIT, r: 0 }
 }
 
 export async function save(session: Session): Promise<void> {
@@ -212,9 +384,37 @@ export async function save(session: Session): Promise<void> {
   session.unsaved = false
 }
 
+const linkOf = (hardware: HardwareConfig) => JSON.stringify(hardware.split === 'None' ? null : Object.values(hardware.split)[0])
+
+/** The cable setting was changed and saved, but the firmware still runs the one it started with. */
+export function needsRestart(session: Session): boolean {
+  return !session.unsaved && (linkOf(session.hardware) !== session.bootLink || session.lighting.pin !== session.bootLightPin)
+}
+
+/**
+ * Restart the keyboard so a saved cable setting takes effect. A USB
+ * keyboard drops off and comes back as a fresh session by itself.
+ */
+export async function restart(session: Session): Promise<void> {
+  session.restarting = !(session.transport instanceof VirtualTransport)
+  await session.client.reboot(false)
+  if (session.transport instanceof VirtualTransport) {
+    await refresh(session)
+    session.bootLink = linkOf(session.hardware)
+    session.bootLightPin = session.lighting.pin
+    await session.client.watchKeys(true)
+  }
+}
+
 export function exportKeymap(session: Session): Keymap {
   return JSON.parse(
-    JSON.stringify({ layers: session.layers, profiles: session.profiles, combos: session.combos, macros: session.macros }),
+    JSON.stringify({
+      layers: session.layers,
+      profiles: session.profiles,
+      combos: session.combos,
+      macros: session.macros,
+      layerColors: session.layerColors.slice(0, session.layers.length),
+    }),
   )
 }
 
@@ -226,6 +426,7 @@ export async function applyKeymap(session: Session, keymap: Keymap): Promise<voi
   for (const [index, profile] of keymap.profiles.slice(0, LIMITS.holdTapProfiles).entries()) await client.setProfile(index, profile)
   await client.setCombos(keymap.combos.slice(0, LIMITS.combos))
   for (let index = 0; index < LIMITS.macros; index++) await client.setMacro(index, keymap.macros[index] ?? [])
+  if (canColorLayers(session)) await client.setLayerColors((keymap.layerColors ?? []).slice(0, session.info.max_layers))
   session.unsaved = true
 }
 
@@ -245,6 +446,7 @@ export function exportDefinition(session: Session, otherHalf?: HardwareConfig): 
       halves,
       layout: session.layout,
       keymap: exportKeymap(session),
+      lighting: session.lighting.pin === null ? undefined : session.lighting,
     }),
   )
 }
@@ -261,6 +463,7 @@ export async function applyDefinition(session: Session, definition: Definition, 
   if (half === 0) {
     await session.client.setLayout(definition.layout)
     await applyKeymap(session, definition.keymap)
+    if (definition.lighting && canLight(session)) await session.client.setLighting(definition.lighting)
   }
   await session.client.save()
   await refresh(session)
@@ -273,9 +476,26 @@ export function starterAction(index: number): Action {
   return index < usages.length ? { Basic: { Key: usages[index] } } : { Basic: 'None' }
 }
 
-/** A grid for the switches plus an empty entry per knob direction. */
+/** A grid for the switches, then per knob its place in the picture and an empty entry. */
 export function starterLayout(hardware: HardwareConfig, populated?: number[]): KeyGeometry[] {
-  return [...gridLayout(hardware.matrix, populated), ...Array(2 * hardware.encoders.length).fill(NO_KEY)]
+  const layout = gridLayout(hardware.matrix, populated)
+  hardware.encoders.forEach(() => layout.push(knobSpot(layout), { ...NO_KEY }))
+  return layout
+}
+
+/** Key positions that are a knob's picture: the first of its two positions. */
+export function knobPositions(session: Session): number[] {
+  const count = session.hardware.encoders.length
+  const first = localPositions(session.hardware) - 2 * count
+  return [...Array(count).keys()].map((index) => first + 2 * index)
+}
+
+/** A free place for a knob: above the keys, after the knobs already there. */
+export function knobSpot(layout: KeyGeometry[]): KeyGeometry {
+  const box = bounds(layout)
+  const y = Math.round(box.y - UNIT * 1.25)
+  const taken = layout.filter((key) => hasKey(key) && key.y === y).length
+  return { x: Math.round(box.x + taken * UNIT * 1.25), y, w: UNIT, h: UNIT, r: 0 }
 }
 
 /**

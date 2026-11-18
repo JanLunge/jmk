@@ -2,9 +2,17 @@
 import { readFileSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { KnobFinder } from '../../src/lib/collector'
+import { planAddedKey } from '../../src/lib/addkey'
+import { addSession, app } from '../../src/lib/app'
+import { chooseLink, findWires } from '../../src/lib/cable'
+import { signatureOf } from '../../src/lib/infer'
 import { DEMOS } from '../../src/lib/demos'
 import type { Contact, HostEvent } from '../../src/lib/protocol'
-import { adoptRemoteKeys, openSession, setAction, setHardware, setLayerCount, starterAction, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../../src/lib/lighting'
+import { keymapPoster } from '../../src/lib/poster'
+import { layerHex } from '../../src/lib/layers'
+import { gridLayout } from '../../src/lib/layout'
+import { addKey, adoptRemoteKeys, knobPositions, needsRestart, restart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterAction, starterLayout, setLayout, type Session } from '../../src/lib/session'
 import { advanceVirtualTime, VirtualTransport } from '../../src/lib/transport'
 import { loadBridge } from '../../src/lib/wasm'
 
@@ -55,6 +63,134 @@ describe('virtual macro pad', () => {
     transport.setKey(1, true)
     advanceVirtualTime(20)
     expect(keys(typed).at(-1)).toEqual([0x1e])
+    // The keyboard says which layers are on and which one each press used.
+    expect(session.layerAware).toBe(true)
+    expect(session.activeLayers).toBe(0b11)
+    expect([...session.usedLayer]).toEqual([[0, 0], [1, 1]])
+
+    transport.setKey(1, false)
+    transport.setKey(0, false)
+    advanceVirtualTime(20)
+    expect(session.activeLayers).toBe(0b01)
+    expect(session.usedLayer.size).toBe(0)
+  })
+})
+
+describe('a key that was missed during setup', () => {
+  it('extends the matrix and keeps every other key where it was', async () => {
+    const { session, transport, typed } = await open('macropad')
+    // Set up without the third column, as if its two keys had been skipped.
+    const hardware = {
+      matrix: { Matrix: { rows: [16, 17], cols: [18, 19], diodes: 'Col2Row' as const } },
+      reserved_pins: [], debounce_ms: 5, encoders: [], split: 'None' as const,
+    }
+    await during(setHardware(session, hardware))
+    await during(setLayout(session, starterLayout(hardware)))
+    for (const pos of [0, 1, 2, 3]) await during(setAction(session, 0, pos, starterAction(pos)))
+
+    let seen: Contact[] = []
+    session.client.onProbe = (contacts) => (seen = contacts)
+    await during(session.client.startProbe([16, 17, 18, 19, 20]))
+    advanceVirtualTime(100)
+    transport.setKey(2, true) // first row, third column
+    advanceVirtualTime(100)
+    const key = signatureOf(seen)!
+    transport.setKey(2, false)
+    await during(session.client.stopProbe())
+
+    const plan = planAddedKey(session.hardware, key)
+    if (!plan.ok) throw new Error(plan.problem)
+    expect(plan.rewired).toBe(true)
+    expect(await during(addKey(session, plan))).toBe(2)
+    expect(session.hardware.matrix).toEqual({ Matrix: { rows: [16, 17], cols: [18, 19, 20], diodes: 'Col2Row' } })
+    // The second row moved from positions 2, 3 to 3, 4 and kept its letters.
+    expect(session.layers[0].slice(0, 5)).toEqual([starterAction(0), starterAction(1), starterAction(4), starterAction(2), starterAction(3)])
+    expect(session.layout.filter((k) => k.w > 0).length).toBe(5)
+
+    const tapKey = (index: number) => {
+      transport.setKey(index, true)
+      advanceVirtualTime(20)
+      transport.setKey(index, false)
+      advanceVirtualTime(20)
+    }
+    tapKey(3) // second row, first column: still C
+    tapKey(2) // the added key: E
+    expect(keys(typed).filter((k) => k.length)).toEqual([[0x06], [0x08]])
+
+    // The same key again is recognised as present.
+    const again = planAddedKey(session.hardware, key)
+    expect(again.ok && !again.rewired && again.pos === 2).toBe(true)
+  })
+})
+
+describe('the cable between two halves', () => {
+  /** Two fresh halves joined by a cable with these data wires. */
+  async function halves(wires: [number, number][]) {
+    const demo = DEMOS.find((d) => d.id === 'split')!
+    const transports = demo.halves.map((half) => new VirtualTransport(half.label, half.wiring, uid++))
+    VirtualTransport.connect(transports[0], transports[1], wires)
+    const left = await during(openSession(transports[0], demo.halves[0]))
+    const right = await during(openSession(transports[1], demo.halves[1]))
+    return { left, right }
+  }
+  const pins = [...Array(16).keys()]
+  /** Stands in for waiting: lets the virtual keyboards run that long. */
+  const wait = async (ms: number) => {
+    advanceVirtualTime(ms)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  it('is found wire by wire, whichever way it is crossed', async () => {
+    const { left, right } = await halves([[0, 1], [1, 0]])
+    const wires = await during(findWires(left, right, pins, pins, wait))
+    expect(wires).toEqual([{ a: 0, b: 1 }, { a: 1, b: 0 }])
+    expect(chooseLink(wires, 'Rp2040', 'Rp2040')).toEqual({ ok: true, a: { tx: 0, rx: 1 }, b: { tx: 0, rx: 1 } })
+
+    // The halves type again afterwards.
+    await during(setHardware(left, { matrix: { Direct: { pins: [20], active_high: false } }, reserved_pins: [], debounce_ms: 5, encoders: [], split: 'None' }))
+    expect(left.hardware.matrix).not.toBe('None')
+
+    // A straight cable to other pins: the directions are assigned to fit the chip.
+    const straight = await halves([[12, 13], [13, 12]])
+    const found = await during(findWires(straight.left, straight.right, pins, pins, wait))
+    expect(chooseLink(found, 'Rp2040', 'Rp2040')).toEqual({ ok: true, a: { tx: 12, rx: 13 }, b: { tx: 12, rx: 13 } })
+  })
+
+  it('says plainly what is wrong with a cable it cannot use', async () => {
+    const none = await halves([])
+    expect(await during(findWires(none.left, none.right, pins, pins, wait))).toEqual([])
+    expect(chooseLink([], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('No wire') })
+    expect(chooseLink([{ a: 0, b: 1 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('one data wire') })
+    // Both wires on sending pins of this half: no serial port fits.
+    expect(chooseLink([{ a: 0, b: 1 }, { a: 12, b: 0 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('cannot run a serial connection') })
+    // The other chip takes any pins.
+    expect(chooseLink([{ a: 2, b: 7 }, { a: 3, b: 9 }], 'Nrf52840', 'Nrf52840')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 9, rx: 7 } })
+    // Spare wires are skipped until a pair fits.
+    expect(chooseLink([{ a: 2, b: 3 }, { a: 4, b: 9 }, { a: 5, b: 8 }], 'Rp2040', 'Rp2040')).toEqual({ ok: true, a: { tx: 4, rx: 5 }, b: { tx: 8, rx: 9 } })
+  })
+})
+
+describe('a keyboard that comes back', () => {
+  it('takes its old place instead of opening a second time', async () => {
+    const first = await open('macropad')
+    const other = await open('macropad')
+    addSession(first.session)
+    addSession(other.session)
+    expect(app.sessions.length).toBe(2)
+    app.currentId = first.session.id
+
+    // Unplugged, then plugged back in: same serial number, new connection.
+    first.session.closed = true
+    const demo = DEMOS.find((d) => d.id === 'macropad')!
+    const transport = new VirtualTransport(demo.name, demo.halves[0].wiring, first.session.info.uid[0])
+    const back = await during(openSession(transport, demo.halves[0]))
+    addSession(back)
+
+    expect(app.sessions.length).toBe(2)
+    expect(app.sessions[0].closed).toBe(false)
+    expect(app.sessions[0].id).toBe(first.session.id)
+    expect(app.currentId).toBe(first.session.id)
+    expect(app.sessions[1].id).toBe(other.session.id)
   })
 })
 
@@ -76,6 +212,49 @@ describe('virtual knob pad', () => {
     }
     expect(seen.length).toBeGreaterThan(0)
     expect(found?.slice().sort()).toEqual([10, 11])
+  })
+})
+
+describe('lights', () => {
+  it('shine on a virtual keyboard after the pin is saved and the board restarted', async () => {
+    const { session, transport } = await open('knobpad')
+    const hardware = {
+      matrix: { Direct: { pins: [2, 3, 4, 5], active_high: false } },
+      reserved_pins: [], debounce_ms: 5, encoders: [{ a: 10, b: 11, steps_per_detent: 4 }], split: 'None' as const,
+    }
+    await during(setHardware(session, hardware))
+    await during(setLayout(session, starterLayout(hardware)))
+    // The knob has a place in the picture, at the first of its two positions.
+    expect(knobPositions(session)).toEqual([4])
+    expect(session.layout[4].w).toBeGreaterThan(0)
+    expect(session.layout[5].w).toBe(0)
+
+    const red = { effect: 'Solid' as const, hue: 0, sat: 255, val: 255, speed: 0 }
+    const leds = ring(session.layout, 3)
+    leds[0] = { key: 1, ...placeAtKey(session.layout, 1) }
+    await during(setLighting(session, { pin: 16, order: 'Grb', limit: 255, leds, keys: red, underglow: { ...red, effect: 'Off' } }))
+    await during(save(session))
+    expect(needsRestart(session)).toBe(true)
+    await during(restart(session))
+    expect(needsRestart(session)).toBe(false)
+    expect(session.lighting.leds[0].key).toBe(1)
+    advanceVirtualTime(40)
+    // As sent down the chain: green first.
+    expect(session.lights).toEqual([[0, 255, 0], [0, 0, 0], [0, 0, 0]])
+
+    // A pin in use for keys is refused.
+    await expect(during(session.client.setLighting({ ...session.lighting, pin: 3 }))).rejects.toThrow('used twice')
+    transport.close()
+  })
+
+  it('converts colours the way the firmware does', () => {
+    expect(hsvToRgb(0, 255, 255)).toEqual([255, 0, 0])
+    expect(hsvToRgb(85, 255, 255)[1]).toBe(255)
+    expect(hsvToRgb(10, 0, 77)).toEqual([77, 77, 77])
+    const { hue, sat } = rgbToHsv(0, 0, 255)
+    const blue = hsvToRgb(hue, sat, 255)
+    expect(blue[2]).toBe(255)
+    expect(blue[0] + blue[1]).toBeLessThan(20)
   })
 })
 
@@ -105,5 +284,44 @@ describe('virtual split keyboard', () => {
     const lastKeys = left.typed.flatMap((e) => ('Keyboard' in e ? [e.Keyboard.keys] : [])).at(-1)
     expect(lastKeys).toEqual([0x05]) // "b": the second letter handed out
     expect([...left.pressed]).toEqual([20])
+  })
+})
+
+describe('lights and pictures', () => {
+  const layout = gridLayout({ Matrix: { rows: [1, 2], cols: [3, 4, 5], diodes: 'Col2Row' } })
+
+  it('underglow starts as a ring around the keyboard, per key as one light per key', () => {
+    const around = ring(layout, 10)
+    expect(around).toHaveLength(10)
+    expect(lightMode(around)).toBe('underglow')
+    // Every light sits on the edge: 3 keys wide, 2 high.
+    expect(around.every((led) => led.x === 0 || led.x === 255 || led.y === 0 || led.y === 170)).toBe(true)
+    expect(new Set(around.map((led) => `${led.x},${led.y}`)).size).toBe(10)
+
+    const under = underKeys(layout, 6, [5])
+    expect(lightMode(under)).toBe('keys')
+    expect(under.map((led) => led.key)).toEqual([0, 1, 2, 3, 4, 0])
+  })
+
+  it('layers have a colour and the whole keymap draws as one picture', () => {
+    expect(layerHex([], 0)).toBeUndefined()
+    expect(layerHex([], 1)).toBe('#f59e0b')
+    expect(layerHex([0, 4], 1)).toBe('#ef4444')
+    const source = {
+      name: 'Test <pad>',
+      layout,
+      layers: [layout.map((_, i) => ({ Basic: i === 0 ? { MomentaryLayer: 1 } : { Key: 0x04 + i } })), layout.map(() => 'Transparent' as const)],
+      layerColors: [0, 4],
+      knobs: [],
+      combos: [{ keys: [1, 2], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 }],
+    }
+    for (const mode of ['grid', 'stacked'] as const) {
+      const poster = keymapPoster(source, { mode, dark: false })
+      expect(poster.svg).toContain('Test &lt;pad&gt;')
+      expect(poster.svg).toContain('Layer 1')
+      expect(poster.svg).toContain('#ef4444')
+      expect(poster.svg).toContain('B + C')
+      expect(poster.width).toBeGreaterThan(100)
+    }
   })
 })

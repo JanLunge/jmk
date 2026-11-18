@@ -58,6 +58,36 @@ export interface HardwareConfig {
   split: SplitConfig
 }
 
+export type ColorOrder = 'Grb' | 'Rgb'
+export type Effect = 'Off' | 'Solid' | 'Breathing' | 'Rainbow' | 'Reactive'
+
+/** `key` is the position the light sits under, or 255 for underglow. x and y are 0..255 across the keyboard's longer side. */
+export interface Led {
+  key: number
+  x: number
+  y: number
+}
+export const UNDERGLOW = 255
+
+/** Colour as hue, saturation and brightness, each 0..255. */
+export interface LightZone {
+  effect: Effect
+  hue: number
+  sat: number
+  val: number
+  speed: number
+}
+
+export interface LightingConfig {
+  pin: Pin | null
+  order: ColorOrder
+  /** Every colour is scaled by this over 255. */
+  limit: number
+  leds: Led[]
+  keys: LightZone
+  underglow: LightZone
+}
+
 /** Hundredths of a key unit; rotation in tenths of a degree. w = 0 marks a position without a key. */
 export interface KeyGeometry {
   x: number
@@ -116,6 +146,15 @@ export type Request =
   | { WatchKeys: boolean }
   | { StartProbe: Pin[] }
   | 'StopProbe'
+  /** Hold a pin low for another board to find, or let go with null. */
+  | { HoldLow: Pin | null }
+  | 'GetLighting'
+  | { SetLighting: LightingConfig }
+  /** Light one light alone to find it, or null for the normal effects. */
+  | { IdentifyLed: number | null }
+  | 'GetLayerColors'
+  /** A colour number per layer (see layers.ts); 0 for none chosen. */
+  | { SetLayerColors: number[] }
 
 export type DeviceError =
   | 'Malformed'
@@ -141,8 +180,16 @@ export type Response =
   | { Meta: Meta }
   | { Layout: { total: number; keys: KeyGeometry[] } }
   | { SplitStatus: SplitStatus }
+  | { Lighting: LightingConfig }
+  | { LayerColors: number[] }
 
-export type DeviceEvent = { Key: { pos: number; pressed: boolean } } | { Probe: Contact[] }
+export type DeviceEvent =
+  | { Key: { pos: number; pressed: boolean } }
+  | { Probe: Contact[] }
+  /** The pressed key at `pos` took its action from `layer`. */
+  | { Resolved: { pos: number; layer: number } }
+  /** Bitmask of the layers now active. */
+  | { Layers: number }
 export type DeviceMessage = { Response: Response } | { Event: DeviceEvent }
 
 /** What a virtual keyboard's computer would receive. */
@@ -165,6 +212,7 @@ export const LIMITS = {
   holdTapProfiles: 4,
   encoders: 4,
   nameLength: 32,
+  leds: 120,
 }
 
 export function describeError(error: DeviceError): string {

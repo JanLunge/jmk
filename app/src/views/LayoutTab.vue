@@ -3,9 +3,9 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { attempt, toast } from '../lib/app'
 import { legend } from '../lib/keycodes'
-import { bounds, gridLayout, hasKey, normalised, parseKle, UNIT, type Bounds } from '../lib/layout'
+import { bounds, corners, gridLayout, hasKey, normalised, parseKle, UNIT, type Bounds } from '../lib/layout'
 import type { KeyGeometry } from '../lib/protocol'
-import { setLayout, type Session } from '../lib/session'
+import { knobPositions, knobSpot, setLayout, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 
@@ -25,6 +25,20 @@ function copy(layout: KeyGeometry[]): KeyGeometry[] {
 watch(() => props.session.layout, (layout) => !dragging && (draft.value = copy(layout)))
 
 const keys = computed(() => draft.value.map((key, pos) => ({ key, pos })).filter(({ key }) => hasKey(key)))
+/** Knobs have a place in the picture too; it lives at the first of their two positions. */
+const knobs = computed(() => knobPositions(props.session))
+const isKnob = (pos: number) => knobs.value.includes(pos)
+const missingKnobs = computed(() => knobs.value.filter((pos) => !hasKey(draft.value[pos])))
+const switches = computed(() => keys.value.filter(({ pos }) => !isKnob(pos)))
+
+function placeKnob(pos: number) {
+  while (draft.value.length <= pos + 1) draft.value.push({ x: 0, y: 0, w: 0, h: 0, r: 0 })
+  draft.value[pos] = knobSpot(draft.value)
+  selection.clear()
+  selection.add(pos)
+  view.value = fit()
+}
+
 const chosen = computed(() => [...selection].map((pos) => draft.value[pos]).filter(hasKey))
 
 // The view only changes when asked, so keys do not slide away mid-drag.
@@ -86,9 +100,55 @@ function up() {
   view.value = fit()
 }
 
+// --- Selecting with a rectangle, as in a file manager ---------------------------
+const marquee = ref<Bounds>()
+let band: { x: number; y: number; kept: number[] } | undefined
+
+function bandDown(event: PointerEvent) {
+  const start = toWorld(event)
+  // With Shift the rectangle adds to what is selected already.
+  band = { ...start, kept: event.shiftKey ? [...selection] : [] }
+  if (!event.shiftKey) selection.clear()
+  window.addEventListener('pointermove', bandMove)
+  window.addEventListener('pointerup', bandUp, { once: true })
+}
+
+function bandMove(event: PointerEvent) {
+  if (!band) return
+  const now = toWorld(event)
+  const box = { x: Math.min(band.x, now.x), y: Math.min(band.y, now.y), w: Math.abs(now.x - band.x), h: Math.abs(now.y - band.y) }
+  marquee.value = box
+  selection.clear()
+  band.kept.forEach((pos) => selection.add(pos))
+  // Touching a key is enough; it need not be inside completely.
+  for (const { key, pos } of keys.value) {
+    const points = corners(key)
+    const xs = points.map((p) => p[0])
+    const ys = points.map((p) => p[1])
+    const apart = Math.max(...xs) < box.x || Math.min(...xs) > box.x + box.w || Math.max(...ys) < box.y || Math.min(...ys) > box.y + box.h
+    if (!apart) selection.add(pos)
+  }
+}
+
+function bandUp() {
+  window.removeEventListener('pointermove', bandMove)
+  band = undefined
+  marquee.value = undefined
+}
+
 // --- Keyboard shortcuts ------------------------------------------------------
 function onKeydown(event: KeyboardEvent) {
-  if ((event.target as HTMLElement).closest('input, textarea, select') || !selection.size) return
+  if ((event.target as HTMLElement).closest('input, textarea, select')) return
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
+    keys.value.forEach(({ pos }) => selection.add(pos))
+    event.preventDefault()
+    return
+  }
+  if (!selection.size) return
+  if (event.key === 'Escape') {
+    selection.clear()
+    return
+  }
   const step = event.shiftKey ? 5 : SNAP
   const moves: Record<string, [number, number]> = {
     ArrowLeft: [-step, 0],
@@ -109,6 +169,7 @@ onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('pointermove', move)
+  window.removeEventListener('pointermove', bandMove)
 })
 
 // Pressing a key on the real keyboard selects it here.
@@ -133,11 +194,49 @@ function setField(field: 'x' | 'y' | 'w' | 'h' | 'r', event: Event) {
   const value = Number((event.target as HTMLInputElement).value)
   if (Number.isNaN(value)) return
   const scaled = field === 'r' ? Math.round(value * 10) : Math.round(value * UNIT)
-  chosen.value.forEach((key) => (key[field] = field === 'w' || field === 'h' ? Math.max(SNAP, scaled) : scaled))
+  if ((field === 'x' || field === 'y') && chosen.value.length > 1) {
+    // Several keys: move them together so the group's edge lands there.
+    const delta = scaled - Math.min(...chosen.value.map((key) => key[field]))
+    chosen.value.forEach((key) => (key[field] += delta))
+  } else if (field === 'w') {
+    reflowWidths(Math.max(SNAP, scaled))
+  } else {
+    chosen.value.forEach((key) => (key[field] = field === 'h' ? Math.max(SNAP, scaled) : scaled))
+  }
   view.value = fit()
 }
 
+/**
+ * Give every selected key this width and let its row follow:
+ * - a wider key first grows into the free space on its right; a key it
+ *   would run into is pushed, just far enough;
+ * - a key that sat directly against its left neighbour stays against it,
+ *   so it is pulled along when that neighbour gets narrower.
+ * Keys beyond a gap that is not used up stay where they are.
+ */
+function reflowWidths(width: number) {
+  const all = draft.value.filter(hasKey)
+  const before = new Map(all.map((key) => [key, { x: key.x, right: key.x + key.w }]))
+  const middle = (key: KeyGeometry) => key.y + key.h / 2
+  const sameRow = (a: KeyGeometry, b: KeyGeometry) => Math.abs(middle(a) - middle(b)) < Math.min(a.h, b.h) / 2
+  chosen.value.forEach((key) => (key.w = width))
+  // Left to right, so every key to the left already has its final place.
+  const ordered = [...all].sort((a, b) => before.get(a)!.x - before.get(b)!.x)
+  for (const [index, key] of ordered.entries()) {
+    const was = before.get(key)!
+    const lefts = ordered.slice(0, index).filter((left) => sameRow(left, key))
+    const attached = lefts.filter((left) => Math.abs(before.get(left)!.right - was.x) <= 1)
+    if (attached.length) key.x = Math.max(...attached.map((left) => left.x + left.w))
+    for (const left of lefts) {
+      // Keys that overlapped already may keep overlapping by as much.
+      const overlapBefore = Math.max(0, before.get(left)!.right - was.x)
+      key.x = Math.max(key.x, left.x + left.w - overlapBefore)
+    }
+  }
+}
+
 const shown = (field: 'x' | 'y' | 'w' | 'h' | 'r') => {
+  if ((field === 'x' || field === 'y') && chosen.value.length > 1) return Math.min(...chosen.value.map((key) => key[field])) / UNIT
   const values = new Set(chosen.value.map((key) => key[field]))
   if (values.size !== 1) return ''
   const [value] = values
@@ -154,16 +253,20 @@ function mirror() {
 }
 
 function resetGrid() {
-  const populated = draft.value.map((key, pos) => (hasKey(key) ? pos : -1)).filter((pos) => pos >= 0)
+  const populated = switches.value.map(({ pos }) => pos)
   const grid = gridLayout({ Direct: { pins: Array(populated.length).fill(0), active_high: false } })
   populated.forEach((pos, index) => (draft.value[pos] = grid[index]))
+  knobs.value.filter((pos) => hasKey(draft.value[pos])).forEach((pos) => {
+    draft.value[pos] = { x: 0, y: 0, w: 0, h: 0, r: 0 }
+    draft.value[pos] = knobSpot(draft.value)
+  })
   view.value = fit()
 }
 
 function importKle() {
   try {
     const shapes = parseKle(kleText.value)
-    const targets = keys.value
+    const targets = switches.value
     if (shapes.length !== targets.length) {
       throw new Error(`That layout has ${shapes.length} keys, but this keyboard has ${targets.length}.`)
     }
@@ -201,7 +304,7 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
         class="canvas"
         :viewBox="`${view.x} ${view.y} ${view.w} ${view.h}`"
         data-test="layout-canvas"
-        @pointerdown="selection.clear()"
+        @pointerdown="bandDown"
       >
         <defs>
           <pattern id="grid" :x="gridStart.x" :y="gridStart.y" :width="UNIT" :height="UNIT" patternUnits="userSpaceOnUse">
@@ -213,15 +316,16 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
           v-for="{ key, pos } in keys"
           :key="pos"
           class="key"
-          :class="{ selected: selection.has(pos), pressed: session.pressed.has(pos) }"
+          :class="{ selected: selection.has(pos), pressed: session.pressed.has(pos), knob: isKnob(pos) }"
           :transform="`rotate(${key.r / 10} ${key.x + key.w / 2} ${key.y + key.h / 2})`"
           :data-pos="pos"
           @pointerdown="down(pos, $event)"
         >
-          <rect :x="key.x + 3" :y="key.y + 3" :width="key.w - 6" :height="key.h - 6" rx="12" />
-          <text class="main" :x="key.x + key.w / 2" :y="key.y + key.h / 2 - 4">{{ label(pos) }}</text>
-          <text class="index" :x="key.x + key.w / 2" :y="key.y + key.h - 20">{{ pos }}</text>
+          <rect :x="key.x + 3" :y="key.y + 3" :width="key.w - 6" :height="key.h - 6" :rx="isKnob(pos) ? Math.min(key.w, key.h) / 2 : 12" />
+          <text class="main" :x="key.x + key.w / 2" :y="key.y + key.h / 2 - 4">{{ isKnob(pos) ? '⟲ ⟳' : label(pos) }}</text>
+          <text class="index" :x="key.x + key.w / 2" :y="key.y + key.h - 20">{{ isKnob(pos) ? 'knob' : pos }}</text>
         </g>
+        <rect v-if="marquee" class="marquee" :x="marquee.x" :y="marquee.y" :width="marquee.w" :height="marquee.h" rx="4" data-test="marquee" />
       </svg>
     </div>
 
@@ -229,7 +333,8 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
       <div>
         <h2>Layout</h2>
         <p class="muted small">
-          Drag keys to where they sit on your keyboard. Shift-click selects several. Arrow keys nudge, R rotates.
+          Drag keys to where they sit on your keyboard. Drag across the empty background to select several, then
+          move or resize them together; Shift adds to the selection. Arrow keys nudge, R rotates.
         </p>
       </div>
 
@@ -239,22 +344,30 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
       </label>
 
       <div v-if="selection.size" class="col">
-        <h3>{{ selection.size === 1 ? `Key ${[...selection][0]}` : `${selection.size} keys` }}</h3>
+        <h3>{{ selection.size === 1 ? (isKnob([...selection][0]) ? 'Knob' : `Key ${[...selection][0]}`) : `${selection.size} keys` }}</h3>
         <div class="fields">
           <label v-for="field in ['x', 'y', 'w', 'h', 'r'] as const" :key="field" class="field">
             {{ { x: 'Left', y: 'Top', w: 'Width', h: 'Height', r: 'Angle °' }[field] }}
-            <input class="input" type="number" :step="field === 'r' ? 5 : 0.25" :value="shown(field)" :data-test="'field-' + field" @change="setField(field, $event)" />
+            <input class="input" type="number" :step="field === 'r' ? 5 : 0.25" :value="shown(field)" :placeholder="selection.size > 1 ? 'mixed' : ''" :data-test="'field-' + field" @change="setField(field, $event)" />
           </label>
         </div>
         <div class="row">
           <button class="btn small" @click="rotate(-150)">⟲ 15°</button>
           <button class="btn small" @click="rotate(150)">⟳ 15°</button>
         </div>
+        <p class="muted small">
+          <template v-if="selection.size > 1">Left and Top move the group as one; Width, Height and Angle are set on every selected key. </template>
+          A wider key grows into the gap on its right and pushes its neighbours only when it would touch them. Keys
+          sitting directly against it follow when it gets narrower.
+        </p>
       </div>
       <p v-else class="muted small">Select a key to change its size or angle.</p>
 
       <div class="col tools">
         <h3>Tools</h3>
+        <button v-for="(pos, index) in missingKnobs" :key="pos" class="btn small" :data-test="'place-knob-' + index" @click="placeKnob(pos)">
+          Put {{ knobs.length > 1 ? `knob ${knobs.indexOf(pos) + 1}` : 'the knob' }} in the picture
+        </button>
         <button class="btn small" data-test="mirror" @click="mirror">Mirror {{ selection.size ? 'selection' : 'everything' }}</button>
         <button class="btn small" data-test="reset-grid" @click="resetGrid">Reset to a plain grid</button>
         <button class="btn small" data-test="import-kle" @click="importing = !importing">Import from keyboard-layout-editor</button>
@@ -311,6 +424,14 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
   cursor: grab;
 }
 
+.marquee {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+  pointer-events: none;
+}
+
 .key rect {
   fill: var(--cap-top);
   stroke: var(--cap);
@@ -329,7 +450,7 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
 }
 
 .key.pressed rect {
-  fill: var(--signal);
+  fill: var(--accent);
 }
 
 text {

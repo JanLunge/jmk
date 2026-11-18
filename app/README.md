@@ -1,6 +1,7 @@
-# JMK configurator
+# POG
 
-The app that sets up a JMK keyboard: controller and protected pins, key
+The configurator for keyboards running JMK firmware, and the second version
+of POG. It sets up a keyboard: controller and protected pins, key
 detection, layout, keymap, hold-tap, combos, macros, split halves, firmware
 updates and sharing through the registry.
 

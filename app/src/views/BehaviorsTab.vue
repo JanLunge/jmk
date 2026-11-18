@@ -7,7 +7,7 @@ import { attempt } from '../lib/app'
 import { describeAction, describeStep, KEY_GROUPS, legend, textToSteps } from '../lib/keycodes'
 import type { Action, Combo, HoldTapFlavor, HoldTapProfile, MacroStep } from '../lib/protocol'
 import { LIMITS } from '../lib/protocol'
-import { setCombos, setMacro, setProfile, type Session } from '../lib/session'
+import { knobPositions, setCombos, setMacro, setProfile, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 type Section = 'hold-tap' | 'combos' | 'macros'
@@ -118,7 +118,7 @@ async function typeText() {
           </div>
           <template v-if="combo">
             <p class="muted small">Click the keys that trigger it ({{ combo.keys.length }} of up to {{ LIMITS.comboKeys }}).</p>
-            <KeyboardView :layout="session.layout" :legend="baseLegend" :selected="combo.keys" :pressed="session.pressed" interactive data-test="combo-board" @down="toggleComboKey" />
+            <KeyboardView :layout="session.layout" :legend="baseLegend" :selected="combo.keys" :pressed="session.pressed" :knobs="knobPositions(session)" interactive data-test="combo-board" @down="toggleComboKey" />
             <p v-if="combo.keys.length < 2" class="note warn">Pick at least two keys, otherwise the combo replaces that key.</p>
             <label class="field">All keys must go down within {{ combo.timeout_ms }} ms
               <input type="range" min="20" max="150" step="5" :value="combo.timeout_ms" @change="patchCombo({ timeout_ms: Number(($event.target as HTMLInputElement).value) })" />
@@ -131,7 +131,7 @@ async function typeText() {
           </template>
         </div>
         <aside v-if="combo" class="card">
-          <ActionPicker :action="combo.action" :layer-count="session.layers.length" :current-layer="-1" :macros="session.macros.map((m) => m.length > 0)" @change="(action: Action) => patchCombo({ action })" />
+          <ActionPicker :action="combo.action" :layer-count="session.layers.length" :current-layer="-1" :macros="session.macros.map((m) => m.length > 0)" :layer-colors="session.layerColors" @change="(action: Action) => patchCombo({ action })" />
         </aside>
       </div>
 
@@ -264,8 +264,13 @@ input[type='range'] {
 
 .combos {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 18px;
+  grid-template-rows: minmax(0, 1fr) minmax(200px, 42%);
+  gap: 14px;
+}
+
+.combos :deep(svg.keyboard) {
+  max-width: min(100%, 520px) !important;
+  flex: none;
 }
 
 .combos > .col {
@@ -275,6 +280,7 @@ input[type='range'] {
 
 .combos aside {
   min-height: 0;
+  padding: 14px 16px;
 }
 
 .wrap {

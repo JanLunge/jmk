@@ -1,7 +1,7 @@
 use heapless::{String, Vec};
 use jmk_core::{Action, Combo, HoldTapFlavor, HoldTapProfile, Keymap, MacroStep};
 use jmk_proto::{
-    HardwareConfig, KeyGeometry, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
+    HardwareConfig, KeyGeometry, LightingConfig, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, MAX_MACRO_STEPS,
 };
 
@@ -19,6 +19,9 @@ pub struct Config {
     pub macro_steps: Vec<MacroStep, MAX_MACRO_STEPS>,
     /// Where each macro's steps end within `macro_steps`.
     pub macro_ends: [u16; MAX_MACROS],
+    pub lighting: LightingConfig,
+    /// A colour number per layer, kept for the configurator.
+    pub layer_colors: [u8; MAX_LAYERS],
 }
 
 impl Config {
@@ -45,12 +48,14 @@ impl Config {
             layout: Vec::new(),
             macro_steps: Vec::new(),
             macro_ends: [0; MAX_MACROS],
+            lighting: LightingConfig::NONE,
+            layer_colors: [0; MAX_LAYERS],
         }
     }
 
     /// Return to the unconfigured state without building a copy on the stack.
     pub fn reset(&mut self) {
-        let Config { hardware, layer_count, actions, profiles, combos, meta, layout, macro_steps, macro_ends } = self;
+        let Config { hardware, layer_count, actions, profiles, combos, meta, layout, macro_steps, macro_ends, lighting, layer_colors } = self;
         *hardware = Self::EMPTY_HARDWARE;
         *layer_count = 1;
         actions.iter_mut().flatten().for_each(|a| *a = Action::Transparent);
@@ -60,6 +65,8 @@ impl Config {
         layout.clear();
         macro_steps.clear();
         *macro_ends = [0; MAX_MACROS];
+        *lighting = LightingConfig::NONE;
+        *layer_colors = [0; MAX_LAYERS];
     }
 
     fn macro_range(&self, index: usize) -> Option<core::ops::Range<usize>> {

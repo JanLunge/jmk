@@ -2,6 +2,8 @@
 import { onMounted } from 'vue'
 import VirtualBoard from './components/VirtualBoard.vue'
 import { app, closeSession, current, reconnectUsb } from './lib/app'
+import { desktop } from './lib/desktop'
+import { watchBootDrives } from './lib/firmware'
 import { role } from './lib/session'
 import Editor from './views/Editor.vue'
 import Home from './views/Home.vue'
@@ -9,13 +11,23 @@ import Wizard from './views/Wizard.vue'
 
 onMounted(() => {
   reconnectUsb()
+  watchBootDrives()
   // A keyboard plugged in later (or back from a firmware update) opens by itself.
   if ('hid' in navigator) navigator.hid.addEventListener('connect', reconnectUsb)
 })
 </script>
 
 <template>
-  <div class="shell">
+  <div class="shell" :class="{ desktop }">
+    <!-- The desktop window has no system title bar; this is it. -->
+    <header v-if="desktop" class="titlebar" :class="'on-' + desktop.platform" data-test="titlebar">
+      <span class="title">
+        <strong>POG</strong><span class="version" title="The second POG, built on JMK firmware">v2</span>
+        <template v-if="current"> · {{ current.meta.name || current.transport.label }}</template>
+        <span v-if="current?.unsaved" class="unsaved" title="Unsaved changes" />
+      </span>
+    </header>
+    <div class="frame">
     <nav class="rail">
       <button class="logo" :class="{ active: !current }" title="Home" @click="app.currentId = undefined">
         <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
@@ -44,9 +56,16 @@ onMounted(() => {
       <Transition name="rise" mode="out-in">
         <Home v-if="!current" key="home" />
         <div v-else-if="current.closed" :key="current.id + 'gone'" class="gone col">
-          <h2>This keyboard was unplugged</h2>
-          <p class="muted">Plug it back in and connect again.</p>
-          <button class="btn" @click="closeSession(current)">Close</button>
+          <template v-if="current.restarting">
+            <h2>The keyboard is restarting…</h2>
+            <p class="muted">It comes back here by itself in a few seconds. Leave it plugged in.</p>
+            <button class="btn ghost" @click="closeSession(current)">Close</button>
+          </template>
+          <template v-else>
+            <h2>This keyboard was unplugged</h2>
+            <p class="muted">Plug it back in and it opens here again by itself.</p>
+            <button class="btn" @click="closeSession(current)">Close</button>
+          </template>
         </div>
         <Wizard v-else-if="current.setup" :key="current.id + 'wizard'" :session="current" />
         <Editor v-else :key="current.id + role(current)" :session="current" />
@@ -55,6 +74,7 @@ onMounted(() => {
         <VirtualBoard v-if="current?.demo && !current.closed" :key="current.id" :session="current" />
       </Transition>
     </main>
+    </div>
 
     <TransitionGroup name="pop" tag="div" class="toasts">
       <div v-for="toast in app.toasts" :key="toast.id" class="toast" :class="toast.kind">{{ toast.text }}</div>
@@ -65,7 +85,72 @@ onMounted(() => {
 <style scoped>
 .shell {
   display: flex;
+  flex-direction: column;
   height: 100%;
+}
+
+.frame {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* Keep the height in step with TITLEBAR_HEIGHT in electron/main.cjs. */
+.titlebar {
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Room for the window buttons: left on macOS, right elsewhere. */
+  padding: 0 140px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.titlebar.on-darwin {
+  padding: 0 84px;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.87rem;
+  color: var(--muted);
+}
+
+.title strong {
+  color: var(--text);
+  letter-spacing: 0.04em;
+}
+
+.version {
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.unsaved {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.desktop .toasts {
+  top: 52px;
 }
 
 .rail {

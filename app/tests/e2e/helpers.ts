@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test'
 
-const virtualKeys = (page: Page) => page.locator('[data-test=virtual-board] .key')
+export const virtualKeys = (page: Page) => page.locator('[data-test=virtual-board] .key')
 
 /** Hold a key of the virtual keyboard in front for a moment. */
 export async function tap(page: Page, key: number, holdMs = 110) {
@@ -25,6 +25,15 @@ export async function openDemo(page: Page, id: string) {
   await expect(page.locator('[data-test=next]')).toBeVisible()
 }
 
+/** The page asking whether the keyboard is one piece or two halves. */
+export async function openShape(page: Page) {
+  const single = page.locator('[data-test=shape-single]')
+  const link = page.locator('[data-test=open-shape]')
+  await expect(single.or(link)).toBeVisible()
+  if (await link.isVisible()) await link.click()
+  await expect(single).toBeVisible()
+}
+
 interface SetupOptions {
   shape?: 'single' | 'central' | 'peripheral'
   knob?: boolean
@@ -34,10 +43,12 @@ interface SetupOptions {
 
 /** Click through the setup wizard for the keyboard in front, pressing every key. */
 export async function runWizard(page: Page, options: SetupOptions = {}) {
-  await page.click('[data-test=next]') // how it works
-  await page.click('[data-test=next]') // controller
-  if (options.shape) await page.check(`[data-test=shape-${options.shape}]`)
-  await page.click('[data-test=next]') // shape
+  // The setup starts at pressing keys; a split starts at its cable.
+  if (options.shape) {
+    await openShape(page)
+    await page.check(`[data-test=shape-${options.shape}]`)
+    await page.click('[data-test=next]')
+  }
   await expect(page.locator('[data-test=found]')).toBeVisible()
   await page.waitForTimeout(750) // stuck-contact check at the start of probing
   const count = await virtualKeys(page).count()
@@ -52,7 +63,6 @@ export async function runWizard(page: Page, options: SetupOptions = {}) {
     await expect(page.locator('.knobs .chip')).toContainText('knob 1')
   }
   await page.click('[data-test=next]')
-  await page.click('[data-test=apply]')
   await page.click(`[data-test=${options.finish ?? 'finish'}]`)
 }
 

@@ -56,6 +56,14 @@ impl Pins for RpPins {
         crate::link::supported(link)
     }
 
+    fn supports_lights(&self, pin: Pin) -> bool {
+        (pin as usize) < GPIO_COUNT
+    }
+
+    fn show_lights(&mut self, colors: &[[u8; 3]]) {
+        crate::lights::show(colors);
+    }
+
     fn settle(&mut self) {
         // Internal pull-ups are weak (50 to 80 kOhm), so a released line
         // needs tens of microseconds to rise against the wiring capacitance.

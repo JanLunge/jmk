@@ -7,6 +7,7 @@
 
 mod config;
 mod device;
+mod lights;
 mod link;
 mod pins;
 mod probe;

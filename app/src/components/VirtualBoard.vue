@@ -3,6 +3,8 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { app, partnerOf } from '../lib/app'
 import { charFor, keyLabel, modsLabel } from '../lib/keycodes'
+import { fromWire, shown } from '../lib/lighting'
+import { pinLabel } from '../lib/boards'
 import type { Session } from '../lib/session'
 import { VirtualTransport } from '../lib/transport'
 import KeyboardView from './KeyboardView.vue'
@@ -32,6 +34,15 @@ function toggleCable() {
   cable.value = !cable.value
   transport.value.setCable(cable.value)
 }
+
+// The demo's light chain: lit once the app has been told its pin and the board restarted.
+const strip = computed(() => {
+  const lights = props.session.demo!.lights
+  if (!lights) return undefined
+  const { pin, order } = props.session.lighting
+  const live = pin === lights.pin && props.session.bootLightPin === pin ? props.session.lights : []
+  return [...Array(lights.count).keys()].map((index) => (live[index] ? shown(fromWire(order, live[index])) : '#000000'))
+})
 
 onBeforeUnmount(() => held.value.forEach((key) => transport.value.setKey(key, false)))
 
@@ -82,6 +93,10 @@ const typed = computed(() => {
           <span class="muted">knob {{ index + 1 }}</span>
           <button class="btn small" :data-test="'knob-cw-' + index" @click="transport.turnEncoder(index, true)">⟳</button>
         </div>
+        <div v-if="strip" class="row strip" data-test="strip">
+          <span v-for="(color, index) in strip" :key="index" class="bulb" :style="{ background: color, boxShadow: color === '#000000' ? 'none' : `0 0 10px ${color}` }" :data-color="color" />
+          <span class="muted">lights on {{ pinLabel(undefined, session.demo!.lights!.pin) }}</span>
+        </div>
         <div v-if="partner" class="row">
           <button class="btn small" data-test="cable" @click="toggleCable">
             {{ cable ? 'Unplug cable' : 'Plug cable in' }}
@@ -100,6 +115,17 @@ const typed = computed(() => {
 </template>
 
 <style scoped>
+.strip {
+  gap: 6px;
+}
+
+.bulb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+}
+
 .dock {
   flex: none;
   border-top: 1px solid var(--line);

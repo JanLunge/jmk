@@ -11,7 +11,7 @@ mod engine;
 pub mod keycode;
 
 pub use action::{Action, Basic, Combo, HoldTapFlavor, HoldTapProfile, MacroStep, MAX_COMBO_KEYS};
-pub use engine::{Engine, KeyboardReport, Keymap, Output, MAX_REPORT_KEYS};
+pub use engine::{Engine, KeyboardReport, Keymap, Output, Resolved, MAX_REPORT_KEYS, MAX_RESOLVED};
 
 /// Milliseconds since boot.
 pub type Millis = u64;

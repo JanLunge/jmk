@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import BoardDiagram, { type PinRole } from '../components/BoardDiagram.vue'
 import { attempt, toast } from '../lib/app'
-import { findBoard, pinLabel } from '../lib/boards'
+import { planAddedKey } from '../lib/addkey'
+import { findBoard, pinLabel, wirablePins } from '../lib/boards'
+import { KeyCollector } from '../lib/collector'
+import { describeAction } from '../lib/keycodes'
 import { desktop } from '../lib/desktop'
-import type { HardwareConfig, Pin } from '../lib/protocol'
+import type { Contact, HardwareConfig, Pin } from '../lib/protocol'
 import { registryMcu } from '../lib/registry'
-import { refresh, role, setHardware, type Session } from '../lib/session'
+import { addKey, refresh, role, setHardware, type Session } from '../lib/session'
 import { VirtualTransport } from '../lib/transport'
 
 const props = defineProps<{ session: Session }>()
@@ -48,6 +51,76 @@ function patchEncoder(index: number, reverse: boolean, steps?: number) {
   return change({ encoders })
 }
 
+// --- A key that was missed -----------------------------------------------------
+const adding = ref<'idle' | 'listening' | 'applying'>('idle')
+const addProblem = ref('')
+let collector: KeyCollector | undefined
+
+/** Pins a key could be wired to: everything free for wiring, including the pins already in use for keys. */
+const probePins = computed(() => {
+  const { reserved_pins, encoders, split } = hardware.value
+  const link = split === 'None' ? undefined : 'Central' in split ? split.Central : split.Peripheral
+  const taken = new Set<Pin>([...reserved_pins, ...encoders.flatMap((e) => [e.a, e.b])])
+  if (link && link !== 'Ble') [link.Uart.tx, link.Uart.rx].forEach((pin) => taken.add(pin))
+  const light = props.session.lighting.pin
+  if (light !== null) taken.add(light)
+  return wirablePins(board.value, info.usable_pins).filter((pin) => !taken.has(pin))
+})
+
+async function startAdding() {
+  addProblem.value = ''
+  collector = new KeyCollector()
+  props.session.client.onProbe = onAddProbe
+  const started = await attempt(async () => {
+    await props.session.client.startProbe(probePins.value)
+    return true
+  })
+  adding.value = started ? 'listening' : 'idle'
+}
+
+async function stopAdding() {
+  props.session.client.onProbe = () => {}
+  collector = undefined
+  if (adding.value === 'idle') return
+  adding.value = 'idle'
+  await props.session.client.stopProbe().catch(() => {})
+}
+
+async function onAddProbe(contacts: Contact[]) {
+  if (adding.value !== 'listening' || !collector) return
+  collector.update(contacts)
+  if (collector.confused) {
+    collector.confused = false
+    addProblem.value = 'That did not look like one key. Press only the missing key.'
+    return
+  }
+  const key = collector.keys[0]
+  if (!key) return
+  collector.keys.splice(0)
+  const plan = planAddedKey(hardware.value, key)
+  if (!plan.ok) {
+    addProblem.value = plan.problem
+    return
+  }
+  const layout = props.session.layout
+  if (!plan.rewired && layout[plan.pos] && layout[plan.pos].w > 0) {
+    addProblem.value = 'That key is already part of the keyboard. Press the one that is missing.'
+    return
+  }
+  adding.value = 'applying'
+  props.session.client.onProbe = () => {}
+  // Changing the wiring ends the detection by itself; otherwise end it here.
+  const pos = await attempt(async () => {
+    await props.session.client.stopProbe()
+    return addKey(props.session, plan)
+  })
+  adding.value = 'idle'
+  collector = undefined
+  if (pos === undefined) return
+  toast(`Key added. It types ${describeAction(props.session.layers[0][pos])}; move it into place under Layout.`)
+}
+onBeforeUnmount(stopAdding)
+
 // --- Setup again / reset -------------------------------------------------------
 const confirmSetup = ref(false)
 const confirmReset = ref(false)
@@ -69,6 +142,7 @@ const isVirtual = props.session.transport.kind === 'virtual'
 
 async function updateFirmware() {
   await attempt(async () => {
+    props.session.restarting = !isVirtual && !!desktop
     await props.session.client.reboot(true)
     flashing.value = 'bootloader'
     if (props.session.transport instanceof VirtualTransport) {
@@ -101,13 +175,36 @@ async function updateFirmware() {
         </p>
         <p v-if="role(session) !== 'single'" class="muted">
           Split keyboard, this is the {{ role(session) === 'central' ? 'half that plugs into the computer' : 'other half' }}.
-          A changed cable setting takes effect after saving and replugging.
+          A changed cable setting takes effect when you save; the keyboard restarts by itself.
         </p>
         <label class="field">
           Ignore switch chatter for {{ hardware.debounce_ms }} ms after each change
           <input type="range" min="1" max="30" :value="hardware.debounce_ms" data-test="debounce" @change="change({ debounce_ms: Number(($event.target as HTMLInputElement).value) })" />
         </label>
         <p class="muted small">Raise this if one press sometimes types a letter twice.</p>
+      </div>
+
+      <div v-if="hardware.matrix !== 'None'" class="card col">
+        <h2>A key is missing</h2>
+        <p v-if="role(session) === 'peripheral'" class="muted">
+          On this half, find the keys again instead: the main half numbers this half's keys, and adding one here
+          would mix them up.
+        </p>
+        <template v-else>
+          <p class="muted">
+            For a key that was skipped during setup or soldered in later. The keymap and layout you have stay as
+            they are.
+          </p>
+          <div v-if="adding === 'idle'" class="row wrap">
+            <button class="btn" data-test="add-key" @click="startAdding">Add a missed key</button>
+          </div>
+          <div v-else class="note col" data-test="add-key-listening">
+            <strong>{{ adding === 'applying' ? 'Adding the key…' : 'Press the missing key once.' }}</strong>
+            <span class="muted small">The keyboard does not type while it listens for the new key.</span>
+            <div class="row"><button class="btn small ghost" data-test="add-key-cancel" :disabled="adding === 'applying'" @click="stopAdding">Cancel</button></div>
+          </div>
+          <p v-if="addProblem" class="note" data-test="add-key-problem">{{ addProblem }}</p>
+        </template>
       </div>
 
       <div v-if="hardware.encoders.length" class="card col">

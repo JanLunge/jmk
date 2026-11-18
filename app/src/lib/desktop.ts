@@ -1,8 +1,24 @@
 // What the desktop (Electron) shell adds to the page; see electron/preload.cjs.
 
+/** A board in update mode: it shows up as a drive that takes a firmware file. */
+export interface BootDrive {
+  path: string
+  /** What the board calls itself, e.g. "Raspberry Pi RP2". */
+  model: string
+  /** The chip, where the drive's description tells: 'rp2040', 'nrf52840' or ''. */
+  mcu: string
+}
+
 export interface Desktop {
-  /** Copy the bundled firmware for `mcu` onto the bootloader drive. Resolves to the drive's path. */
-  flash(mcu: string): Promise<string>
+  /** Node's name for the operating system: 'darwin', 'win32', 'linux'. */
+  platform: string
+  /**
+   * Copy the bundled firmware for `mcu` onto a bootloader drive, waiting a
+   * while for one to appear. `onto` picks one drive. Resolves to its path.
+   */
+  flash(mcu: string, onto?: string): Promise<string>
+  /** Boards attached in update mode right now. */
+  drives(): Promise<BootDrive[]>
 }
 
 export const desktop: Desktop | undefined = (window as unknown as { jmkDesktop?: Desktop }).jmkDesktop

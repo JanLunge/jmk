@@ -113,6 +113,10 @@ fn momentary_layer_and_transparent() {
     rig.press(1, 1);
     rig.press(2, 2);
     assert_eq!(rig.out(), ["00:1e", "00:1e,05"]);
+    // Each press names the layer its action came from; see-through falls to the base.
+    let used: Vec<(u16, u8)> = rig.engine.take_resolved().iter().map(|r| (r.pos, r.layer)).collect();
+    assert_eq!(used, [(0, 0), (1, 1), (2, 0)]);
+    assert!(rig.engine.take_resolved().is_empty());
     // Releasing the layer key first must still release the layer-1 key.
     rig.release(0, 3);
     rig.release(1, 4);
@@ -236,9 +240,13 @@ fn layer_tap_applies_layer_to_queued_keys() {
     let mut rig = Rig::new(vec![vec![layer_tap, key(kc::A)], vec![Action::Transparent, key(kc::N1)]]);
     rig.press(0, 0);
     rig.press(1, 50);
+    // Nothing is acted on while the layer-tap is undecided.
+    assert!(rig.engine.take_resolved().is_empty());
     rig.release(1, 100);
     rig.release(0, 150);
     assert_eq!(rig.out(), ["00:1e", "00:"]);
+    let used: Vec<(u16, u8)> = rig.engine.take_resolved().iter().map(|r| (r.pos, r.layer)).collect();
+    assert_eq!(used, [(0, 0), (1, 1)]);
 }
 
 #[test]

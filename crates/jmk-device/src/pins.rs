@@ -7,8 +7,9 @@ pub enum Pull {
     Down,
 }
 
-/// Run-time access to GPIOs by number. The only way this crate ever drives a
-/// pin is low, and only pins the hardware configuration names.
+/// Run-time access to GPIOs by number, and to the light chain. The only way
+/// this crate ever drives a pin is low, and only pins the hardware
+/// configuration names; the light chain's data pin belongs to the port.
 pub trait Pins {
     /// Bit n is set if GPIO n may be used for keyboard wiring.
     fn usable(&self) -> u64;
@@ -21,6 +22,14 @@ pub trait Pins {
     fn supports_link(&self, _link: &LinkConfig) -> bool {
         false
     }
+    /// Whether a light chain can be run from this pin.
+    fn supports_lights(&self, _pin: Pin) -> bool {
+        false
+    }
+    /// Send colours down the light chain, three bytes per light in the
+    /// chain's own colour order. The port sets the chain up at start from
+    /// the saved configuration and ignores this if there is none.
+    fn show_lights(&mut self, _colors: &[[u8; 3]]) {}
     /// Wait for levels to settle after a pin changed (a few microseconds).
     fn settle(&mut self);
 }

@@ -24,7 +24,7 @@ test('publish a keyboard, then set another one up from the registry', async ({ p
   // instead of running the wizard.
   await page.click('nav .logo')
   await page.click('[data-test=demo-macropad]')
-  await page.click('[data-test=next]')
+  await expect(page.locator('[data-test=next]')).toBeVisible()
   await page.evaluate(() => {
     const app = (window as any).jmk.app
     app.sessions[1].setup = false // leave the wizard: this board will be set up from a file

@@ -12,6 +12,8 @@ export interface DemoHalf {
   keys: KeyGeometry[]
   /** Pins of the serial cable to the other half, if this is a split. */
   link?: { tx: Pin; rx: Pin }
+  /** A chain of RGB lights soldered to a pin. */
+  lights?: { pin: Pin; count: number }
 }
 
 export interface Demo {
@@ -64,10 +66,11 @@ export const DEMOS: Demo[] = [
   {
     id: 'knobpad',
     name: 'Pad with a knob',
-    blurb: 'Four keys wired straight to pins, plus a rotary encoder.',
+    blurb: 'Four keys wired straight to pins, a rotary encoder and six RGB lights.',
     halves: [{
       label: 'Knob pad',
       wiring: { switches: [2, 3, 4, 5].map((pin) => ({ Ground: pin })), encoders: [[10, 11]] },
+      lights: { pin: 16, count: 6 },
       keys: [unit(0, 1), unit(1, 1), unit(2, 1), unit(3, 1)],
     }],
   },
@@ -83,7 +86,7 @@ export const DEMOS: Demo[] = [
   {
     id: 'split',
     name: 'Split keyboard',
-    blurb: 'Two halves of seventeen keys joined by a cable. Each half has its own controller.',
+    blurb: 'Two halves of seventeen keys joined by a cable. Each half has its own controller. Split support is experimental.',
     halves: [splitHalf('Left half', false), splitHalf('Right half', true)],
   },
 ]

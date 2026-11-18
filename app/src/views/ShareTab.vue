@@ -62,16 +62,24 @@ const results = ref<KeyboardSummary[]>()
 const searching = ref(false)
 const offline = ref<string>()
 
+let searches = 0
 async function search() {
+  // Only the newest search counts: an answer for an address that has been
+  // changed since must not overwrite the one for the new address.
+  const mine = ++searches
   searching.value = true
   offline.value = undefined
+  let found: KeyboardSummary[] | undefined
+  let problem: string | undefined
   try {
     setRegistryUrl(url.value)
-    results.value = await searchKeyboards(query.value, registryMcu(props.session.info.mcu))
+    found = await searchKeyboards(query.value, registryMcu(props.session.info.mcu))
   } catch (error) {
-    results.value = undefined
-    offline.value = error instanceof Error ? error.message : String(error)
+    problem = error instanceof Error ? error.message : String(error)
   }
+  if (mine !== searches) return
+  results.value = found
+  offline.value = problem
   searching.value = false
 }
 onMounted(search)

@@ -2,12 +2,13 @@ use embedded_storage::nor_flash::NorFlash;
 use heapless::Vec;
 use jmk_core::{Engine, Millis, Output};
 use jmk_proto::{
-    Contact, Error, Event, HardwareConfig, Info, Mcu, Pin, Request, Response, SplitConfig, SplitStatus,
+    Contact, Error, Event, HardwareConfig, Info, LightingConfig, Mcu, Pin, Request, Response, SplitConfig, SplitStatus,
     ACTIONS_PER_CHUNK, LAYOUT_KEYS_PER_CHUNK, MACRO_STEPS_PER_CHUNK, MAX_CONTACTS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, PROTOCOL_VERSION,
 };
 
 use crate::config::{Config, MacroError};
+use crate::lights::Lights;
 use crate::link::{Link, Remote, Split};
 use crate::pins::{is_usable, Pins, Pull};
 use crate::probe::Prober;
@@ -26,6 +27,8 @@ enum Mode {
     Typing,
     /// Wiring detection on these pins; normal scanning is off.
     Probing(Prober),
+    /// One pin held low for another board to find; normal scanning is off.
+    Holding(Pin),
 }
 
 /// One keyboard (or one half of a split).
@@ -36,10 +39,13 @@ pub struct Device<'a, P, F> {
     config: &'a mut Config,
     engine: Engine,
     scanner: Scanner,
+    lights: Lights,
     split: Split,
     now: Millis,
     mode: Mode,
     watch_keys: bool,
+    /// The active layers the configurator was last told about.
+    reported_layers: Option<u32>,
     contacts: Vec<Contact, MAX_CONTACTS>,
     /// Set once by a reboot request: true for the bootloader.
     reboot: Option<bool>,
@@ -50,7 +56,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     pub fn new(board: Board, mut pins: P, mut storage: Storage<F>, config: &'a mut Config) -> Self {
         storage.load(config);
         // A save from another chip may name pins this one does not have.
-        if validate(&config.hardware, &pins).is_err() {
+        if validate(&config.hardware, &config.lighting, &pins).is_err() {
             config.reset();
         }
         let mut scanner = Scanner::new();
@@ -62,10 +68,12 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             config,
             engine: Engine::new(),
             scanner,
+            lights: Lights::new(),
             split: Split::new(),
             now: 0,
             mode: Mode::Typing,
             watch_keys: false,
+            reported_layers: None,
             contacts: Vec::new(),
             reboot: None,
         }
@@ -76,13 +84,20 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         &self.config.hardware
     }
 
+    /// The lighting in force, for the port to set up the light chain.
+    pub fn lighting(&self) -> &LightingConfig {
+        &self.config.lighting
+    }
+
     /// Call every millisecond. Each call does a bounded amount of work.
     /// `link` leads to the other half; pass `&mut ()` if there is none.
     pub fn poll(&mut self, now: Millis, out: &mut impl Output, link: &mut impl Link, mut event: impl FnMut(Event)) {
         self.now = now;
-        let Self { scanner, config, engine, pins, watch_keys, split, .. } = self;
+        let Self { scanner, config, engine, pins, watch_keys, reported_layers, split, lights, .. } = self;
+        lights.tick(&config.lighting, now, pins);
         let prober = match &mut self.mode {
             Mode::Probing(prober) => prober,
+            Mode::Holding(_) => return,
             Mode::Typing => {
                 let config: &Config = config;
                 let hardware = &config.hardware;
@@ -94,6 +109,9 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 });
 
                 let mut key = |pos: u16, pressed: bool| {
+                    if pressed {
+                        lights.key_pressed(&config.lighting, pos);
+                    }
                     engine.key_event(config, out, pos, pressed, now);
                     if *watch_keys {
                         event(Event::Key { pos, pressed });
@@ -104,6 +122,9 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                     for change in changes {
                         match change {
                             Change::Key { pos, pressed } => {
+                                if pressed {
+                                    lights.key_pressed(&config.lighting, pos);
+                                }
                                 split.set_local(pos, pressed);
                                 if *watch_keys {
                                     event(Event::Key { pos, pressed });
@@ -141,6 +162,19 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 if engine.next_deadline(config).is_some_and(|deadline| now >= deadline) {
                     engine.tick(config, out, now);
                 }
+                // Tell a watching configurator which layer each press used
+                // and which layers are on, so it can show what a key did.
+                let resolved = engine.take_resolved();
+                if *watch_keys {
+                    for key in resolved {
+                        event(Event::Resolved { pos: key.pos, layer: key.layer });
+                    }
+                    let layers = engine.active_layers();
+                    if *reported_layers != Some(layers) {
+                        *reported_layers = Some(layers);
+                        event(Event::Layers(layers));
+                    }
+                }
                 return;
             }
         };
@@ -177,7 +211,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             })),
             Request::GetHardware => Ok(Response::Hardware(self.config.hardware.clone())),
             Request::SetHardware(hardware) => {
-                validate(&hardware, &self.pins)?;
+                validate(&hardware, &self.config.lighting, &self.pins)?;
                 self.stop_probe();
                 self.release_matrix_pins();
                 self.config.hardware = hardware;
@@ -268,6 +302,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 Ok(Response::Ok)
             }
             Request::FactoryReset => {
+                self.lights.identify(None);
                 self.stop_probe();
                 self.release_matrix_pins();
                 self.config.reset();
@@ -277,10 +312,12 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             }
             Request::WatchKeys(on) => {
                 self.watch_keys = on;
+                // Report the layers afresh to whoever starts watching.
+                self.reported_layers = None;
                 Ok(Response::Ok)
             }
             Request::StartProbe(candidates) => {
-                check_pins(candidates.iter().copied(), &self.config.hardware.reserved_pins, &self.pins)?;
+                self.check_free(candidates.iter().copied())?;
                 self.stop_probe();
                 self.release_matrix_pins();
                 self.engine.reset(out);
@@ -297,14 +334,64 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 self.reboot = Some(bootloader);
                 Ok(Response::Ok)
             }
+            Request::HoldLow(None) => {
+                if matches!(self.mode, Mode::Holding(_)) {
+                    self.stop_probe();
+                    self.restart_scanning(out);
+                }
+                Ok(Response::Ok)
+            }
+            Request::HoldLow(Some(pin)) => {
+                self.check_free([pin].into_iter())?;
+                self.stop_probe();
+                self.release_matrix_pins();
+                self.engine.reset(out);
+                self.pins.drive_low(pin);
+                self.mode = Mode::Holding(pin);
+                Ok(Response::Ok)
+            }
+            Request::GetLighting => Ok(Response::Lighting(self.config.lighting.clone())),
+            Request::SetLighting(lighting) => {
+                validate(&self.config.hardware, &lighting, &self.pins)?;
+                self.config.lighting = lighting;
+                self.lights.changed();
+                Ok(Response::Ok)
+            }
+            Request::IdentifyLed(led) => {
+                if led.is_some_and(|led| led as usize >= self.config.lighting.leds.len()) {
+                    return Err(Error::OutOfRange);
+                }
+                self.lights.identify(led);
+                Ok(Response::Ok)
+            }
+            Request::GetLayerColors => Ok(Response::LayerColors(self.config.layer_colors.iter().copied().collect())),
+            Request::SetLayerColors(colors) => {
+                // Layers not mentioned go back to having no colour.
+                self.config.layer_colors = [0; MAX_LAYERS];
+                self.config.layer_colors[..colors.len()].copy_from_slice(&colors);
+                Ok(Response::Ok)
+            }
         }
     }
 
+    /// Pins the user wants to probe must be free: not reserved and not the
+    /// light chain's.
+    fn check_free(&self, wanted: impl Iterator<Item = Pin> + Clone) -> Result<(), Error> {
+        if let Some(pin) = self.config.lighting.pin.filter(|pin| wanted.clone().any(|w| w == *pin)) {
+            return Err(Error::ReservedPin(pin));
+        }
+        check_pins(wanted, &self.config.hardware.reserved_pins, &self.pins)
+    }
+
     fn stop_probe(&mut self) {
-        if let Mode::Probing(prober) = core::mem::replace(&mut self.mode, Mode::Typing) {
-            for pin in prober.candidates() {
-                self.pins.input(*pin, Pull::None);
+        match core::mem::replace(&mut self.mode, Mode::Typing) {
+            Mode::Probing(prober) => {
+                for pin in prober.candidates() {
+                    self.pins.input(*pin, Pull::None);
+                }
             }
+            Mode::Holding(pin) => self.pins.input(pin, Pull::None),
+            Mode::Typing => {}
         }
     }
 
@@ -323,14 +410,17 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     }
 }
 
-fn validate(hardware: &HardwareConfig, pins: &impl Pins) -> Result<(), Error> {
+fn validate(hardware: &HardwareConfig, lighting: &LightingConfig, pins: &impl Pins) -> Result<(), Error> {
     if hardware.local_positions() > MAX_KEYS {
         return Err(Error::TooManyKeys);
     }
     if hardware.split.link().is_some_and(|link| !pins.supports_link(&link)) {
         return Err(Error::Unsupported);
     }
-    check_pins(hardware.used_pins(), &hardware.reserved_pins, pins)
+    if lighting.pin.is_some_and(|pin| is_usable(pins, pin) && !pins.supports_lights(pin)) {
+        return Err(Error::Unsupported);
+    }
+    check_pins(hardware.used_pins().chain(lighting.pin), &hardware.reserved_pins, pins)
 }
 
 /// Every pin must exist, be free for wiring, not be reserved and appear once.

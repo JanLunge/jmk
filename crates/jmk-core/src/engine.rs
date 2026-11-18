@@ -10,6 +10,8 @@ pub const MAX_REPORT_KEYS: usize = 16;
 const MAX_HELD: usize = 32;
 const QUEUE_LEN: usize = 16;
 const MAX_MACRO_KEYS: usize = 8;
+/// Presses remembered for [`Engine::take_resolved`] between two calls.
+pub const MAX_RESOLVED: usize = 8;
 /// Time between macro steps, so every report reaches the host in order.
 const MACRO_STEP_MS: Millis = 2;
 
@@ -65,6 +67,13 @@ struct Held {
     action: Basic,
 }
 
+/// A key press and the layer its action was taken from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Resolved {
+    pub pos: u16,
+    pub layer: u8,
+}
+
 /// A macro being played back.
 #[derive(Clone, Copy)]
 struct Playback {
@@ -94,6 +103,8 @@ pub struct Engine {
     playback: Option<Playback>,
     /// Keys currently held down by the macro.
     macro_keys: Vec<u8, MAX_MACRO_KEYS>,
+    /// Presses acted on since the last [`Engine::take_resolved`].
+    resolved: Vec<Resolved, MAX_RESOLVED>,
 }
 
 impl Engine {
@@ -119,7 +130,7 @@ impl Engine {
 
     /// The earliest time at which [`Engine::tick`] has work to do.
     pub fn next_deadline(&self, keymap: &impl Keymap) -> Option<Millis> {
-        let hold_tap = self.queue.first().and_then(|head| match self.resolve(keymap, head.src) {
+        let hold_tap = self.queue.first().and_then(|head| match self.resolve(keymap, head.src).0 {
             Action::HoldTap { profile, .. } if head.pressed => {
                 Some(head.time + keymap.hold_tap_profile(profile).tapping_term_ms as Millis)
             }
@@ -150,6 +161,14 @@ impl Engine {
         layers
     }
 
+    /// The key presses acted on since the last call, oldest first, each with
+    /// the layer that supplied its action. A press waiting behind an
+    /// undecided hold-tap appears once it is decided; keys swallowed by a
+    /// combo never do. Only the newest [`MAX_RESOLVED`] are kept.
+    pub fn take_resolved(&mut self) -> Vec<Resolved, MAX_RESOLVED> {
+        core::mem::take(&mut self.resolved)
+    }
+
     fn push(&mut self, keymap: &impl Keymap, out: &mut impl Output, ev: Event, now: Millis) {
         // A release whose press was already handled does not wait in the queue.
         let press_queued = self.queue.iter().any(|q| q.src == ev.src && q.pressed);
@@ -173,7 +192,8 @@ impl Engine {
                 self.release(out, head.src);
                 continue;
             }
-            let action = match self.resolve(keymap, head.src) {
+            let (action, layer) = self.resolve(keymap, head.src);
+            let action = match action {
                 Action::Transparent => Basic::None,
                 Action::Basic(basic) => basic,
                 Action::HoldTap { hold, tap, profile } => {
@@ -187,6 +207,12 @@ impl Engine {
             };
             force = false;
             self.queue.remove(0);
+            if let Source::Key(pos) = head.src {
+                if self.resolved.is_full() {
+                    self.resolved.remove(0);
+                }
+                let _ = self.resolved.push(Resolved { pos, layer });
+            }
             self.press(out, head, action);
         }
     }
@@ -218,20 +244,22 @@ impl Engine {
         }
     }
 
-    fn resolve(&self, keymap: &impl Keymap, src: Source) -> Action {
+    /// The action for an event and the layer it comes from: the highest
+    /// active layer that is not see-through at that key.
+    fn resolve(&self, keymap: &impl Keymap, src: Source) -> (Action, u8) {
         let pos = match src {
             Source::Key(pos) => pos,
             Source::Combo(index) => {
-                return keymap.combos().get(index as usize).map_or(Action::NONE, |c| c.action);
+                return (keymap.combos().get(index as usize).map_or(Action::NONE, |c| c.action), 0);
             }
         };
         let active = self.active_layers();
         (0..keymap.layer_count().min(32))
             .rev()
             .filter(|layer| active & layer_bit(*layer) != 0)
-            .map(|layer| keymap.action(layer, pos))
-            .find(|action| *action != Action::Transparent)
-            .unwrap_or(Action::NONE)
+            .map(|layer| (keymap.action(layer, pos), layer))
+            .find(|(action, _)| *action != Action::Transparent)
+            .unwrap_or((Action::NONE, 0))
     }
 
     fn press(&mut self, out: &mut impl Output, ev: Event, action: Basic) {

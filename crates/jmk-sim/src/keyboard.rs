@@ -111,6 +111,15 @@ impl VirtualKeyboard {
         b.link = Some(end_b);
     }
 
+    /// Join two halves with a cable whose data wires run between the given
+    /// pins: each pair is a pin of `a` and the pin of `b` it is soldered to.
+    pub fn connect_wired(a: &mut VirtualKeyboard, b: &mut VirtualKeyboard, wires: &[(Pin, Pin)]) {
+        Self::connect(a, b);
+        for (pin_a, pin_b) in wires {
+            a.pins.join(*pin_a, &b.pins, *pin_b);
+        }
+    }
+
     /// Plug the cable between the halves in or out (affects both ends).
     pub fn set_cable(&self, plugged: bool) {
         if let Some(link) = &self.link {

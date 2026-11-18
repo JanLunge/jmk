@@ -57,7 +57,12 @@ export async function openDemo(demo: Demo): Promise<void> {
     const transports = demo.halves.map(
       (half, index) => new VirtualTransport(demo.halves.length > 1 ? half.label : demo.name, half.wiring, serial * 2 + index),
     )
-    if (transports.length === 2) VirtualTransport.connect(transports[0], transports[1])
+    if (transports.length === 2) {
+      // Each half's sending pin is soldered to the other half's receiving pin.
+      const [left, right] = demo.halves.map((half) => half.link)
+      const wires: [number, number][] = left && right ? [[left.tx, right.rx], [left.rx, right.tx]] : []
+      VirtualTransport.connect(transports[0], transports[1], wires)
+    }
     const sessions: Session[] = []
     for (const [index, transport] of transports.entries()) sessions.push(await openSession(transport, demo.halves[index]))
     app.sessions.push(...sessions)
@@ -70,10 +75,42 @@ export function demoById(id: string): Demo | undefined {
   return DEMOS.find((demo) => demo.id === id)
 }
 
+/** Record that two open keyboards are the halves of one split. */
+export function pairUp(a: Session, b: Session): void {
+  if (partnerOf(a) === b) return
+  app.pairs = app.pairs.filter((pair) => !pair.includes(a.id) && !pair.includes(b.id))
+  app.pairs.push([a.id, b.id])
+}
+
+/** Every controller reports its own serial number; all zeros means it could not be read. */
+function sameBoard(a: Session, b: Session): boolean {
+  const uid = a.info.uid
+  return uid.some((byte) => byte !== 0) && uid.length === b.info.uid.length && uid.every((byte, i) => byte === b.info.uid[i])
+}
+
+/**
+ * Show a freshly opened keyboard. One that was open before (unplugged and
+ * back, or returned from a firmware update) takes its old place instead of
+ * appearing a second time.
+ */
+export function addSession(session: Session): void {
+  const index = app.sessions.findIndex((known) => sameBoard(known, session))
+  if (index < 0) {
+    app.sessions.push(session)
+    app.currentId = session.id
+    return
+  }
+  const old = app.sessions[index]
+  // The same id keeps its place in the list, its split pairing and, if it
+  // was in front, the view.
+  session.id = old.id
+  app.sessions.splice(index, 1, session)
+  app.currentId ??= session.id
+  old.client.close().catch(() => {})
+}
+
 async function openUsb(device: HIDDevice): Promise<void> {
-  const session = await openSession(await UsbTransport.open(device))
-  app.sessions.push(session)
-  app.currentId = session.id
+  addSession(await openSession(await UsbTransport.open(device)))
 }
 
 export async function connectUsb(): Promise<void> {

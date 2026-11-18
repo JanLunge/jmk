@@ -71,6 +71,45 @@ export const KEY_GROUPS: KeyGroup[] = [
   },
 ]
 
+/** One key of the picture of an ordinary keyboard: its usage (or undefined for a gap) and width in key units. */
+export type BoardKey = [usage: number | undefined, width: number]
+const row = (...keys: (number | BoardKey)[]): BoardKey[] => keys.map((key) => (typeof key === 'number' ? [key, 1] : key))
+const gap = (width: number): BoardKey => [undefined, width]
+const span = (first: number, count: number) => [...Array(count).keys()].map((i) => first + i)
+
+/**
+ * An ordinary (ANSI) keyboard, for picking keys where the hand expects them:
+ * the main block, the navigation keys and the number pad, row by row.
+ */
+export const ANSI_BLOCKS: { id: string; rows: BoardKey[][] }[] = [
+  {
+    id: 'main',
+    rows: [
+      row(0x29, gap(1), ...span(0x3a, 4), gap(0.5), ...span(0x3e, 4), gap(0.5), ...span(0x42, 4)),
+      row(0x35, ...span(0x1e, 10), 0x2d, 0x2e, [0x2a, 2]),
+      row([0x2b, 1.5], 0x14, 0x1a, 0x08, 0x15, 0x17, 0x1c, 0x18, 0x0c, 0x12, 0x13, 0x2f, 0x30, [0x31, 1.5]),
+      row([0x39, 1.75], 0x04, 0x16, 0x07, 0x09, 0x0a, 0x0b, 0x0d, 0x0e, 0x0f, 0x33, 0x34, [0x28, 2.25]),
+      row([0xe1, 2.25], 0x1d, 0x1b, 0x06, 0x19, 0x05, 0x11, 0x10, 0x36, 0x37, 0x38, [0xe5, 2.75]),
+      row([0xe0, 1.25], [0xe3, 1.25], [0xe2, 1.25], [0x2c, 6.25], [0xe6, 1.25], [0xe7, 1.25], [0x65, 1.25], [0xe4, 1.25]),
+    ],
+  },
+  {
+    id: 'nav',
+    rows: [row(0x46, 0x47, 0x48), row(0x49, 0x4a, 0x4b), row(0x4c, 0x4d, 0x4e), row(gap(3)), row(gap(1), 0x52), row(0x50, 0x51, 0x4f)],
+  },
+  {
+    id: 'numpad',
+    rows: [row(gap(4)), row(0x53, 0x54, 0x55, 0x56), row(0x5f, 0x60, 0x61, 0x57), row(0x5c, 0x5d, 0x5e), row(0x59, 0x5a, 0x5b, 0x58), row([0x62, 2], 0x63)],
+  },
+]
+
+/** Keys an ordinary keyboard does not have. */
+export const EXTRA_KEYS: KeyInfo[] = [
+  ...range(0x68, ['F13', 'F14', 'F15', 'F16', 'F17', 'F18', 'F19', 'F20', 'F21', 'F22', 'F23', 'F24']),
+  k(0x32, '#~', 'Non-US hash'),
+  k(0x64, '\\|', 'Non-US backslash'),
+]
+
 /** Consumer-page usages (media keys). */
 export const MEDIA_KEYS: KeyInfo[] = [
   k(0xcd, '⏯', 'Play / Pause'), k(0xb5, '⏭', 'Next track'), k(0xb6, '⏮', 'Previous track'), k(0xb7, '⏹', 'Stop'),
@@ -81,6 +120,31 @@ export const MEDIA_KEYS: KeyInfo[] = [
 
 const KEY_BY_USAGE = new Map(KEY_GROUPS.flatMap((g) => g.keys).map((key) => [key.usage, key]))
 const MEDIA_BY_USAGE = new Map(MEDIA_KEYS.map((key) => [key.usage, key]))
+
+/** HID usage for a `KeyboardEvent.code`, i.e. for the physical key whatever the system's language. */
+const USAGE_BY_CODE = new Map<string, number>([
+  ...[...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'].map((letter, i): [string, number] => [`Key${letter}`, 0x04 + i]),
+  ...[...'123456789'].map((digit, i): [string, number] => [`Digit${digit}`, 0x1e + i]),
+  ...[...'123456789'].map((digit, i): [string, number] => [`Numpad${digit}`, 0x59 + i]),
+  ...[...Array(12).keys()].map((i): [string, number] => [`F${i + 1}`, 0x3a + i]),
+  ...[...Array(12).keys()].map((i): [string, number] => [`F${i + 13}`, 0x68 + i]),
+  ['Digit0', 0x27], ['Enter', 0x28], ['Escape', 0x29], ['Backspace', 0x2a], ['Tab', 0x2b], ['Space', 0x2c],
+  ['Minus', 0x2d], ['Equal', 0x2e], ['BracketLeft', 0x2f], ['BracketRight', 0x30], ['Backslash', 0x31],
+  ['IntlHash', 0x32], ['Semicolon', 0x33], ['Quote', 0x34], ['Backquote', 0x35], ['Comma', 0x36], ['Period', 0x37],
+  ['Slash', 0x38], ['CapsLock', 0x39], ['PrintScreen', 0x46], ['ScrollLock', 0x47], ['Pause', 0x48],
+  ['Insert', 0x49], ['Home', 0x4a], ['PageUp', 0x4b], ['Delete', 0x4c], ['End', 0x4d], ['PageDown', 0x4e],
+  ['ArrowRight', 0x4f], ['ArrowLeft', 0x50], ['ArrowDown', 0x51], ['ArrowUp', 0x52], ['NumLock', 0x53],
+  ['NumpadDivide', 0x54], ['NumpadMultiply', 0x55], ['NumpadSubtract', 0x56], ['NumpadAdd', 0x57],
+  ['NumpadEnter', 0x58], ['Numpad0', 0x62], ['NumpadDecimal', 0x63], ['IntlBackslash', 0x64], ['ContextMenu', 0x65],
+  ['ControlLeft', 0xe0], ['ShiftLeft', 0xe1], ['AltLeft', 0xe2], ['MetaLeft', 0xe3],
+  ['ControlRight', 0xe4], ['ShiftRight', 0xe5], ['AltRight', 0xe6], ['MetaRight', 0xe7],
+])
+
+export function usageForCode(code: string): number | undefined {
+  return USAGE_BY_CODE.get(code)
+}
+
+export const isModifierUsage = (usage: number) => usage >= 0xe0 && usage <= 0xe7
 
 export const MOD_BITS = [
   { bit: 0x01, label: 'Ctrl' }, { bit: 0x02, label: 'Shift' }, { bit: 0x04, label: 'Alt' }, { bit: 0x08, label: 'GUI' },
@@ -106,6 +170,8 @@ export interface Legend {
   /** Second line, e.g. the hold action of a hold-tap. */
   sub?: string
   kind: 'key' | 'mod' | 'layer' | 'media' | 'macro' | 'empty' | 'through' | 'special'
+  /** The layer this key leads to, if it is a layer key. */
+  layer?: number
 }
 
 export function basicLegend(basic: Basic): Legend {
@@ -114,9 +180,9 @@ export function basicLegend(basic: Basic): Legend {
   if ('Mods' in basic) return { main: modsLabel(basic.Mods), kind: 'mod' }
   if ('ModKey' in basic) return { main: `${modsLabel(basic.ModKey.mods)}+${keyLabel(basic.ModKey.key)}`, kind: 'key' }
   if ('Consumer' in basic) return { main: MEDIA_BY_USAGE.get(basic.Consumer)?.label ?? 'Media', kind: 'media' }
-  if ('MomentaryLayer' in basic) return { main: `L${basic.MomentaryLayer}`, sub: 'hold', kind: 'layer' }
-  if ('ToggleLayer' in basic) return { main: `L${basic.ToggleLayer}`, sub: 'toggle', kind: 'layer' }
-  if ('ToLayer' in basic) return { main: `L${basic.ToLayer}`, sub: 'go to', kind: 'layer' }
+  if ('MomentaryLayer' in basic) return { main: `L${basic.MomentaryLayer}`, sub: 'hold', kind: 'layer', layer: basic.MomentaryLayer }
+  if ('ToggleLayer' in basic) return { main: `L${basic.ToggleLayer}`, sub: 'toggle', kind: 'layer', layer: basic.ToggleLayer }
+  if ('ToLayer' in basic) return { main: `L${basic.ToLayer}`, sub: 'go to', kind: 'layer', layer: basic.ToLayer }
   if ('OneShotMods' in basic) return { main: modsLabel(basic.OneShotMods), sub: 'one-shot', kind: 'mod' }
   if ('Macro' in basic) return { main: `M${basic.Macro + 1}`, sub: 'macro', kind: 'macro' }
   return { main: `#${basic.Custom}`, sub: 'custom', kind: 'special' }
@@ -127,7 +193,7 @@ export function legend(action: Action): Legend {
   if ('Basic' in action) return basicLegend(action.Basic)
   const tap = basicLegend(action.HoldTap.tap)
   const hold = basicLegend(action.HoldTap.hold)
-  return { main: tap.main, sub: `hold: ${hold.main}`, kind: tap.kind === 'empty' ? hold.kind : tap.kind }
+  return { main: tap.main, sub: `hold: ${hold.main}`, kind: tap.kind === 'empty' ? hold.kind : tap.kind, layer: hold.layer ?? tap.layer }
 }
 
 export function describeBasic(basic: Basic): string {

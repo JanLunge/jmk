@@ -237,6 +237,8 @@ fn print_event(event: &Event) {
     match event {
         Event::Key { pos, pressed } => println!("key {pos} {}", if *pressed { "down" } else { "up" }),
         Event::Probe(contacts) => println!("contacts: {contacts:?}"),
+        Event::Resolved { pos, layer } => println!("key {pos} used layer {layer}"),
+        Event::Layers(layers) => println!("active layers: {layers:#b}"),
     }
 }
 

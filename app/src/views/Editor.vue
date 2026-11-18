@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import ScratchPad from '../components/ScratchPad.vue'
 import KeyboardView from '../components/KeyboardView.vue'
 import { attempt, partnerOf, toast } from '../lib/app'
 import { hasKey } from '../lib/layout'
 import { LIMITS } from '../lib/protocol'
-import { adoptRemoteKeys, role, save, setMeta, type Session } from '../lib/session'
+import { knobPositions, needsRestart, restart, adoptRemoteKeys, role, save, setMeta, type Session } from '../lib/session'
 import BehaviorsTab from './BehaviorsTab.vue'
 import HardwareTab from './HardwareTab.vue'
 import KeymapTab from './KeymapTab.vue'
 import LayoutTab from './LayoutTab.vue'
+import LightingTab from './LightingTab.vue'
 import ShareTab from './ShareTab.vue'
 
 const props = defineProps<{ session: Session }>()
@@ -17,16 +19,27 @@ const isPeripheral = computed(() => role(props.session) === 'peripheral')
 const tabs = computed(() =>
   isPeripheral.value
     ? (['hardware'] as const)
-    : (['keymap', 'layout', 'behaviours', 'hardware', 'share'] as const),
+    : (['keymap', 'layout', 'behaviours', 'lighting', 'hardware', 'share'] as const),
 )
-type Tab = 'keymap' | 'layout' | 'behaviours' | 'hardware' | 'share'
+type Tab = 'keymap' | 'layout' | 'behaviours' | 'lighting' | 'hardware' | 'share'
 const tab = ref<Tab>(isPeripheral.value ? 'hardware' : 'keymap')
 const saving = ref(false)
-const keyCount = computed(() => props.session.layout.filter(hasKey).length)
+
+// The scratch pad stays the way it was left, open or closed.
+const SCRATCH_KEY = 'pog.scratch'
+const scratch = ref(localStorage.getItem(SCRATCH_KEY) === 'open')
+watch(scratch, (open) => localStorage.setItem(SCRATCH_KEY, open ? 'open' : 'closed'))
+const keyCount = computed(() => props.session.layout.filter(hasKey).length - knobPositions(props.session).filter((pos) => hasKey(props.session.layout[pos])).length)
 
 async function saveNow() {
   saving.value = true
-  if (await attempt(() => save(props.session).then(() => true))) toast('Saved to the keyboard')
+  if (await attempt(() => save(props.session).then(() => true))) {
+    toast('Saved to the keyboard')
+    if (needsRestart(props.session)) {
+      toast('Restarting the keyboard so the new pin setting takes effect')
+      await attempt(() => restart(props.session))
+    }
+  }
   saving.value = false
 }
 
@@ -63,6 +76,9 @@ onBeforeUnmount(() => clearInterval(timer))
         {{ session.split.connected ? 'halves connected' : 'other half not heard' }}
       </span>
       <span class="grow" />
+      <button v-if="!session.demo && !isPeripheral" class="btn" :class="{ on: scratch }" data-test="scratch-toggle" @click="scratch = !scratch">
+        <span class="caret" /> Try it
+      </button>
       <Transition name="fade">
         <span v-if="session.unsaved" class="muted small">Changes are live but not saved yet</span>
       </Transition>
@@ -80,6 +96,7 @@ onBeforeUnmount(() => clearInterval(timer))
         <KeymapTab v-if="tab === 'keymap'" :session="session" />
         <LayoutTab v-else-if="tab === 'layout'" :session="session" />
         <BehaviorsTab v-else-if="tab === 'behaviours'" :session="session" />
+        <LightingTab v-else-if="tab === 'lighting'" :session="session" />
         <ShareTab v-else-if="tab === 'share'" :session="session" />
         <div v-else class="hardware-wrap scroll">
           <div v-if="isPeripheral" class="card col peripheral">
@@ -94,6 +111,9 @@ onBeforeUnmount(() => clearInterval(timer))
         </div>
       </Transition>
     </div>
+    <Transition name="drawer">
+      <ScratchPad v-if="scratch && !session.demo && !isPeripheral" @close="scratch = false" />
+    </Transition>
   </div>
 </template>
 
@@ -176,6 +196,37 @@ onBeforeUnmount(() => clearInterval(timer))
 
 .peripheral {
   align-items: flex-start;
+}
+
+.btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.caret {
+  width: 2px;
+  height: 1em;
+  background: currentColor;
+  animation: blink 1s steps(2) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.drawer-enter-active,
+.drawer-leave-active {
+  transition:
+    margin-bottom 0.25s var(--ease),
+    opacity 0.2s;
+}
+
+.drawer-enter-from,
+.drawer-leave-to {
+  margin-bottom: -132px;
+  opacity: 0;
 }
 
 .pulse {

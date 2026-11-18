@@ -26,8 +26,14 @@ enum Command {
     Close { channel: u32 },
     Create { wiring: Wiring, uid: [u8; 8] },
     Destroy { id: u32 },
-    /// Join two halves with a cable.
-    Connect { a: u32, b: u32 },
+    /// Join two halves with a cable. `wires` lists which pin of `a` each
+    /// data wire joins to which pin of `b`.
+    Connect {
+        a: u32,
+        b: u32,
+        #[serde(default)]
+        wires: Vec<(u8, u8)>,
+    },
     Cable { id: u32, plugged: bool },
     Key { id: u32, key: usize, pressed: bool },
     Encoder { id: u32, encoder: usize, clockwise: bool },
@@ -93,9 +99,9 @@ fn execute(state: &mut State, command: Command) -> Result<Value, String> {
             state.keyboards.remove(&id);
             Ok(Value::Null)
         }
-        Command::Connect { a, b } => {
+        Command::Connect { a, b, wires } => {
             let mut first = state.keyboards.remove(&a).ok_or("no such keyboard")?;
-            let result = keyboard(state, b).map(|second| VirtualKeyboard::connect(&mut first, second));
+            let result = keyboard(state, b).map(|second| VirtualKeyboard::connect_wired(&mut first, second, &wires));
             state.keyboards.insert(a, first);
             result.map(|()| Value::Null)
         }
@@ -126,9 +132,11 @@ fn execute(state: &mut State, command: Command) -> Result<Value, String> {
                 let keyboard = keyboard(state, id)?;
                 let reports: Vec<Vec<u8>> = keyboard.take_reports().iter().map(|r| r.to_vec()).collect();
                 let host: Vec<HostEvent> = keyboard.take_host_events();
+                // `lights` is the light chain's colours when they were sent anew.
+                let lights = keyboard.pins().take_lights();
                 out.insert(
                     id.to_string(),
-                    json!({ "reports": reports, "host": host, "bootloader": keyboard.in_bootloader() }),
+                    json!({ "reports": reports, "host": host, "bootloader": keyboard.in_bootloader(), "lights": lights }),
                 );
             }
             Ok(Value::Object(out))

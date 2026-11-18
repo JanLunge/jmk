@@ -1,3 +1,4 @@
+import { planAddedKey } from '../../src/lib/addkey'
 import { describe, expect, it } from 'vitest'
 import { inferWiring, sameKey, signatureOf, type KeySignature } from '../../src/lib/infer'
 import { parseKle } from '../../src/lib/layout'
@@ -124,5 +125,46 @@ describe('KnobFinder', () => {
     const results = frames.map((pins) => finder.update(pins.map((pin) => ({ Ground: pin }))))
     expect(results.at(-1)).toEqual([10, 11])
     expect(results.slice(0, 4).every((r) => r === undefined)).toBe(true)
+  })
+})
+
+describe('adding one key to existing wiring', () => {
+  const base = { reserved_pins: [], debounce_ms: 5, encoders: [], split: 'None' as const }
+  const matrix = { ...base, matrix: { Matrix: { rows: [1, 2], cols: [10, 11], diodes: 'Row2Col' as const } } }
+
+  it('finds an unused crossing without changing the wiring', () => {
+    // Row2Col: the columns are switched, the rows are read.
+    const plan = planAddedKey(matrix, { kind: 'link', driven: 11, sensed: 2, diode: true })
+    expect(plan).toMatchObject({ ok: true, rewired: false, pos: 3 })
+  })
+
+  it('adds a row and renumbers nothing, adds a column and renumbers the rows below', () => {
+    const row = planAddedKey(matrix, { kind: 'link', driven: 10, sensed: 3, diode: true })
+    if (!row.ok) throw new Error(row.problem)
+    expect(row.hardware.matrix).toEqual({ Matrix: { rows: [1, 2, 3], cols: [10, 11], diodes: 'Row2Col' } })
+    expect([row.pos, ...[0, 1, 2, 3].map(row.move)]).toEqual([4, 0, 1, 2, 3])
+
+    const col = planAddedKey(matrix, { kind: 'link', driven: 12, sensed: 2, diode: true })
+    if (!col.ok) throw new Error(col.problem)
+    expect(col.hardware.matrix).toEqual({ Matrix: { rows: [1, 2], cols: [10, 11, 12], diodes: 'Row2Col' } })
+    // Positions after the switches (knobs, the other half) shift by the two new crossings.
+    expect([col.pos, ...[0, 1, 2, 3, 4].map(col.move)]).toEqual([5, 0, 1, 3, 4, 6])
+  })
+
+  it('accepts a diodeless key either way round and refuses a backwards diode', () => {
+    expect(planAddedKey(matrix, { kind: 'link', driven: 2, sensed: 11, diode: false })).toMatchObject({ ok: true, pos: 3 })
+    expect(planAddedKey(matrix, { kind: 'link', driven: 2, sensed: 11, diode: true }).ok).toBe(false)
+    expect(planAddedKey(matrix, { kind: 'link', driven: 1, sensed: 2, diode: false }).ok).toBe(false)
+    expect(planAddedKey(matrix, { kind: 'ground', pin: 5 }).ok).toBe(false)
+  })
+
+  it('appends a pin to one-pin-per-key wiring', () => {
+    const direct = { ...base, matrix: { Direct: { pins: [4, 5], active_high: false } } }
+    const plan = planAddedKey(direct, { kind: 'ground', pin: 7 })
+    if (!plan.ok) throw new Error(plan.problem)
+    expect(plan.hardware.matrix).toEqual({ Direct: { pins: [4, 5, 7], active_high: false } })
+    expect([plan.pos, plan.move(1), plan.move(2)]).toEqual([2, 1, 3])
+    expect(planAddedKey(direct, { kind: 'ground', pin: 5 })).toMatchObject({ ok: true, rewired: false, pos: 1 })
+    expect(planAddedKey(direct, { kind: 'supply', pin: 7 }).ok).toBe(false)
   })
 })

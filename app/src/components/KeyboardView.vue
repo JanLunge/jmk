@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Draws a keyboard from key shapes. Used everywhere a keyboard is shown:
 // the keymap, the layout editor, the tester and the virtual boards.
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { carriesKey } from '../lib/drag'
 import type { Legend } from '../lib/keycodes'
 import { bounds, hasKey } from '../lib/layout'
 import type { KeyGeometry } from '../lib/protocol'
@@ -12,10 +13,23 @@ const props = withDefaults(
     /** What to print on the key at a position. */
     legend?: (pos: number) => Legend | undefined
     pressed?: Set<number>
+    /** Held keys whose action on the keyboard is not the one drawn here. */
+    pressedElsewhere?: Set<number>
     selected?: number[]
     /** Positions drawn faded (e.g. keys not yet found). */
     dim?: number[]
     interactive?: boolean
+    /** Things dragged from the picker can be dropped on the keys. */
+    droppable?: boolean
+    /** A colour per position, for keys that lead to a coloured layer. */
+    tint?: (pos: number) => string | undefined
+    /**
+     * Positions drawn as a knob instead of a key. Each is the first of a
+     * knob's two positions: turning left, then (at the next position) right.
+     */
+    knobs?: number[]
+    /** RGB lights to draw, in layout units. `under` lights sit beneath the keys and glow out. */
+    lights?: { x: number; y: number; color: string; under: boolean; marked?: boolean }[]
     /** Largest key size in pixels; the drawing shrinks to fit its box. */
     maxUnit?: number
   }>(),
@@ -25,25 +39,66 @@ const props = withDefaults(
 const emit = defineEmits<{
   down: [pos: number, event: PointerEvent]
   up: [pos: number, event: PointerEvent]
+  drop: [pos: number, event: DragEvent]
 }>()
+
+/** The key something dragged is hovering over. */
+const dropAt = ref<number>()
+function over(pos: number, event: DragEvent) {
+  if (!props.droppable || !carriesKey(event)) return
+  event.preventDefault()
+  dropAt.value = pos
+}
+function land(pos: number, event: DragEvent) {
+  if (!props.droppable) return
+  event.preventDefault()
+  dropAt.value = undefined
+  emit('drop', pos, event)
+}
 
 const PAD = 14
 const box = computed(() => bounds(props.layout))
 const viewBox = computed(() => `${box.value.x - PAD} ${box.value.y - PAD} ${box.value.w + 2 * PAD} ${box.value.h + 2 * PAD}`)
 const maxWidth = computed(() => ((box.value.w + 2 * PAD) / 100) * props.maxUnit)
 
+const isKnob = (pos: number) => !!props.knobs?.includes(pos)
+
 const keys = computed(() =>
   props.layout
     .map((key, pos) => ({ key, pos }))
-    .filter(({ key }) => hasKey(key))
+    .filter(({ key, pos }) => hasKey(key) && !isKnob(pos))
     .map(({ key, pos }) => {
       const legend = props.legend?.(pos)
       return {
         pos,
         key,
         legend,
+        tint: props.tint?.(pos),
         transform: `rotate(${key.r / 10} ${key.x + key.w / 2} ${key.y + key.h / 2})`,
         fontSize: fontSize(legend?.main ?? '', key.w),
+      }
+    }),
+)
+
+const dials = computed(() =>
+  (props.knobs ?? [])
+    .filter((pos) => hasKey(props.layout[pos]))
+    .map((pos) => {
+      const key = props.layout[pos]
+      const cx = key.x + key.w / 2
+      const cy = key.y + key.h / 2
+      const r = Math.min(key.w, key.h) / 2 - 5
+      return {
+        pos,
+        cx,
+        cy,
+        r,
+        transform: `rotate(${key.r / 10} ${cx} ${cy})`,
+        // Left half turns one way, right half the other.
+        halves: [
+          { pos, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 0 ${cx} ${cy + r} Z`, x: cx - r / 2, arrow: '⟲' },
+          { pos: pos + 1, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 1 ${cx} ${cy + r} Z`, x: cx + r / 2, arrow: '⟳' },
+        ].map((half) => ({ ...half, text: props.legend?.(half.pos)?.main ?? '' })),
       }
     }),
 )
@@ -56,21 +111,38 @@ function fontSize(text: string, width: number): number {
 
 <template>
   <svg class="keyboard" :viewBox="viewBox" :style="{ maxWidth: maxWidth + 'px' }" role="img">
+    <defs>
+      <filter id="jmk-glow" x="-150%" y="-150%" width="400%" height="400%">
+        <feGaussianBlur stdDeviation="16" />
+      </filter>
+    </defs>
+    <g v-if="lights" class="glows">
+      <template v-for="(light, index) in lights" :key="index">
+        <circle v-if="light.under && light.color !== '#000000'" :cx="light.x" :cy="light.y" r="46" :fill="light.color" filter="url(#jmk-glow)" />
+      </template>
+    </g>
     <g
-      v-for="{ pos, key, legend, transform, fontSize } in keys"
+      v-for="{ pos, key, legend, tint, transform, fontSize } in keys"
       :key="pos"
       class="key"
       :class="[
         legend ? 'kind-' + legend.kind : 'kind-key',
         {
           pressed: pressed?.has(pos),
+          elsewhere: pressedElsewhere?.has(pos),
           selected: selected?.includes(pos),
           dim: dim?.includes(pos),
           interactive,
+          tinted: !!tint,
+          target: dropAt === pos,
         },
       ]"
+      :style="tint ? { '--tint': tint } : undefined"
       :transform="transform"
       :data-pos="pos"
+      @dragover="over(pos, $event)"
+      @dragleave="dropAt === pos && (dropAt = undefined)"
+      @drop="land(pos, $event)"
       @pointerdown="interactive && emit('down', pos, $event)"
       @pointerup="interactive && emit('up', pos, $event)"
     >
@@ -89,12 +161,48 @@ function fontSize(text: string, width: number): number {
         <text v-if="legend?.sub" class="sub" :x="key.x + key.w / 2" :y="key.y + key.h / 2 + 19">{{ legend.sub }}</text>
       </g>
     </g>
+    <g v-for="dial in dials" :key="'knob' + dial.pos" class="dial" :class="{ interactive }" :transform="dial.transform" :data-knob="dial.pos">
+      <circle class="rim" :cx="dial.cx" :cy="dial.cy" :r="dial.r + 3" />
+      <g
+        v-for="half in dial.halves"
+        :key="half.pos"
+        class="half"
+        :class="{ selected: selected?.includes(half.pos), pressed: pressed?.has(half.pos), target: dropAt === half.pos }"
+        :data-pos="half.pos"
+        @dragover="over(half.pos, $event)"
+        @dragleave="dropAt === half.pos && (dropAt = undefined)"
+        @drop="land(half.pos, $event)"
+        @pointerdown="interactive && emit('down', half.pos, $event)"
+        @pointerup="interactive && emit('up', half.pos, $event)"
+      >
+        <path :d="half.d" />
+        <text class="arrow" :x="half.x" :y="dial.cy - dial.r / 2.4">{{ half.arrow }}</text>
+        <text class="main" :x="half.x" :y="dial.cy + 6" :font-size="Math.max(11, Math.min(18, (dial.r - 8) / Math.max(half.text.length, 1) / 0.6))">
+          {{ half.text }}
+        </text>
+      </g>
+    </g>
+    <g v-if="lights" class="lights">
+      <circle
+        v-for="(light, index) in lights"
+        :key="index"
+        class="light"
+        :class="{ under: light.under, marked: light.marked }"
+        :cx="light.x"
+        :cy="light.y"
+        :r="light.marked ? 13 : 8"
+        :fill="light.color"
+        :data-light="index"
+      />
+    </g>
   </svg>
 </template>
 
 <style scoped>
 .keyboard {
   display: block;
+  /* Underglow shines past the edge of the picture. */
+  overflow: visible;
   width: 100%;
   height: auto;
   user-select: none;
@@ -152,15 +260,77 @@ text {
 }
 
 .pressed .top {
-  fill: var(--signal);
+  fill: var(--accent);
 }
 
 .pressed text {
-  fill: #06201d;
+  fill: var(--accent-ink);
 }
 
 .dim {
   opacity: 0.3;
+}
+
+.rim {
+  fill: var(--cap);
+}
+
+.half path {
+  fill: var(--cap-top);
+  stroke: var(--cap);
+  stroke-width: 2;
+  transition: fill 0.12s;
+}
+
+.half .arrow {
+  font-size: 15px;
+  opacity: 0.55;
+}
+
+.dial.interactive .half {
+  cursor: pointer;
+}
+
+.dial.interactive .half:hover path {
+  stroke: var(--muted);
+}
+
+.half.selected path {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.half.pressed path {
+  fill: var(--accent);
+}
+
+.light {
+  stroke: color-mix(in srgb, var(--text) 55%, transparent);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+.light.under {
+  stroke-dasharray: 3 3;
+}
+
+.light.marked {
+  stroke: var(--accent);
+  stroke-width: 4;
+}
+
+/* Held, but doing something other than what is printed on it here. */
+.elsewhere .cap {
+  transform: translateY(1.5px);
+}
+
+.elsewhere .base {
+  stroke: color-mix(in srgb, var(--accent) 45%, transparent);
+  stroke-dasharray: 4 5;
+}
+
+.elsewhere .top {
+  fill: color-mix(in srgb, var(--accent) 14%, var(--cap-top));
 }
 
 .kind-mod .top {
@@ -169,6 +339,14 @@ text {
 
 .kind-layer .top {
   fill: color-mix(in srgb, var(--accent) 34%, var(--cap-top));
+}
+
+.tinted .top {
+  fill: color-mix(in srgb, var(--tint) 42%, var(--cap-top));
+}
+
+.tinted .base {
+  fill: color-mix(in srgb, var(--tint) 55%, var(--cap));
 }
 
 .kind-media .top {
@@ -197,5 +375,14 @@ text {
 
 .kind-through text {
   opacity: 0.35;
+}
+.key.pressed .top {
+  fill: var(--accent);
+}
+
+.target .base,
+.half.target path {
+  stroke: var(--accent);
+  stroke-dasharray: 5 4;
 }
 </style>

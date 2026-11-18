@@ -2,5 +2,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('jmkDesktop', {
-  flash: (mcu) => ipcRenderer.invoke('jmk:flash', mcu),
+  platform: process.platform,
+  flash: (mcu, onto) => ipcRenderer.invoke('jmk:flash', mcu, onto),
+  drives: () => ipcRenderer.invoke('jmk:drives'),
 })

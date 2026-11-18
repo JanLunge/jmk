@@ -1,7 +1,7 @@
 // A keyboard written down as a file: what the registry stores and what
 // "export" produces. Applying one to a keyboard configures it completely.
 
-import type { Action, Combo, HardwareConfig, HoldTapProfile, KeyGeometry, MacroStep, Mcu } from './protocol'
+import type { Action, Combo, HardwareConfig, HoldTapProfile, KeyGeometry, LightingConfig, MacroStep, Mcu } from './protocol'
 
 export const DEFINITION_SCHEMA = 1
 
@@ -10,6 +10,8 @@ export interface Keymap {
   profiles: HoldTapProfile[]
   combos: Combo[]
   macros: MacroStep[][]
+  /** A colour number per layer (see layers.ts). */
+  layerColors?: number[]
 }
 
 export interface Definition {
@@ -22,6 +24,8 @@ export interface Definition {
   /** One shape per key position, across both halves. */
   layout: KeyGeometry[]
   keymap: Keymap
+  /** RGB lights, if the keyboard has them. */
+  lighting?: LightingConfig
 }
 
 export function parseDefinition(text: string): Definition {

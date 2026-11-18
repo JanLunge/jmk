@@ -71,7 +71,7 @@ export async function chooseUsbDevice(): Promise<HIDDevice | undefined> {
 // --- Virtual keyboards -------------------------------------------------------
 
 interface AdvanceResult {
-  [id: string]: { reports: number[][]; host: HostEvent[]; bootloader: boolean }
+  [id: string]: { reports: number[][]; host: HostEvent[]; bootloader: boolean; lights: number[][] | null }
 }
 
 const TICK_MS = 8
@@ -100,6 +100,7 @@ class VirtualWorld {
     for (const [id, keyboard] of this.keyboards) {
       const out = result[id]
       keyboard.bootloader = out.bootloader
+      if (out.lights) keyboard.onLights(out.lights)
       out.host.forEach((event) => keyboard.onHost(event))
       out.reports.forEach((report) => keyboard.onReport(report))
     }
@@ -116,6 +117,8 @@ export class VirtualTransport implements Transport {
   onClose: () => void = () => {}
   /** What this keyboard "typed" into its computer. */
   onHost: (event: HostEvent) => void = () => {}
+  /** The colours its light chain shows, as sent down the wire. */
+  onLights: (colors: number[][]) => void = () => {}
 
   constructor(
     readonly label: string,
@@ -126,8 +129,9 @@ export class VirtualTransport implements Transport {
     world.add(this)
   }
 
-  static connect(a: VirtualTransport, b: VirtualTransport) {
-    bridge({ op: 'connect', a: a.id, b: b.id })
+  /** Join two halves with a cable; `wires` lists which pin of `a` reaches which pin of `b`. */
+  static connect(a: VirtualTransport, b: VirtualTransport, wires: [number, number][] = []) {
+    bridge({ op: 'connect', a: a.id, b: b.id, wires })
   }
 
   async send(report: number[]): Promise<void> {

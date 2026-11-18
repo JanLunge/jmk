@@ -35,6 +35,12 @@ struct State {
     modes: [PinMode; 64],
     switches: Vec<(Wire, bool)>,
     settles: usize,
+    /// Wires to another board: this board's pin, the other board, its pin.
+    cable: Vec<(Pin, SimPins, Pin)>,
+    /// The colours last sent down the light chain, and whether anyone has
+    /// looked at them yet.
+    lights: Vec<[u8; 3]>,
+    lights_fresh: bool,
 }
 
 impl SimPins {
@@ -46,7 +52,21 @@ impl SimPins {
             modes: [PinMode::Untouched; 64],
             switches,
             settles: 0,
+            cable: Vec::new(),
+            lights: Vec::new(),
+            lights_fresh: false,
         })))
+    }
+
+    /// Run a wire from `mine` to pin `theirs` of another board. A pin either
+    /// board drives low pulls the other end low too.
+    pub fn join(&self, mine: Pin, other: &SimPins, theirs: Pin) {
+        self.0.borrow_mut().cable.push((mine, other.clone(), theirs));
+        other.0.borrow_mut().cable.push((theirs, self.clone(), mine));
+    }
+
+    fn drives_low(&self, pin: Pin) -> bool {
+        self.0.borrow().modes[pin as usize] == PinMode::Low
     }
 
     /// Close or open a wire.
@@ -54,6 +74,17 @@ impl SimPins {
         if let Some(switch) = self.0.borrow_mut().switches.get_mut(wire) {
             switch.1 = closed;
         }
+    }
+
+    /// The colours on the light chain, as sent (in the chain's colour order).
+    pub fn lights(&self) -> Vec<[u8; 3]> {
+        self.0.borrow().lights.clone()
+    }
+
+    /// The colours on the light chain if they were sent since the last call.
+    pub fn take_lights(&self) -> Option<Vec<[u8; 3]>> {
+        let mut state = self.0.borrow_mut();
+        std::mem::take(&mut state.lights_fresh).then(|| state.lights.clone())
     }
 
     /// How often the firmware waited for levels to settle.
@@ -93,6 +124,11 @@ impl Pins for SimPins {
                 low[pin as usize] = true;
             }
         }
+        for (mine, other, theirs) in &state.cable {
+            if other.drives_low(*theirs) {
+                low[*mine as usize] = true;
+            }
+        }
         // Spread low levels through closed switches until nothing changes.
         loop {
             let before = low;
@@ -117,6 +153,16 @@ impl Pins for SimPins {
 
     fn supports_link(&self, link: &LinkConfig) -> bool {
         matches!(link, LinkConfig::Uart { .. })
+    }
+
+    fn supports_lights(&self, _pin: Pin) -> bool {
+        true
+    }
+
+    fn show_lights(&mut self, colors: &[[u8; 3]]) {
+        let mut state = self.0.borrow_mut();
+        state.lights = colors.to_vec();
+        state.lights_fresh = true;
     }
 
     fn settle(&mut self) {
