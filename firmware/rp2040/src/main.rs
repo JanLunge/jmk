@@ -65,6 +65,7 @@ async fn main(_spawner: Spawner) {
         &link_queues,
         &config_queues,
         || watchdog.feed(WATCHDOG_TIMEOUT),
+        jmk_embassy::usb::listening,
         reboot,
     );
     let usb = Usb::new(Driver::new(p.USB, Irqs));

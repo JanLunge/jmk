@@ -4,7 +4,7 @@ use jmk_core::keycode as kc;
 use jmk_core::{Action, Basic, MacroStep};
 use jmk_proto::{
     ColorOrder, Contact, DiodeDirection, Effect, EncoderConfig, Error, Event, HardwareConfig, KeyGeometry, Led,
-    LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, SplitConfig, SplitStatus,
+    LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, SplitConfig, SplitStatus, SplitSync,
 };
 use jmk_sim::{HostEvent, VirtualKeyboard, Wire, Wiring};
 
@@ -454,20 +454,24 @@ fn encoder_clicks_tap_their_positions() {
     assert_eq!(rig.out(), ["00:0e", "00:", "00:0e", "00:", "00:0d", "00:"]);
 }
 
-/// Two halves of three direct-wired keys each, joined by a cable.
+/// Two halves of three direct-wired keys each, joined by a cable and both
+/// plugged into the computer. Both hold the same keymap.
 fn split_pair() -> (Rig, Rig) {
     let link = LinkConfig::Uart { tx: 0, rx: 1 };
     let mut left = Rig::new(Wiring::direct(&[2, 3, 4]));
-    let mut right = Rig::new(Wiring { encoders: vec![(10, 11)], ..Wiring::direct(&[2, 3, 4]) });
+    let mut right =
+        Rig { kb: VirtualKeyboard::new(Wiring { encoders: vec![(10, 11)], ..Wiring::direct(&[2, 3, 4]) }, [2; 8]) };
     VirtualKeyboard::connect(&mut left.kb, &mut right.kb);
-    left.ok(Request::SetHardware(HardwareConfig { split: SplitConfig::Central(link), ..direct(&[2, 3, 4]) }));
+    left.ok(Request::SetHardware(HardwareConfig { split: SplitConfig::Half { link, offset: 0 }, ..direct(&[2, 3, 4]) }));
     right.ok(Request::SetHardware(HardwareConfig {
-        split: SplitConfig::Peripheral(link),
+        split: SplitConfig::Half { link, offset: 3 },
         encoders: [EncoderConfig { a: 10, b: 11, steps_per_detent: 4 }].into_iter().collect(),
         ..direct(&[2, 3, 4])
     }));
     // Left keys are positions 0..3, right keys 3..6, right encoder 6 and 7.
-    left.set_keys(0, &[kc::A, kc::B, kc::C, kc::D, kc::E, kc::F, kc::J, kc::K]);
+    for half in [&mut left, &mut right] {
+        half.set_keys(0, &[kc::A, kc::B, kc::C, kc::D, kc::E, kc::F, kc::J, kc::K]);
+    }
     (left, right)
 }
 
@@ -478,16 +482,24 @@ fn run_both(left: &mut Rig, right: &mut Rig, ms: u64) {
     }
 }
 
+fn split_status(rig: &mut Rig) -> SplitStatus {
+    match rig.kb.request(Request::GetSplitStatus) {
+        Response::SplitStatus(status) => status,
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
 #[test]
-fn split_halves_type_through_the_central_half() {
+fn with_both_halves_on_usb_only_the_first_one_types() {
     let (mut left, mut right) = split_pair();
-    run_both(&mut left, &mut right, 10);
-    let status = SplitStatus { connected: true, remote_positions: 5 };
-    assert_eq!(left.kb.request(Request::GetSplitStatus), Response::SplitStatus(status));
+    run_both(&mut left, &mut right, 600);
+    let status = split_status(&mut left);
     assert_eq!(
-        right.kb.request(Request::GetSplitStatus),
-        Response::SplitStatus(SplitStatus { connected: true, remote_positions: 0 })
+        (status.connected, status.remote_positions, status.leading, status.sync, status.peer_uid),
+        (true, 5, true, SplitSync::Same, [2; 8])
     );
+    let status = split_status(&mut right);
+    assert_eq!((status.connected, status.remote_positions, status.leading, status.peer_uid), (true, 3, false, [1; 8]));
 
     left.kb.set_key(0, true);
     right.kb.set_key(2, true);
@@ -495,29 +507,265 @@ fn split_halves_type_through_the_central_half() {
     right.kb.set_key(2, false);
     run_both(&mut left, &mut right, 10);
     assert_eq!(left.out(), ["00:04", "00:04,09", "00:04"]);
-    assert!(right.out().is_empty(), "the peripheral half never types itself");
+    assert!(right.out().is_empty(), "nothing is typed twice");
 
     right.kb.turn_encoder(0, true);
     run_both(&mut left, &mut right, 5);
     assert_eq!(left.out(), ["00:04,0e", "00:04"]);
+    assert!(right.out().is_empty());
 }
 
 #[test]
-fn unplugging_the_cable_releases_the_other_halfs_keys() {
+fn whichever_half_has_the_computer_types_for_both() {
     let (mut left, mut right) = split_pair();
+    run_both(&mut left, &mut right, 10);
+    left.kb.set_key(0, true);
+    run_both(&mut left, &mut right, 10);
+    assert_eq!(left.out(), ["00:04"]);
+
+    // Only the right half's USB cable stays in: it takes over, and the key
+    // still held on the left half arrives through it.
+    left.kb.set_usb(false);
+    run_both(&mut left, &mut right, 120);
+    assert!(split_status(&mut right).leading);
+    assert!(!split_status(&mut left).leading);
+    assert_eq!(right.out(), ["00:04"]);
+    right.kb.set_key(1, true);
+    run_both(&mut left, &mut right, 10);
+    assert_eq!(right.out(), ["00:04,08"]);
+    right.kb.turn_encoder(0, true);
+    run_both(&mut left, &mut right, 5);
+    assert_eq!(right.out(), ["00:04,08,0e", "00:04,08"]);
+    assert!(left.out().is_empty());
+
+    // Back on both cables the first half types again and the other lets go.
+    left.kb.set_usb(true);
+    run_both(&mut left, &mut right, 120);
+    assert_eq!(right.out(), ["00:"]);
+    assert_eq!(left.out(), ["00:08"]);
+}
+
+#[test]
+fn without_the_cable_each_half_types_its_own_keys() {
+    let (mut left, mut right) = split_pair();
+    run_both(&mut left, &mut right, 10);
     right.kb.set_key(0, true);
     run_both(&mut left, &mut right, 10);
     assert_eq!(left.out(), ["00:07"]);
+    assert!(right.out().is_empty());
 
     left.kb.set_cable(false);
     run_both(&mut left, &mut right, 400);
-    assert_eq!(left.out(), ["00:"]);
-    assert_eq!(left.kb.request(Request::GetSplitStatus), Response::SplitStatus(SplitStatus { connected: false, remote_positions: 5 }));
+    assert_eq!(left.out(), ["00:"], "the other half's keys are let go");
+    let status = split_status(&mut left);
+    assert!(!status.connected && status.leading);
+    assert!(split_status(&mut right).leading);
+    right.kb.set_key(0, false);
+    right.kb.set_key(1, true);
+    left.kb.set_key(2, true);
+    run_both(&mut left, &mut right, 10);
+    assert_eq!(right.out(), ["00:08"]);
+    assert_eq!(left.out(), ["00:06"]);
+    left.kb.set_key(2, false);
+    run_both(&mut left, &mut right, 10);
+    left.out();
 
-    // Plugged back in, the key that is still held comes back by itself.
+    // Plugged back in, the key that is still held comes back by itself,
+    // now through the first half.
     left.kb.set_cable(true);
     run_both(&mut left, &mut right, 100);
-    assert_eq!(left.out(), ["00:07"]);
+    assert_eq!(left.out(), ["00:08"]);
+    assert_eq!(right.out(), ["00:"]);
+}
+
+fn saved_pair() -> (Rig, Rig) {
+    let (mut left, mut right) = split_pair();
+    left.ok(Request::Save);
+    right.ok(Request::Save);
+    run_both(&mut left, &mut right, 1000);
+    assert_eq!(split_status(&mut left).sync, SplitSync::Same);
+    assert_eq!(split_status(&mut right).sync, SplitSync::Same);
+    (left, right)
+}
+
+#[test]
+fn a_saved_change_reaches_the_other_half_through_the_cable() {
+    let (mut left, mut right) = saved_pair();
+    assert_eq!((split_status(&mut left).revision, split_status(&mut right).revision), (1, 1));
+    // Three layers and a macro, so it takes a good number of pieces.
+    left.ok(Request::SetLayerCount(3));
+    left.set_keys(0, &[kc::Z, kc::B, kc::C, kc::D, kc::E, kc::F, kc::J, kc::K]);
+    left.set_keys(2, &[kc::N1]);
+    left.ok(Request::SetMacro { index: 1, start: 0, steps: [MacroStep::Tap(kc::N0)].into_iter().collect() });
+    left.ok(Request::SetLayerColors([0, 3, 5].into_iter().collect()));
+    left.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(right.first_actions(0)[0], Action::key(kc::Z));
+    assert_eq!(right.first_actions(2)[0], Action::key(kc::N1));
+    assert_eq!(right.kb.request(Request::GetLayerColors), left.kb.request(Request::GetLayerColors));
+    assert_eq!(right.kb.request(Request::GetMacro { index: 1, start: 0 }), left.kb.request(Request::GetMacro { index: 1, start: 0 }));
+    let (l, r) = (split_status(&mut left), split_status(&mut right));
+    assert_eq!((l.sync, r.sync), (SplitSync::Same, SplitSync::Same));
+    assert_eq!((l.revision, r.revision, l.digest), (2, 2, r.digest));
+    // The other half saved it by itself, and alone it types the new key.
+    right.kb.reboot();
+    right.kb.set_cable(false);
+    run_both(&mut left, &mut right, 400);
+    left.kb.set_key(0, true);
+    left.run(10);
+    assert_eq!(left.out(), ["00:1d"]);
+    assert_eq!(right.first_actions(0)[0], Action::key(kc::Z));
+}
+
+#[test]
+fn a_half_without_a_computer_keeps_what_it_fetched_through_a_power_cut() {
+    let (mut left, mut right) = saved_pair();
+    left.kb.set_usb(false);
+    run_both(&mut left, &mut right, 300);
+    right.set_keys(0, &[kc::A, kc::Z]);
+    right.ok(Request::Save);
+    // Asked at once, the half does not claim an agreement from before the save.
+    assert_ne!(split_status(&mut right).sync, SplitSync::Same);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(split_status(&mut right).sync, SplitSync::Same);
+    left.kb.set_cable(false);
+    left.kb.reboot();
+    left.kb.set_usb(true);
+    left.run(50);
+    left.kb.set_key(1, true);
+    left.run(10);
+    assert_eq!(left.out(), ["00:1d"]);
+}
+
+#[test]
+fn unsaved_changes_on_a_half_without_a_computer_do_not_block_the_other_half() {
+    let (mut left, mut right) = saved_pair();
+    // Edited, not saved, and then its USB cable is pulled: nobody can save this any more.
+    left.set_keys(0, &[kc::N1]);
+    left.kb.set_usb(false);
+    run_both(&mut left, &mut right, 300);
+    right.set_keys(0, &[kc::A, kc::Z]);
+    right.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(split_status(&mut right).sync, SplitSync::Same);
+    assert_eq!(left.first_actions(0)[..2], [Action::key(kc::A), Action::key(kc::Z)]);
+}
+
+#[test]
+fn a_half_without_a_computer_hands_out_what_it_saved_not_what_it_left_unsaved() {
+    let (mut left, mut right) = saved_pair();
+    left.kb.set_cable(false);
+    run_both(&mut left, &mut right, 400);
+    left.set_keys(0, &[kc::Z]);
+    left.ok(Request::Save);
+    left.set_keys(0, &[kc::N1]);
+    left.kb.set_usb(false);
+    left.kb.set_cable(true);
+    run_both(&mut left, &mut right, 2000);
+    assert_eq!(right.first_actions(0)[0], Action::key(kc::Z));
+    assert_eq!(left.first_actions(0)[0], Action::key(kc::Z));
+    assert_eq!(split_status(&mut right).sync, SplitSync::Same);
+}
+
+#[test]
+fn a_change_that_is_not_saved_stays_on_its_half() {
+    let (mut left, mut right) = saved_pair();
+    left.set_keys(0, &[kc::Z]);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(right.first_actions(0)[0], Action::key(kc::A));
+    assert_eq!(split_status(&mut right).sync, SplitSync::Unknown);
+}
+
+#[test]
+fn a_half_changed_while_apart_brings_the_other_up_to_date() {
+    let (mut left, mut right) = saved_pair();
+    left.kb.set_cable(false);
+    run_both(&mut left, &mut right, 400);
+    // The second half is the one that changes this time, twice.
+    right.set_keys(0, &[kc::TAB]);
+    right.ok(Request::Save);
+    right.set_keys(0, &[kc::Z]);
+    right.ok(Request::Save);
+    // Both lose power before they meet again.
+    left.kb.reboot();
+    right.kb.reboot();
+    left.kb.set_cable(true);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(left.first_actions(0)[0], Action::key(kc::Z));
+    let (l, r) = (split_status(&mut left), split_status(&mut right));
+    assert_eq!((l.sync, r.sync, l.revision, r.revision), (SplitSync::Same, SplitSync::Same, 3, 3));
+}
+
+#[test]
+fn two_halves_changed_while_apart_wait_for_the_user() {
+    let (mut left, mut right) = saved_pair();
+    left.kb.set_cable(false);
+    run_both(&mut left, &mut right, 400);
+    left.set_keys(0, &[kc::TAB]);
+    left.ok(Request::Save);
+    right.set_keys(0, &[kc::Z]);
+    right.ok(Request::Save);
+    left.kb.set_cable(true);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!((split_status(&mut left).sync, split_status(&mut right).sync), (SplitSync::Conflict, SplitSync::Conflict));
+    assert_eq!(left.first_actions(0)[0], Action::key(kc::TAB));
+    assert_eq!(right.first_actions(0)[0], Action::key(kc::Z));
+
+    // Asked on the first half, the user keeps the other half's keymap.
+    left.ok(Request::ResolveSplit { keep_this: false });
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(left.first_actions(0)[0], Action::key(kc::Z));
+    assert_eq!((split_status(&mut left).sync, split_status(&mut right).sync), (SplitSync::Same, SplitSync::Same));
+}
+
+#[test]
+fn the_user_can_keep_the_keymap_of_the_half_they_are_asked_on() {
+    let (mut left, mut right) = saved_pair();
+    left.kb.set_cable(false);
+    run_both(&mut left, &mut right, 400);
+    left.set_keys(0, &[kc::TAB]);
+    left.ok(Request::Save);
+    right.set_keys(0, &[kc::Z]);
+    right.ok(Request::Save);
+    left.kb.set_cable(true);
+    run_both(&mut left, &mut right, 1500);
+    left.ok(Request::ResolveSplit { keep_this: true });
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(right.first_actions(0)[0], Action::key(kc::TAB));
+    assert_eq!(split_status(&mut right).sync, SplitSync::Same);
+    // The choice is spent: the next change moves the usual way.
+    right.set_keys(0, &[kc::N1]);
+    right.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(left.first_actions(0)[0], Action::key(kc::N1));
+}
+
+#[test]
+fn a_keymap_survives_a_noisy_cable() {
+    let (mut left, mut right) = saved_pair();
+    left.set_keys(0, &[kc::Z]);
+    left.ok(Request::Save);
+    for _ in 0..1500 {
+        run_both(&mut left, &mut right, 1);
+        right.kb.inject_link_bytes(&[0x4A, 0x07, 0x13]);
+    }
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(right.first_actions(0)[0], Action::key(kc::Z));
+}
+
+#[test]
+fn a_watching_configurator_sees_positions_of_the_whole_keyboard() {
+    let (mut left, mut right) = split_pair();
+    left.ok(Request::WatchKeys(true));
+    right.ok(Request::WatchKeys(true));
+    run_both(&mut left, &mut right, 10);
+    left.events();
+    right.events();
+    right.kb.set_key(1, true);
+    run_both(&mut left, &mut right, 10);
+    let key = Event::Key { pos: 4, pressed: true };
+    assert!(left.events().contains(&key));
+    assert!(right.events().contains(&key));
 }
 
 #[test]
@@ -538,7 +786,7 @@ fn garbage_on_the_cable_is_ignored() {
 #[test]
 fn split_link_is_refused_where_the_chip_cannot_do_it() {
     let mut rig = Rig::wires(&[]);
-    let hw = HardwareConfig { split: SplitConfig::Central(LinkConfig::Ble), ..hardware(MatrixConfig::None) };
+    let hw = HardwareConfig { split: SplitConfig::Half { link: LinkConfig::Ble, offset: 0 }, ..hardware(MatrixConfig::None) };
     rig.refused(Request::SetHardware(hw), Error::Unsupported);
 }
 

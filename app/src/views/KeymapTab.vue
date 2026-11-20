@@ -351,7 +351,7 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
 <style scoped>
 .keymap {
   display: grid;
-  grid-template-rows: minmax(0, 0.8fr) minmax(210px, 1fr);
+  grid-template-rows: minmax(0, 1.2fr) minmax(200px, 1fr);
   gap: 14px;
   height: 100%;
   min-height: 0;

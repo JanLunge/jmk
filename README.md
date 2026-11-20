@@ -68,10 +68,15 @@ cargo run -p jmk-uf2 -- rp2040 \
   free pin, as underglow (spread around the keyboard to begin with), one
   light per key, or both. The two groups have their own effect, colour and
   brightness, and a power limit caps the whole chain.
-- **Split keyboards** over a serial cable, with the keymap on the half that
-  plugs into the computer. With both halves on USB the app finds which pins
-  the cable is on by itself. Experimental: keyboards in one piece are the
-  supported kind for now.
+- **Split keyboards** over a serial cable. Plug both halves into the
+  computer and the app finds which pins the cable is on, then sets both up
+  from one page of key presses. Each half holds the whole keymap, so either
+  one can be the half that is plugged in, and each also works on its own;
+  with both plugged in, only one of them types. A saved change travels to
+  the other half through the cable, also when that half was away at the
+  time. If both halves were changed while apart, the app asks which keymap
+  to keep. Experimental: keyboards in one piece are the supported kind for
+  now.
 - **POG** (`app/`), the configurator, and the second version of POG: a
   setup wizard that finds the wiring from key presses, layout editor, keymap
   editor (pick from an ordinary keyboard or drag onto a key; a colour per

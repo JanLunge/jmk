@@ -104,8 +104,8 @@ function click(pad: Pad) {
 }
 
 .pcb {
-  fill: #14532d;
-  stroke: #0c3a1f;
+  fill: #2f3237;
+  stroke: #1f2125;
   stroke-width: 2;
 }
 

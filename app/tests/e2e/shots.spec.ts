@@ -1,6 +1,6 @@
 // Not assertions: walks through the app and saves pictures for review.
 import { test, type Page } from '@playwright/test'
-import { openDemo, runWizard } from './helpers'
+import { openDemo, pickDemo, plugInNew, runSplitWizard, special } from './helpers'
 
 test.use({ colorScheme: 'dark' })
 
@@ -9,20 +9,24 @@ const shot = (page: Page, name: string) => page.screenshot({ path: `${dir}/${nam
 
 test('walk through the macro pad setup', async ({ page }) => {
   await page.goto('/')
-  await page.waitForSelector('[data-test=demo-macropad]')
+  await page.waitForSelector('[data-test=demos]')
   await page.waitForTimeout(700)
   await shot(page, '01-home')
-  await page.click('[data-test=demo-macropad]')
+  await pickDemo(page, 'macropad')
+  await page.waitForTimeout(700)
+  await shot(page, '01b-bench')
+  await plugInNew(page)
+  await page.waitForSelector('[data-test=special]')
   await page.waitForTimeout(900)
   await shot(page, '02-keys')
-  await page.click('[data-test=open-board]')
+  await special(page, 'open-board')
   await page.waitForTimeout(500)
   await shot(page, '03-board')
   await page.click('[data-test=next]')
-  await page.click('[data-test=explain]')
+  await special(page, 'explain')
   await page.waitForTimeout(500)
   await shot(page, '04-explain')
-  await page.click('[data-test=explain]')
+  await page.click('[data-test=close-pins]')
   await page.waitForTimeout(900)
   const keys = page.locator('[data-test=virtual-board] .key')
   for (let i = 0; i < 6; i++) {
@@ -34,19 +38,17 @@ test('walk through the macro pad setup', async ({ page }) => {
   }
   await shot(page, '06-keys-done')
   await page.click('[data-test=next]')
-  await page.waitForTimeout(600)
-  await page.waitForTimeout(600)
-  await keys.nth(1).dispatchEvent('pointerdown')
-  await page.waitForTimeout(250)
-  await shot(page, '08-finish')
+  await page.waitForSelector('[data-test=rename]')
+  await page.waitForTimeout(800)
+  await shot(page, '08-editor')
 })
 
 test('editor tabs', async ({ page }) => {
   await openDemo(page, 'split')
-  await runWizard(page, { shape: 'central', finish: 'finish-partner' })
-  await runWizard(page, { shape: 'peripheral' })
-  await page.click('[data-test=other-half]')
-  await page.waitForTimeout(2500)
+  await page.waitForSelector('[data-test=found-other]', { timeout: 20_000 })
+  await shot(page, '09-split-keys')
+  await runSplitWizard(page)
+  await page.waitForTimeout(500)
   await page.locator('[data-test=keymap-board] [data-pos="2"]').dispatchEvent('pointerdown')
   await page.check('[data-test=hold-tap]')
   await page.waitForTimeout(400)

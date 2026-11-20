@@ -308,3 +308,80 @@ textarea {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The setup's centre stage. The first screen and the wizard lay it out
+   identically, so passing from one to the other moves nothing: the picture
+   stays where it is and only changes. */
+.setup-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: safe center;
+  padding: 28px clamp(24px, 5vw, 64px);
+  overflow: auto;
+}
+
+.setup-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  width: 100%;
+  max-width: 720px;
+}
+
+.setup-stage .words {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  min-height: 7.2rem;
+}
+
+.setup-stage h1 {
+  font-size: 2.1rem;
+}
+
+.setup-stage .lead {
+  font-size: 1.08rem;
+  max-width: 520px;
+}
+
+.setup-stage .below {
+  min-height: 40px;
+}
+
+.setup-bar {
+  flex: none;
+  /* The same on every screen of the setup, whatever stands in it. */
+  height: 72px;
+  padding: 14px 28px;
+  border-top: 1px solid var(--line);
+  gap: 10px;
+}
+
+.words-enter-active,
+.words-leave-active {
+  transition: opacity 0.2s var(--ease);
+}
+.words-enter-from,
+.words-leave-to {
+  opacity: 0;
+}
+
+/* Two screens of the same setup: one fades into the other in place. */
+.blend-enter-active,
+.blend-leave-active {
+  transition: opacity 0.3s var(--ease);
+}
+.blend-leave-active {
+  position: absolute;
+  inset: 0;
+}
+.blend-enter-from,
+.blend-leave-to {
+  opacity: 0;
+}

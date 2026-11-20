@@ -2,18 +2,33 @@ use embedded_storage::nor_flash::NorFlash;
 use heapless::Vec;
 use jmk_core::{Engine, Millis, Output};
 use jmk_proto::{
-    Contact, Error, Event, HardwareConfig, Info, LightingConfig, Mcu, Pin, Request, Response, SplitConfig, SplitStatus,
+    Contact, Error, Event, HardwareConfig, Info, LightingConfig, Mcu, Pin, Request, Response, SplitConfig, SplitStatus, SplitSync,
     ACTIONS_PER_CHUNK, LAYOUT_KEYS_PER_CHUNK, MACRO_STEPS_PER_CHUNK, MAX_CONTACTS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, PROTOCOL_VERSION,
 };
 
 use crate::config::{Config, MacroError};
 use crate::lights::Lights;
-use crate::link::{Link, Remote, Split};
+use crate::link::{Link, Own, Post, Remote, Split, CHUNK};
 use crate::pins::{is_usable, Pins, Pull};
 use crate::probe::Prober;
 use crate::scan::{Change, Scanner};
 use crate::storage::Storage;
+use crate::sync::{decide, Side, Verdict};
+
+/// How long two halves must say the same before a keymap moves, so that a
+/// configurator writing to both is not overtaken.
+const SETTLE_MS: Millis = 400;
+/// How long to wait for a piece of keymap before asking again.
+const RETRY_MS: Millis = 60;
+
+/// A keymap on its way from the other half.
+struct Fetch {
+    digest: u32,
+    /// Bytes received; they wait in the storage's scratch memory.
+    got: usize,
+    asked: Option<Millis>,
+}
 
 /// What the port tells the configurator about itself.
 #[derive(Clone, Copy)]
@@ -41,6 +56,23 @@ pub struct Device<'a, P, F> {
     scanner: Scanner,
     lights: Lights,
     split: Split,
+    /// A computer is listening to this board (see [`Device::set_host`]).
+    host: bool,
+    /// This half typed on the last pass; see [`Split::leading`].
+    leading: bool,
+    /// [`Config::shared_digest`], worked out again after a change.
+    digest: Option<u32>,
+    /// `digest` of what is saved in flash.
+    stored_digest: u32,
+    /// The user chose this half's keymap for both, or the other half's.
+    force: bool,
+    take: bool,
+    /// The two digests last compared and since when they have been these.
+    compared: Option<((u32, u32), Millis)>,
+    fetch: Option<Fetch>,
+    sync: SplitSync,
+    /// The digest and saved state `sync` was worked out for.
+    sync_of: Option<(u32, bool)>,
     now: Millis,
     mode: Mode,
     watch_keys: bool,
@@ -61,6 +93,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         }
         let mut scanner = Scanner::new();
         scanner.configure(&config.hardware, &mut pins);
+        let stored_digest = config.shared_digest();
         Self {
             board,
             pins,
@@ -70,6 +103,16 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             scanner,
             lights: Lights::new(),
             split: Split::new(),
+            host: true,
+            leading: true,
+            digest: Some(stored_digest),
+            stored_digest,
+            force: false,
+            take: false,
+            compared: None,
+            fetch: None,
+            sync: SplitSync::Unknown,
+            sync_of: None,
             now: 0,
             mode: Mode::Typing,
             watch_keys: false,
@@ -89,11 +132,20 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         &self.config.lighting
     }
 
+    /// Tell the device whether a computer is listening to it, e.g. whether
+    /// USB is configured. Of two connected halves the one with a computer
+    /// types for both. Assumed true until the port says otherwise.
+    pub fn set_host(&mut self, present: bool) {
+        self.host = present;
+    }
+
     /// Call every millisecond. Each call does a bounded amount of work.
     /// `link` leads to the other half; pass `&mut ()` if there is none.
     pub fn poll(&mut self, now: Millis, out: &mut impl Output, link: &mut impl Link, mut event: impl FnMut(Event)) {
         self.now = now;
-        let Self { scanner, config, engine, pins, watch_keys, reported_layers, split, lights, .. } = self;
+        let Self { scanner, config, engine, pins, watch_keys, reported_layers, split, lights, leading, digest, .. } = self;
+        let (stored_digest, force) = (self.stored_digest, self.force);
+        let (host, uid) = (self.host, self.board.uid);
         lights.tick(&config.lighting, now, pins);
         let prober = match &mut self.mode {
             Mode::Probing(prober) => prober,
@@ -101,6 +153,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             Mode::Typing => {
                 let config: &Config = config;
                 let hardware = &config.hardware;
+                let offset = hardware.split.offset();
                 let mut changes: Vec<Change, 16> = Vec::new();
                 // More than 16 changes in one millisecond wait for the next
                 // scan; by hand this is unreachable.
@@ -108,56 +161,74 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                     let _ = changes.push(change);
                 });
 
-                let mut key = |pos: u16, pressed: bool| {
-                    if pressed {
+                // While the other half types, this one only reports its keys.
+                let leads = *leading;
+                let mut key = |pos: usize, pressed: bool, own: bool| {
+                    if pos >= MAX_KEYS {
+                        return;
+                    }
+                    let pos = pos as u16;
+                    if pressed && (own || leads) {
                         lights.key_pressed(&config.lighting, pos);
                     }
-                    engine.key_event(config, out, pos, pressed, now);
-                    if *watch_keys {
+                    if leads {
+                        engine.key_event(config, out, pos, pressed, now);
+                    }
+                    if *watch_keys && (own || leads) {
                         event(Event::Key { pos, pressed });
                     }
                 };
-                if let SplitConfig::Peripheral(_) = hardware.split {
-                    // This half only reports; the central half has the keymap.
-                    for change in changes {
-                        match change {
-                            Change::Key { pos, pressed } => {
-                                if pressed {
-                                    lights.key_pressed(&config.lighting, pos);
-                                }
-                                split.set_local(pos, pressed);
-                                if *watch_keys {
-                                    event(Event::Key { pos, pressed });
-                                }
-                            }
-                            Change::Tap(pos) => split.send_tap(link, pos),
-                        }
-                    }
-                    split.peripheral_tick(now, link, hardware.local_positions());
-                    return;
-                }
+                let is_half = hardware.split != SplitConfig::None;
+                let mut post = Post::default();
                 for change in changes {
                     match change {
-                        Change::Key { pos, pressed } => key(pos, pressed),
+                        Change::Key { pos, pressed } => {
+                            split.set_local(pos, pressed);
+                            key(offset + pos as usize, pressed, true);
+                        }
                         Change::Tap(pos) => {
-                            key(pos, true);
-                            key(pos, false);
+                            if is_half && !leads {
+                                split.send_tap(link, pos);
+                            }
+                            key(offset + pos as usize, true, true);
+                            key(offset + pos as usize, false, true);
                         }
                     }
                 }
-                if let SplitConfig::Central(_) = hardware.split {
+                if is_half {
                     let local = hardware.local_positions();
-                    split.central_tick(now, link, |remote| {
-                        let global = |pos: u8| (local + pos as usize) as u16;
-                        match remote {
-                            Remote::Key { pos, pressed } if local + (pos as usize) < MAX_KEYS => key(global(pos), pressed),
-                            Remote::Tap(pos) if local + (pos as usize) < MAX_KEYS => {
-                                key(global(pos), true);
-                                key(global(pos), false);
-                            }
-                            _ => {}
+                    // The first half's positions come first in the keymap.
+                    let first = offset == 0;
+                    let theirs = if first { local } else { 0 };
+                    let now_digest = *digest.get_or_insert_with(|| config.shared_digest());
+                    let about = Side {
+                        // Without a computer nobody can save what is unsaved
+                        // here: this half counts with what it has in flash.
+                        digest: if host { now_digest } else { stored_digest },
+                        base: config.base,
+                        revision: config.revision,
+                        clean: !host || now_digest == stored_digest,
+                        force,
+                    };
+                    let own = Own { host, first, positions: local, uid, about };
+                    post = split.tick(now, link, own, |remote| match remote {
+                        Remote::Key { pos, pressed } => key(theirs + pos as usize, pressed, false),
+                        Remote::Tap(pos) => {
+                            key(theirs + pos as usize, true, false);
+                            key(theirs + pos as usize, false, false);
                         }
                     });
+                    let now_leads = split.leading(now, host, first);
+                    if now_leads != leads {
+                        // Hand over cleanly: nothing stays held on the half
+                        // that stops, and the one that starts hears afresh
+                        // what the other holds.
+                        engine.reset(out);
+                        split.forget_remote();
+                        *leading = now_leads;
+                    }
+                } else {
+                    *leading = true;
                 }
                 if engine.next_deadline(config).is_some_and(|deadline| now >= deadline) {
                     engine.tick(config, out, now);
@@ -175,6 +246,9 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                         event(Event::Layers(layers));
                     }
                 }
+                if is_half {
+                    self.sync_keymap(now, out, link, post);
+                }
                 return;
             }
         };
@@ -184,6 +258,118 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 event(Event::Probe(contacts));
             }
         }
+    }
+
+    /// Bring the two halves' keymaps together; see [`crate::sync`].
+    fn sync_keymap(&mut self, now: Millis, out: &mut impl Output, link: &mut impl Link, post: Post) {
+        let live = *self.digest.get_or_insert_with(|| self.config.shared_digest());
+        let saved = live == self.stored_digest;
+        // A half that no computer listens to counts with what it has saved.
+        // Changes made on it and never saved give way once the other half
+        // needs the saved keymap or brings a newer one.
+        let (digest, clean) = if self.host { (live, saved) } else { (self.stored_digest, true) };
+        if let Some((wanted, offset)) = post.fetch {
+            if !saved && clean && wanted == digest {
+                self.engine.reset(out);
+                self.storage.load(self.config);
+                self.digest = None;
+            } else if clean && wanted == digest {
+                let mut data = [0u8; CHUNK];
+                let (len, total) = self.config.shared_chunk(offset as usize, &mut data);
+                self.split.send_chunk(link, offset, total as u16, &data[..len]);
+            }
+        }
+        let Some(peer) = self.split.peer(now) else {
+            self.compared = None;
+            self.fetch = None;
+            self.sync = SplitSync::Unknown;
+            return;
+        };
+        let me = Side { digest, base: self.config.base, revision: self.config.revision, clean, force: self.force };
+        self.sync_of = Some((live, saved));
+        let pair = (digest, peer.digest);
+        let since = match self.compared {
+            Some((compared, since)) if compared == pair => since,
+            _ => now,
+        };
+        self.compared = Some((pair, since));
+        let settled = now - since >= SETTLE_MS && clean && peer.clean;
+        let mut verdict = decide(&me, &peer);
+        if self.take && verdict != Verdict::Same {
+            verdict = Verdict::Fetch;
+        }
+        if verdict != Verdict::Fetch {
+            self.fetch = None;
+        }
+        self.sync = match verdict {
+            Verdict::Same => {
+                self.force = false;
+                self.take = false;
+                if settled {
+                    // Remember the agreement, so a later change on one half
+                    // is known to be the newer keymap.
+                    let revision = me.revision.max(peer.revision);
+                    if saved && (self.config.base != Some(digest) || self.config.revision != revision) {
+                        self.config.base = Some(digest);
+                        self.config.revision = revision;
+                        let _ = self.storage.save(self.config);
+                    }
+                }
+                SplitSync::Same
+            }
+            Verdict::Fetch if settled => {
+                self.fetch_from(now, out, link, peer, post);
+                SplitSync::Behind
+            }
+            Verdict::Offer if settled => SplitSync::Ahead,
+            Verdict::Conflict if settled => SplitSync::Conflict,
+            _ => SplitSync::Unknown,
+        };
+    }
+
+    /// Take the next piece of the other half's keymap, and the keymap into
+    /// use once it is complete.
+    fn fetch_from(&mut self, now: Millis, out: &mut impl Output, link: &mut impl Link, peer: Side, post: Post) {
+        let fetch = match &mut self.fetch {
+            Some(fetch) if fetch.digest == peer.digest => fetch,
+            _ => self.fetch.insert(Fetch { digest: peer.digest, got: 0, asked: None }),
+        };
+        let scratch = self.storage.scratch();
+        let mut total = None;
+        if let Some(chunk) = post.chunk.filter(|chunk| chunk.offset as usize == fetch.got) {
+            let (len, whole) = (chunk.len as usize, chunk.total as usize);
+            if whole > scratch.len() || fetch.got + len > whole || len == 0 {
+                self.fetch = None;
+                return;
+            }
+            scratch[fetch.got..fetch.got + len].copy_from_slice(&chunk.data[..len]);
+            fetch.got += len;
+            fetch.asked = None;
+            total = Some(whole);
+        }
+        if total != Some(fetch.got) {
+            if fetch.asked.is_none_or(|at| now - at >= RETRY_MS) {
+                fetch.asked = Some(now);
+                let (digest, offset) = (fetch.digest, fetch.got as u16);
+                self.split.send_fetch(link, digest, offset);
+            }
+            return;
+        }
+        let Some(Fetch { digest, got, .. }) = self.fetch.take() else { return };
+        self.engine.reset(out);
+        let taken = self.config.set_shared(&self.storage.scratch()[..got]).is_some();
+        if taken && self.config.shared_digest() == digest {
+            self.config.revision = peer.revision;
+            self.config.base = Some(digest);
+            if self.storage.save(self.config).is_ok() {
+                self.stored_digest = digest;
+            }
+        } else {
+            // Damaged on the way: back to what was saved, and ask again.
+            self.storage.load(self.config);
+        }
+        self.digest = None;
+        self.take = false;
     }
 
     /// Pending reboot request, if any: `Some(true)` for the bootloader.
@@ -199,6 +385,8 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     }
 
     fn try_handle(&mut self, request: Request, out: &mut impl Output) -> Result<Response, Error> {
+        // Any request may change the keymap; work its digest out again.
+        self.digest = None;
         match request {
             Request::GetInfo => Ok(Response::Info(Info {
                 protocol: PROTOCOL_VERSION,
@@ -293,12 +481,56 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 layout.extend_from_slice(&keys).map_err(|_| Error::TooManyKeys)?;
                 Ok(Response::Ok)
             }
-            Request::GetSplitStatus => Ok(Response::SplitStatus(SplitStatus {
-                connected: self.split.connected(self.now),
-                remote_positions: self.split.remote_positions() as u16,
-            })),
+            Request::GetSplitStatus => {
+                let digest = *self.digest.get_or_insert_with(|| self.config.shared_digest());
+                Ok(Response::SplitStatus(SplitStatus {
+                    connected: self.split.connected(self.now),
+                    remote_positions: self.split.remote_positions() as u16,
+                    leading: self.leading,
+                    // A change made since the last pass has not been compared yet.
+                    sync: if self.sync_of == Some((digest, digest == self.stored_digest)) { self.sync } else { SplitSync::Unknown },
+                    peer_uid: self.split.peer_uid(),
+                    revision: self.config.revision,
+                    peer_revision: self.split.peer(self.now).map_or(0, |peer| peer.revision),
+                    digest,
+                    base: self.config.base,
+                }))
+            }
             Request::Save => {
-                self.storage.save(self.config).map_err(|_| Error::Storage)?;
+                // A keymap on its way in waits in the memory a save uses.
+                self.fetch = None;
+                let digest = self.config.shared_digest();
+                let changed = digest != self.stored_digest;
+                if changed {
+                    self.config.revision += 1;
+                }
+                if self.storage.save(self.config).is_err() {
+                    self.config.revision -= changed as u32;
+                    return Err(Error::Storage);
+                }
+                self.stored_digest = digest;
+                Ok(Response::Ok)
+            }
+            Request::ResolveSplit { keep_this } => {
+                if self.config.hardware.split == SplitConfig::None {
+                    return Err(Error::Unsupported);
+                }
+                self.force = keep_this;
+                self.take = !keep_this;
+                Ok(Response::Ok)
+            }
+            Request::SplitAgreed { digest, revision } => {
+                let mine = self.config.shared_digest();
+                if mine != digest {
+                    return Err(Error::OutOfRange);
+                }
+                if self.config.base != Some(digest) || self.config.revision < revision {
+                    self.config.base = Some(digest);
+                    self.config.revision = self.config.revision.max(revision);
+                    if mine == self.stored_digest {
+                        self.storage.save(self.config).map_err(|_| Error::Storage)?;
+                    }
+                }
                 Ok(Response::Ok)
             }
             Request::FactoryReset => {
@@ -308,6 +540,8 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 self.config.reset();
                 self.restart_scanning(out);
                 self.storage.erase().map_err(|_| Error::Storage)?;
+                self.stored_digest = self.config.shared_digest();
+                (self.force, self.take) = (false, false);
                 Ok(Response::Ok)
             }
             Request::WatchKeys(on) => {
@@ -406,12 +640,16 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     fn restart_scanning(&mut self, out: &mut impl Output) {
         self.engine.reset(out);
         self.split = Split::new();
+        self.leading = true;
+        self.compared = None;
+        self.fetch = None;
+        self.sync = SplitSync::Unknown;
         self.scanner.configure(&self.config.hardware, &mut self.pins);
     }
 }
 
 fn validate(hardware: &HardwareConfig, lighting: &LightingConfig, pins: &impl Pins) -> Result<(), Error> {
-    if hardware.local_positions() > MAX_KEYS {
+    if hardware.split.offset() + hardware.local_positions() > MAX_KEYS {
         return Err(Error::TooManyKeys);
     }
     if hardware.split.link().is_some_and(|link| !pins.supports_link(&link)) {

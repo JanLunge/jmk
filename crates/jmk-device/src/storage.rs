@@ -79,6 +79,11 @@ impl<F: NorFlash> Storage<F> {
         Ok(())
     }
 
+    /// Memory to work in between saves. A save overwrites it.
+    pub(crate) fn scratch(&mut self) -> &mut [u8] {
+        &mut self.buf[..]
+    }
+
     pub fn erase(&mut self) -> Result<(), StorageError> {
         self.current = None;
         self.flash.erase(self.base, self.base + STORAGE_SIZE).map_err(|_| StorageError)
@@ -120,6 +125,8 @@ fn encode(config: &Config, buf: &mut [u8]) -> Option<usize> {
     // Added later, so it comes last: older saves simply end before it.
     put(buf, &mut used, &config.lighting)?;
     put(buf, &mut used, &config.layer_colors)?;
+    put(buf, &mut used, &config.revision)?;
+    put(buf, &mut used, &config.base)?;
     Some(used)
 }
 
@@ -147,6 +154,8 @@ fn decode(mut bytes: &[u8], config: &mut Config) -> Option<()> {
     }
     config.lighting = if bytes.is_empty() { LightingConfig::NONE } else { take(&mut bytes)? };
     config.layer_colors = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
+    config.revision = if bytes.is_empty() { 0 } else { take(&mut bytes)? };
+    config.base = if bytes.is_empty() { None } else { take(&mut bytes)? };
     config.hardware = hardware;
     config.layer_count = layer_count;
     config.profiles = profiles;

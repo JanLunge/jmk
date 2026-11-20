@@ -13,6 +13,7 @@ mod pins;
 mod probe;
 mod scan;
 mod storage;
+mod sync;
 
 pub use config::Config;
 pub use device::{Board, Device};

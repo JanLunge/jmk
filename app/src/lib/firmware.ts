@@ -1,7 +1,8 @@
 // Getting JMK firmware onto boards: new ones waiting in update mode, and
 // keyboards that already run an older JMK.
 
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { installVirtual, virtualDrives, type Bench } from './app'
 import { desktop, type BootDrive } from './desktop'
 import { registryMcu } from './registry'
 import type { Session } from './session'
@@ -28,6 +29,31 @@ export function watchBootDrives(): void {
   }
   look()
   setInterval(look, 1000)
+}
+
+/** A board the computer sees in update mode: a real one, or one on the virtual workbench. */
+export interface Arrival {
+  key: string
+  model: string
+  drive?: BootDrive
+  virtual?: { bench: Bench; index: number }
+  /** How far the firmware copy has got, 0 to 1, where that is known. */
+  progress?: number
+}
+
+export const arrivals = computed<Arrival[]>(() => [
+  ...bootDrives.value.map((drive) => ({ key: drive.path, model: drive.model, drive })),
+  ...virtualDrives.value.map(({ bench, index, half }) => ({
+    key: `${bench.id}:${index}`,
+    model: 'Virtual controller',
+    virtual: { bench, index },
+    progress: half.installing,
+  })),
+])
+
+/** Put JMK on a board that waits in update mode. */
+export function installArrival(arrival: Arrival): Promise<void> {
+  return arrival.virtual ? installVirtual(arrival.virtual.bench, arrival.virtual.index) : installOnBoard(arrival.drive)
 }
 
 const plain = (error: unknown) =>

@@ -48,7 +48,8 @@ export interface EncoderConfig {
 }
 
 export type LinkConfig = { Uart: { tx: Pin; rx: Pin } } | 'Ble'
-export type SplitConfig = 'None' | { Central: LinkConfig } | { Peripheral: LinkConfig }
+/** `offset` is where this half's positions start in the keymap: 0 for the first half. */
+export type SplitConfig = 'None' | { Half: { link: LinkConfig; offset: number } }
 
 export interface HardwareConfig {
   matrix: MatrixConfig
@@ -117,7 +118,26 @@ export interface Info {
 export interface SplitStatus {
   connected: boolean
   remote_positions: number
+  /** This half is the one typing right now. */
+  leading: boolean
+  /** How this half's keymap compares with the other half's, while connected. */
+  sync: SplitSync
+  /** The other half's chip; all zeros until it has said. */
+  peer_uid: number[]
+  /** How often the keymap was saved with a change in it. */
+  revision: number
+  peer_revision: number
+  /** Equal on two halves exactly when they hold the same keymap. */
+  digest: number
+  /** `digest` when the halves last agreed, if they ever did. */
+  base: number | null
 }
+
+/**
+ * Behind: this half is fetching the other's newer keymap. Ahead: the other
+ * half is fetching this one's. Conflict: both changed while apart.
+ */
+export type SplitSync = 'Unknown' | 'Same' | 'Behind' | 'Ahead' | 'Conflict'
 
 export type Contact = { Ground: Pin } | { Supply: Pin } | { Link: { driven: Pin; sensed: Pin } }
 
@@ -155,6 +175,8 @@ export type Request =
   | 'GetLayerColors'
   /** A colour number per layer (see layers.ts); 0 for none chosen. */
   | { SetLayerColors: number[] }
+  | { ResolveSplit: { keep_this: boolean } }
+  | { SplitAgreed: { digest: number; revision: number } }
 
 export type DeviceError =
   | 'Malformed'

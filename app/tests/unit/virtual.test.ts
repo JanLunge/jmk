@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { KnobFinder } from '../../src/lib/collector'
 import { planAddedKey } from '../../src/lib/addkey'
-import { addSession, app } from '../../src/lib/app'
+import { addSession, app, reconcile } from '../../src/lib/app'
 import { chooseLink, findWires } from '../../src/lib/cable'
 import { signatureOf } from '../../src/lib/infer'
 import { DEMOS } from '../../src/lib/demos'
@@ -12,7 +12,7 @@ import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../.
 import { keymapPoster } from '../../src/lib/poster'
 import { layerHex } from '../../src/lib/layers'
 import { gridLayout } from '../../src/lib/layout'
-import { addKey, adoptRemoteKeys, knobPositions, needsRestart, restart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterAction, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { addKey, alignHalves, knobPositions, needsRestart, restart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterAction, starterLayout, setLayout, type Session } from '../../src/lib/session'
 import { advanceVirtualTime, VirtualTransport } from '../../src/lib/transport'
 import { loadBridge } from '../../src/lib/wasm'
 
@@ -259,7 +259,7 @@ describe('lights', () => {
 })
 
 describe('virtual split keyboard', () => {
-  it('adopts the other half and types its keys', async () => {
+  it('lets either half type for both and keeps their keymaps the same', async () => {
     const demo = DEMOS.find((d) => d.id === 'split')!
     const transports = demo.halves.map((half, i) => new VirtualTransport(half.label, half.wiring, 200 + i))
     VirtualTransport.connect(transports[0], transports[1])
@@ -267,23 +267,87 @@ describe('virtual split keyboard', () => {
     const matrix = { Matrix: { rows: [2, 3, 4, 5], cols: [6, 7, 8, 9, 10], diodes: 'Col2Row' as const } }
     const base = { matrix, reserved_pins: [], debounce_ms: 5, encoders: [] }
     const link = { Uart: { tx: 0, rx: 1 } }
-    await during(setHardware(left, { ...base, split: { Central: link } }))
-    await during(setLayout(left, starterLayout(left.hardware)))
+    await during(setHardware(left, { ...base, split: { Half: { link, offset: 0 } } }))
+    await during(setHardware(right, { ...base, split: { Half: { link, offset: 20 } } }))
+    const half = starterLayout(left.hardware)
+    await during(setLayout(left, [...half, ...half]))
     await during(setAction(left, 0, 0, starterAction(0)))
-    await during(setHardware(right, { ...base, split: { Peripheral: link } }))
-    await during(setLayout(right, starterLayout(right.hardware)))
+    await during(setAction(left, 0, 20, starterAction(1)))
 
-    advanceVirtualTime(200)
+    advanceVirtualTime(1200)
     left.split = await during(left.client.splitStatus())
-    expect(left.split).toEqual({ connected: true, remote_positions: 20 })
-    expect(await during(adoptRemoteKeys(left, right))).toBe(true)
-    expect(left.layout).toHaveLength(40)
+    right.split = await during(right.client.splitStatus())
+    expect(left.split).toMatchObject({ connected: true, remote_positions: 20, leading: true, sync: 'Unknown' })
+    expect(right.split).toMatchObject({ connected: true, leading: false, peer_uid: left.info.uid })
 
+    // The second half is given what the first holds.
+    expect(await during(alignHalves(left, right))).toBe(true)
+    expect(right.layout).toHaveLength(40)
+    expect(right.layers[0][20]).toEqual(starterAction(1))
+    advanceVirtualTime(1200)
+    expect((await during(left.client.splitStatus())).sync).toBe('Same')
+    expect(await during(alignHalves(left, right))).toBe(false)
+
+    const lastKeys = (session: typeof left) => session.typed.flatMap((e) => ('Keyboard' in e ? [e.Keyboard.keys] : [])).at(-1)
     transports[1].setKey(0, true)
     advanceVirtualTime(30)
-    const lastKeys = left.typed.flatMap((e) => ('Keyboard' in e ? [e.Keyboard.keys] : [])).at(-1)
-    expect(lastKeys).toEqual([0x05]) // "b": the second letter handed out
+    expect(lastKeys(left)).toEqual([0x05]) // "b": the first key of the second half
     expect([...left.pressed]).toEqual([20])
+    expect([...right.pressed]).toEqual([20])
+    expect(right.typed).toHaveLength(0)
+    transports[1].setKey(0, false)
+    advanceVirtualTime(30)
+
+    // With only the second half plugged into the computer, it types for both.
+    transports[0].setUsb(false)
+    advanceVirtualTime(200)
+    transports[0].setKey(0, true)
+    advanceVirtualTime(30)
+    expect(lastKeys(right)).toEqual([0x04])
+
+    // A change made on one half reaches the other while both are open.
+    left.client.mirror = right.client
+    await during(setAction(left, 0, 1, starterAction(5)))
+    expect((await during(right.client.actions(0, 2)))[1]).toEqual(starterAction(5))
+    left.client.mirror = undefined
+
+    // Saved on one half, a change travels to the other through their cable.
+    transports[0].setUsb(true)
+    await during(save(left))
+    await during(save(right))
+    advanceVirtualTime(1500)
+    await during(setAction(left, 0, 2, starterAction(7)))
+    await during(save(left))
+    advanceVirtualTime(2000)
+    expect((await during(right.client.actions(0, 3)))[2]).toEqual(starterAction(7))
+    const [onLeft, onRight] = [await during(left.client.splitStatus()), await during(right.client.splitStatus())]
+    expect(onLeft.sync).toBe('Same')
+    expect([onRight.revision, onRight.digest]).toEqual([onLeft.revision, onLeft.digest])
+
+    // Without the cable, both on USB, the app brings the older half up to date.
+    left.setup = right.setup = false
+    transports[0].setCable(false)
+    advanceVirtualTime(500)
+    await during(setAction(right, 0, 3, starterAction(9)))
+    await during(save(right))
+    expect(await during(reconcile(left, right))).toBe(left)
+    expect(left.layers[0][3]).toEqual(starterAction(9))
+    expect(await during(reconcile(left, right))).toBeUndefined()
+
+    // Both changed while apart: that is the user's call.
+    await during(setAction(left, 0, 4, starterAction(1)))
+    await during(save(left))
+    await during(setAction(right, 0, 4, starterAction(2)))
+    await during(save(right))
+    expect(await during(reconcile(left, right))).toBe('conflict')
+    // Joined again they wait too, until one is chosen.
+    transports[0].setCable(true)
+    advanceVirtualTime(1500)
+    expect((await during(left.client.splitStatus())).sync).toBe('Conflict')
+    await during(left.client.resolveSplit(true))
+    advanceVirtualTime(2000)
+    expect((await during(right.client.actions(0, 5)))[4]).toEqual(starterAction(1))
+    expect((await during(right.client.splitStatus())).sync).toBe('Same')
   })
 })
 

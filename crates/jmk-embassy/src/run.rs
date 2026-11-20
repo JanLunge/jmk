@@ -17,13 +17,15 @@ use crate::queue::ConfigQueues;
 /// port resets the chip if the loop stops and a hang never needs a hand on
 /// the board. Saving to flash blocks one pass for a few hundred
 /// milliseconds; the timeout must allow for that. `reboot` gets true for the
-/// bootloader.
+/// bootloader. `host` says whether a computer is listening right now; of two
+/// connected halves the one with a computer types.
 pub async fn run<P: Pins, F: NorFlash>(
     device: &mut Device<'_, P, F>,
     mut out: impl Output,
     mut link: impl Link,
     config: &ConfigQueues,
     mut feed_watchdog: impl FnMut(),
+    host: impl Fn() -> bool,
     reboot: fn(bool) -> !,
 ) -> ! {
     let send = |message: &DeviceMessage| {
@@ -44,6 +46,7 @@ pub async fn run<P: Pins, F: NorFlash>(
         match select(ticker.next(), config.from_host.receive()).await {
             Either::First(()) => {
                 let now = Instant::now();
+                device.set_host(host());
                 device.poll(now.as_millis(), &mut out, &mut link, |event| send(&DeviceMessage::Event(event)));
                 if let Some((at, bootloader)) = reboot_at {
                     if now >= at {

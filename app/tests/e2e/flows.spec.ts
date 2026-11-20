@@ -1,8 +1,5 @@
-import { expect, test } from '@playwright/test'
-import { assign, chord, hold, openDemo, openShape, release, runWizard, tap, typed, virtualKeys } from './helpers'
-
-const dockShows = (page: import('@playwright/test').Page, label: string) =>
-  expect(page.locator('[data-test=virtual-board] strong')).toHaveText(label)
+import { expect, test, type Page } from '@playwright/test'
+import { assign, chord, hold, openDemo, openShape, pickDemo, plugInNew, release, runSplitWizard, runWizard, showBench, tap, typed, virtualKeys } from './helpers'
 
 test('macro pad: setup finds the matrix, keys type, edits are live and survive a restart', async ({ page }) => {
   await openDemo(page, 'macropad')
@@ -94,28 +91,96 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
   await expect(typed(page)).toHaveText(before! + before![1])
 })
 
-test('split keyboard: both halves set up, keys of the other half arrive over the cable', async ({ page }) => {
+const splitStatus = (page: Page) => page.locator('[data-test=split-status]')
+const toast = (page: Page, text: string) => page.locator('.toast', { hasText: text })
+
+test('split keyboard: set up together, either half types, the keymap follows through the cable', async ({ page }) => {
   await openDemo(page, 'split')
-  await runWizard(page, { shape: 'central', finish: 'finish-partner' })
-  await runWizard(page, { shape: 'peripheral' })
-  await expect(page.locator('[data-test=peripheral-tester]')).toBeVisible()
+  await runSplitWizard(page)
+  // Two halves, one keyboard: one entry at the side, one keymap.
+  await expect(page.locator('[data-test=rail-keyboard]')).toHaveCount(1)
+  await expect(page.locator('[data-test=keymap-board] .key')).toHaveCount(34)
+  // The setup ends in the editor, which says what comes next and where the name goes.
+  await expect(page.locator('[data-test=coach]')).toContainText('It types')
+  // Typed at a person's pace: the header redraws meanwhile and must leave the field alone.
+  await page.click('[data-test=rename]')
+  await page.keyboard.type('Sweep', { delay: 400 })
+  await expect(page.locator('[data-test=rename]')).toHaveValue('Sweep')
+  await page.keyboard.press('Enter')
+  await expect(page.locator('[data-test=rail-keyboard]')).toHaveAttribute('title', 'Sweep')
+  await page.click('[data-test=split-status]')
+  await expect(page.locator('[data-test=split-details]')).toContainText('revision 1')
+  await page.click('[data-test=split-details]')
+  await expect(splitStatus(page)).toHaveAttribute('title', /the left half types for both/)
 
-  // Back on the main half the other half's keys appear by themselves.
-  await page.click('[data-test=other-half]')
-  await expect(page.locator('[data-test=split-status]')).toContainText('halves connected')
-  await expect(page.locator('[data-test=keymap-board] .key')).toHaveCount(34, { timeout: 8000 })
-
-  await tap(page, 0)
-  await page.click('[data-test=other-half]')
-  await dockShows(page, 'Right half')
-  await tap(page, 0)
-  await page.click('[data-test=other-half]')
-  await dockShows(page, 'Left half')
+  // Both halves are plugged into the computer: only one types, for both.
   // Left key 0 is "a"; the right half's first key continues the alphabet after 17 left keys.
+  await tap(page, 0)
+  await tap(page, 17)
   await expect(typed(page)).toHaveText('ar')
 
+  // With only the right half left on USB, it types for both, and the keyboard stays open.
+  await page.click('[data-test=usb-0]')
+  await expect(splitStatus(page)).toHaveAttribute('title', /right half on USB · left half through the cable/, { timeout: 8000 })
+  await tap(page, 0)
+  await tap(page, 17)
+  await expect(typed(page)).toHaveText('arar')
+
+  // A change saved there reaches the left half through the cable.
+  await assign(page, 1, 29) // Z
+  // The setup's own "saved" note is gone by now, so the next one is this save's.
+  await expect(toast(page, 'Saved to both halves')).toHaveCount(0)
+  await page.click('[data-test=save]')
+  await expect(toast(page, 'Saved to both halves')).toBeVisible({ timeout: 8000 })
+  await expect(splitStatus(page)).toHaveAttribute('data-revision', '2')
+
+  // Without the cable each half is a keyboard of its own. The left half
+  // lost its power in between and still has the new key.
   await page.click('[data-test=cable]')
-  await expect(page.locator('[data-test=split-status]')).toContainText('not heard', { timeout: 6000 })
+  await page.click('[data-test=usb-0]')
+  await expect(splitStatus(page)).toHaveAttribute('title', /halves apart/, { timeout: 8000 })
+  await tap(page, 1)
+  await tap(page, 18)
+  await expect(typed(page)).toHaveText('ararzs')
+})
+
+test('split keyboard: a half that was away catches up; two changed halves ask which to keep', async ({ page }) => {
+  await openDemo(page, 'split')
+  await runSplitWizard(page)
+
+  // The right half is put away; the keymap changes without it.
+  await page.click('[data-test=cable]')
+  await page.click('[data-test=usb-1]')
+  await expect(splitStatus(page)).toHaveAttribute('title', /the right half is away/, { timeout: 8000 })
+  await assign(page, 1, 29) // Z
+  await page.click('[data-test=save]')
+  await expect(toast(page, 'The right half gets it when it is connected')).toBeVisible()
+  // Joined again by the cable alone, it fetches the keymap without being asked.
+  await page.click('[data-test=cable]')
+  await expect(toast(page, 'The right half caught up')).toBeVisible({ timeout: 10_000 })
+
+  // Now each half is changed while the other is away.
+  await page.click('[data-test=cable]')
+  await assign(page, 2, 27) // X on the left
+  await page.click('[data-test=save]')
+  await expect(toast(page, 'gets it when it is connected')).toBeVisible()
+  await page.click('[data-test=usb-0]')
+  await page.click('[data-test=usb-1]')
+  await expect(splitStatus(page)).toHaveAttribute('title', /the left half is away/, { timeout: 8000 })
+  await assign(page, 2, 28) // Y on the right
+  await page.click('[data-test=save]')
+  await expect(page.locator('[data-test=save]')).toHaveText('Saved')
+  // Both plugged in: nothing is overwritten until the user says which one counts.
+  await page.click('[data-test=usb-0]')
+  await expect(page.locator('[data-test=halves-conflict]')).toBeVisible({ timeout: 8000 })
+  await tap(page, 2)
+  await tap(page, 2)
+  await expect(typed(page)).toHaveText('xx')
+  await page.click('[data-test=keep-this]')
+  await expect(toast(page, 'Both halves hold the same keymap now')).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('[data-test=halves-conflict]')).toHaveCount(0)
+  await tap(page, 2)
+  await expect(typed(page)).toHaveText('xxy')
 })
 
 test('layout editor: drag, type exact values, import from keyboard-layout-editor', async ({ page }) => {
@@ -183,7 +248,7 @@ test('forty keys: a full hand-wired matrix is found', async ({ page }) => {
   await runWizard(page)
   await page.click('[data-test=nav-hardware]')
   await expect(page.locator('[data-test=wiring-summary]')).toContainText('rows GP2, GP3, GP4, GP5; columns GP6')
-  await expect(page.locator('.bar .chip').first()).toHaveText('40 keys')
+  await expect(page.locator('[data-test=key-count]')).toHaveText('40 keys')
 })
 
 test('typing on the computer keyboard fills the keymap key by key', async ({ page }) => {
@@ -217,8 +282,7 @@ test('a key skipped during setup is added afterwards', async ({ page }) => {
   for (let key = 0; key < 5; key++) await tap(page, key)
   await expect(page.locator('[data-test=count]')).toContainText('5 keys')
   await page.click('[data-test=next]')
-  await page.click('[data-test=finish]')
-  await expect(page.locator('.bar .chip').first()).toHaveText('5 keys')
+  await expect(page.locator('[data-test=key-count]')).toHaveText('5 keys')
 
   await page.click('[data-test=nav-hardware]')
   await page.click('[data-test=add-key]')
@@ -227,7 +291,7 @@ test('a key skipped during setup is added afterwards', async ({ page }) => {
   await tap(page, 0) // already known
   await expect(page.locator('[data-test=add-key-problem]')).toContainText('already part')
   await tap(page, 5)
-  await expect(page.locator('.bar .chip').first()).toHaveText('6 keys')
+  await expect(page.locator('[data-test=key-count]')).toHaveText('6 keys')
   await expect(page.locator('[data-test=add-key]')).toBeVisible()
   await tap(page, 5)
   await tap(page, 0)
@@ -322,41 +386,78 @@ test('layout editor: a rectangle selects several keys to move and resize togethe
   await expect(canvas.locator('.key.selected')).toHaveCount(0)
 })
 
-test('split keyboard: the cable between the halves is found without asking', async ({ page }) => {
-  await openDemo(page, 'split')
-  await expect(page.locator('[data-test=cable-searching]')).toBeVisible()
+test('split keyboard: new boards are found, flashed and joined without questions', async ({ page }) => {
+  await page.goto('/')
+  await pickDemo(page, 'split')
+  // Two new controllers on the desk. Plugged in, they are offered firmware together.
+  await page.click('[data-test=usb-0]')
+  await expect(page.locator('[data-test=found-boot]')).toContainText('A board without firmware is connected.')
+  await page.click('[data-test=usb-1]')
+  await expect(page.locator('[data-test=found-boot]')).toContainText('Two boards without firmware are connected.')
+  await expect(page.locator('[data-test=setup-guide]')).toContainText('Find the cable')
+  await page.click('[data-test=install-found]')
+  // The cable between them is looked for without asking.
+  await expect(page.locator('[data-test=split-searching]')).toBeVisible()
   await expect(page.locator('[data-test=next]')).toBeDisabled()
-  await expect(page.locator('[data-test=cable-found]')).toContainText('sends on GP0 and receives on GP1', { timeout: 15_000 })
-  // The pin list is there for those who want it, with the found pair chosen.
-  await page.click('[data-test=cable-by-hand]')
-  await expect(page.locator('[data-test=link] option:checked')).toContainText('sends on GP0, receives on GP1')
-  // One piece needs no cable.
-  await page.check('[data-test=shape-single]')
-  await expect(page.locator('[data-test=cable-found]')).toHaveCount(0)
+  // Found, it is shown for a moment before the keys take over.
+  await expect(page.locator('[data-test=split-searching] [data-test=picture-cable-found]')).toHaveAttribute('data-found', 'true', { timeout: 20_000 })
+  const heading = page.locator('[data-test=keys-heading]')
+  await expect(heading).toHaveText('Press any key under your left hand.', { timeout: 20_000 })
+  await expect(page.locator('[data-test=rail-keyboard]')).toHaveCount(1)
+
+  // The half pressed first is the left one, which can be put right and taken back.
+  await page.waitForTimeout(750)
+  await tap(page, 17)
+  await expect(heading).toHaveText('Press every key once.')
+  await expect(page.locator('[data-test=found-1]')).toContainText('1 keys')
+  await page.click('[data-test=swap-sides]')
+  await expect(page.locator('[data-test=found-1]')).toContainText('no key pressed')
+  await page.click('[data-test=undo-key]')
+  await expect(heading).toHaveText('Press any key under your left hand.')
+
+  // Nothing goes on before each half has had a key pressed.
+  await tap(page, 0)
+  await expect(page.locator('[data-test=next]')).toBeDisabled()
+  await tap(page, 17)
   await expect(page.locator('[data-test=next]')).toBeEnabled()
+  // A half unplugged in the middle keeps its keys and carries on when it is back.
+  await page.click('[data-test=usb-1]')
+  await expect(page.locator('[data-test=lonely-half]')).toContainText('Its 1 key is kept')
+  await expect(page.locator('[data-test=next]')).toBeDisabled()
+  await page.click('[data-test=usb-1]')
+  await expect(page.locator('[data-test=lonely-half]')).toHaveCount(0)
+  await page.waitForTimeout(900)
+  await tap(page, 18)
+  await expect(page.locator('[data-test=count]')).toContainText('3 keys')
+
+  await openShape(page)
+  await expect(page.locator('[data-test=cable-found]')).toContainText('sends on GP0 and receives on GP1')
+  // One board can still be set up by itself.
+  await page.click('[data-test=set-up-alone]')
+  await page.click('[data-test=next]')
+  await expect(page.locator('h1')).toHaveText('Press every key once.')
 })
 
-test('split setup guides through both halves and waits for the second one', async ({ page }) => {
-  // One board alone, declared to be half of a split.
+test('split setup waits for the second half', async ({ page }) => {
+  // One board alone: the page says what to do to get the other half in.
   await openDemo(page, 'macropad')
   await openShape(page)
-  await page.check('[data-test=shape-central]')
   const guide = page.locator('[data-test=split-guide]')
   await expect(guide.locator('li').nth(0)).toHaveClass(/done/)
   await expect(guide.locator('[data-test=other-waiting]')).toBeVisible()
   await expect(guide.locator('[data-test=cable-need-both]')).toBeVisible()
-  await expect(page.locator('[data-test=next]')).toBeDisabled()
-  // Knowing the pins is a way on without the second half.
-  await page.click('[data-test=cable-by-hand]')
-  await expect(page.locator('[data-test=next]')).toBeEnabled()
+  // Going back, the board is set up on its own as before.
+  await page.click('[data-test=back]')
+  await expect(page.locator('h1')).toHaveText('Press every key once.')
 
   // With both halves open every step ticks off by itself.
   await page.goto('/')
   await openDemo(page, 'split')
+  await expect(page.locator('[data-test=keys-heading]')).toBeVisible({ timeout: 20_000 })
+  await openShape(page)
   await expect(page.locator('[data-test=guide-other]')).toHaveClass(/done/)
   await expect(page.locator('[data-test=guide-other]')).toContainText('Right half')
-  await expect(page.locator('[data-test=guide-cable]')).toHaveClass(/done/, { timeout: 15_000 })
-  await expect(page.locator('[data-test=next]')).toBeEnabled()
+  await expect(page.locator('[data-test=guide-cable]')).toHaveClass(/done/)
 
   // The home screen lists what is plugged in.
   await page.click('.rail .logo')
@@ -410,6 +511,7 @@ test('lights: switched on, placed one by one and given an effect per group', asy
   await page.selectOption('[data-test=effect-keys]', 'Reactive')
   await page.selectOption('[data-test=effect-underglow]', 'Off')
   await expect(bulbs.nth(2)).toHaveAttribute('data-color', '#000000')
+  await showBench(page)
   await virtualKeys(page).nth(2).dispatchEvent('pointerdown')
   await expect(bulbs.nth(2)).not.toHaveAttribute('data-color', '#000000')
   await expect(bulbs.nth(1)).toHaveAttribute('data-color', '#000000')
@@ -423,9 +525,22 @@ test('lights: switched on, placed one by one and given an effect per group', asy
   await expect(bulbs.nth(5)).not.toHaveAttribute('data-color', '#000000')
 })
 
+test('split keyboard: finding the keys again covers both halves', async ({ page }) => {
+  await openDemo(page, 'split')
+  await runSplitWizard(page)
+  await page.click('[data-test=nav-hardware]')
+  await expect(page.locator('[data-test=add-key-split]')).toBeVisible()
+  await page.click('[data-test=rerun]')
+  await page.click('[data-test=rerun-confirm]')
+  // The cable is known already, so there is no search this time.
+  await expect(page.locator('[data-test=keys-heading]')).toBeVisible()
+  await runSplitWizard(page)
+  await expect(page.locator('[data-test=keymap-board] .key')).toHaveCount(34)
+})
+
 test('split keyboards are marked experimental in the setup', async ({ page }) => {
   await openDemo(page, 'split')
-  await expect(page.locator('[data-test=experimental]')).toBeVisible()
+  await expect(page.locator('[data-test=experimental]')).toBeVisible({ timeout: 20_000 })
 })
 
 test('keymap: drag from the picker, swap keys, colour a layer, see all layers', async ({ page }) => {
@@ -479,4 +594,64 @@ test('keymap: drag from the picker, swap keys, colour a layer, see all layers', 
   const download = page.waitForEvent('download')
   await page.click('[data-test=save-png]')
   expect((await download).suggestedFilename()).toMatch(/-keymap\.png$/)
+})
+
+test('setup: one keyboard in one piece is guided through, and its controller works itself out', async ({ page }) => {
+  await openDemo(page, 'macropad')
+  // No second board, so no cable to find.
+  const guide = page.locator('.wizard [data-test=setup-guide]')
+  await expect(guide).toContainText('Find the keys')
+  await expect(guide).not.toContainText('Find the cable')
+  await expect(guide.locator('[data-test=guide-tip]')).toContainText('row by row')
+  // An RP2040 board does not say which shape it has; the pins in use do.
+  const controller = page.locator('[data-test=show-pins]')
+  await expect(controller).toContainText('RP2040 controller')
+  await expect(controller).not.toContainText('long')
+  await page.waitForTimeout(750)
+  await tap(page, 0)
+  await expect(controller).toContainText('RP2040 controller, long')
+  // The small picture opens the whole pinout.
+  await controller.click()
+  await expect(page.locator('[data-test=pins-diagram]')).toBeVisible()
+  await page.click('[data-test=close-pins]')
+  await page.click('[data-test=undo-key]')
+  await expect(page.locator('[data-test=count]')).toContainText('0 keys')
+
+  await runWizard(page)
+  // Straight into the editor: no page in between.
+  await expect(page.locator('[data-test=rename]')).toHaveValue('Macro pad')
+  await page.click('[data-test=coach-go]')
+  await expect(page.locator('[data-test=coach]')).toContainText('Drag the keys into place')
+  await page.click('[data-test=coach-close]')
+  await expect(page.locator('[data-test=coach]')).toHaveCount(0)
+})
+
+test('two virtual keyboards stay apart and can be switched between', async ({ page }) => {
+  test.setTimeout(120_000)
+  // A macro pad in the middle of its setup, then a split is put on the desk as well.
+  await openDemo(page, 'macropad')
+  await page.click('.rail .logo')
+  await pickDemo(page, 'split')
+  await plugInNew(page)
+  await expect(page.locator('[data-test=found-other]')).toBeVisible({ timeout: 20_000 })
+  const keyboards = page.locator('[data-test=rail-keyboard]')
+  await expect(keyboards).toHaveCount(2)
+
+  // The macro pad's setup knows nothing of the split's boards.
+  await keyboards.first().click()
+  await expect(page.locator('[data-test=virtual-board]')).toContainText('Macro pad')
+  await expect(page.locator('.wizard')).toHaveCount(1)
+  await expect(page.locator('.wizard [data-test=setup-guide]')).not.toContainText('Find the cable')
+  await expect(page.locator('[data-test=arrival]')).toHaveCount(0)
+  await expect(page.locator('[data-test=virtual-board]')).toContainText('Macro pad')
+  await runWizard(page)
+  await expect(page.locator('[data-test=rename]')).toHaveValue('Macro pad')
+
+  // Back to the split, which is where it was left.
+  await keyboards.nth(1).click()
+  await expect(page.locator('[data-test=keys-heading]')).toHaveText('Press any key under your left hand.')
+  await expect(page.locator('[data-test=virtual-board]')).toContainText('Split keyboard')
+  await runSplitWizard(page)
+  await keyboards.first().click()
+  await expect(page.locator('[data-test=rename]')).toHaveValue('Macro pad')
 })
