@@ -11,7 +11,7 @@ use jmk_core::{Action, Combo, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours.
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 6;
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -107,24 +107,32 @@ pub enum LinkConfig {
     Ble,
 }
 
-/// The part this board plays in a split keyboard.
+/// Whether this board is one half of a split keyboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SplitConfig {
     /// A keyboard in one piece.
     #[default]
     None,
-    /// Talks to the computer and holds the keymap. Positions of the other
-    /// half follow this half's own positions.
-    Central(LinkConfig),
-    /// Only reports its keys to the central half.
-    Peripheral(LinkConfig),
+    /// One half. Both halves hold the whole keymap, and the one a computer
+    /// is listening to does the typing for both. `offset` is where this
+    /// half's positions start in the keymap: 0 for the first half, the
+    /// first half's number of positions for the second.
+    Half { link: LinkConfig, offset: u16 },
 }
 
 impl SplitConfig {
     pub fn link(&self) -> Option<LinkConfig> {
         match self {
             SplitConfig::None => None,
-            SplitConfig::Central(link) | SplitConfig::Peripheral(link) => Some(*link),
+            SplitConfig::Half { link, .. } => Some(*link),
+        }
+    }
+
+    /// Where this board's positions start in the keymap.
+    pub fn offset(&self) -> usize {
+        match self {
+            SplitConfig::None => 0,
+            SplitConfig::Half { offset, .. } => *offset as usize,
         }
     }
 }
@@ -284,12 +292,46 @@ pub struct Info {
     pub uid: [u8; 8],
 }
 
+/// How the keymaps of two connected halves compare.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SplitSync {
+    /// The other half is away, has not said yet, or one of the two has
+    /// changes that are not saved.
+    #[default]
+    Unknown,
+    Same,
+    /// The other half holds the newer keymap; this half is fetching it.
+    Behind,
+    /// This half holds the newer keymap; the other half is fetching it.
+    Ahead,
+    /// Both were changed while apart. Nothing happens until the user picks
+    /// one with [`Request::ResolveSplit`].
+    Conflict,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SplitStatus {
     /// The other half was heard from recently.
     pub connected: bool,
-    /// Positions the other half reports (central only).
+    /// Positions the other half last reported having.
     pub remote_positions: u16,
+    /// This half is the one typing: the other half is away, has no computer
+    /// listening, or both have one and this is the first half.
+    pub leading: bool,
+    /// Only meaningful while connected.
+    pub sync: SplitSync,
+    /// The other half's chip, all zeros until it has said.
+    pub peer_uid: [u8; 8],
+    /// How many times this half's keymap was saved with a change in it. A
+    /// half that fetches the other's keymap takes its number too.
+    pub revision: u32,
+    /// The other half's number, 0 until it has said.
+    pub peer_revision: u32,
+    /// A number that is equal on two halves exactly when they hold the same
+    /// keymap and key shapes.
+    pub digest: u32,
+    /// `digest` as it was when the halves last agreed, if they ever did.
+    pub base: Option<u32>,
 }
 
 /// An electrical connection seen during wiring detection.
@@ -362,6 +404,13 @@ pub enum Request {
     /// One colour number per layer, for whoever draws the keymap. The
     /// keyboard only stores them; 0 means none was chosen.
     SetLayerColors(Vec<u8, MAX_LAYERS>),
+    /// Settle a [`SplitSync::Conflict`]: keep this half's keymap on both
+    /// halves, or the other half's.
+    ResolveSplit { keep_this: bool },
+    /// The configurator has seen the other half hold the keymap with this
+    /// digest, at this revision: the two agree. Refused with `OutOfRange` if
+    /// this half holds another keymap by now.
+    SplitAgreed { digest: u32, revision: u32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

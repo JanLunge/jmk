@@ -9,7 +9,7 @@ import { describeAction } from '../lib/keycodes'
 import { desktop } from '../lib/desktop'
 import type { Contact, HardwareConfig, Pin } from '../lib/protocol'
 import { registryMcu } from '../lib/registry'
-import { addKey, refresh, role, setHardware, type Session } from '../lib/session'
+import { addKey, linkPins, refresh, role, setHardware, type Session } from '../lib/session'
 import { VirtualTransport } from '../lib/transport'
 
 const props = defineProps<{ session: Session }>()
@@ -21,7 +21,7 @@ const name = (pin: Pin) => pinLabel(board.value, pin)
 
 const roles = computed(() => {
   const map = new Map<Pin, PinRole>()
-  const { matrix, reserved_pins, encoders, split } = hardware.value
+  const { matrix, reserved_pins, encoders } = hardware.value
   reserved_pins.forEach((pin) => map.set(pin, 'reserved'))
   if (matrix !== 'None' && 'Direct' in matrix) matrix.Direct.pins.forEach((pin) => map.set(pin, 'direct'))
   if (matrix !== 'None' && 'Matrix' in matrix) {
@@ -29,8 +29,8 @@ const roles = computed(() => {
     matrix.Matrix.cols.forEach((pin) => map.set(pin, 'col'))
   }
   encoders.forEach((e) => [e.a, e.b].forEach((pin) => map.set(pin, 'encoder')))
-  const link = split === 'None' ? undefined : 'Central' in split ? split.Central : split.Peripheral
-  if (link && link !== 'Ble') [link.Uart.tx, link.Uart.rx].forEach((pin) => map.set(pin, 'link'))
+  const link = linkPins(hardware.value)
+  if (link) [link.tx, link.rx].forEach((pin) => map.set(pin, 'link'))
   return map
 })
 
@@ -58,10 +58,10 @@ let collector: KeyCollector | undefined
 
 /** Pins a key could be wired to: everything free for wiring, including the pins already in use for keys. */
 const probePins = computed(() => {
-  const { reserved_pins, encoders, split } = hardware.value
-  const link = split === 'None' ? undefined : 'Central' in split ? split.Central : split.Peripheral
+  const { reserved_pins, encoders } = hardware.value
+  const link = linkPins(hardware.value)
   const taken = new Set<Pin>([...reserved_pins, ...encoders.flatMap((e) => [e.a, e.b])])
-  if (link && link !== 'Ble') [link.Uart.tx, link.Uart.rx].forEach((pin) => taken.add(pin))
+  if (link) [link.tx, link.rx].forEach((pin) => taken.add(pin))
   const light = props.session.lighting.pin
   if (light !== null) taken.add(light)
   return wirablePins(board.value, info.usable_pins).filter((pin) => !taken.has(pin))
@@ -174,8 +174,8 @@ async function updateFirmware() {
           Protected, never touched: <span class="mono">{{ hardware.reserved_pins.map(name).join(', ') }}</span>
         </p>
         <p v-if="role(session) !== 'single'" class="muted">
-          Split keyboard, this is the {{ role(session) === 'central' ? 'half that plugs into the computer' : 'other half' }}.
-          A changed cable setting takes effect when you save; the keyboard restarts by itself.
+          One half of a split keyboard. Either half can be the one plugged into the computer; this page shows
+          this half's own wiring.
         </p>
         <label class="field">
           Ignore switch chatter for {{ hardware.debounce_ms }} ms after each change
@@ -186,9 +186,9 @@ async function updateFirmware() {
 
       <div v-if="hardware.matrix !== 'None'" class="card col">
         <h2>A key is missing</h2>
-        <p v-if="role(session) === 'peripheral'" class="muted">
-          On this half, find the keys again instead: the main half numbers this half's keys, and adding one here
-          would mix them up.
+        <p v-if="role(session) !== 'single'" class="muted" data-test="add-key-split">
+          On a split keyboard, set the keys up again instead (below), with both halves plugged in: the two halves
+          number their keys together, and adding one here would mix them up.
         </p>
         <template v-else>
           <p class="muted">

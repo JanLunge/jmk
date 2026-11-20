@@ -67,6 +67,8 @@ export interface Session {
   bootLink: string
   /** When the keyboard last reported a key going down or up (performance.now()). */
   lastKeyAt: number
+  /** The other half changed this half's keymap; read it again before showing it. */
+  stale?: boolean
   /** Changes not yet written to the keyboard's flash. */
   unsaved: boolean
   /** What a virtual keyboard typed, newest last. */
@@ -140,20 +142,44 @@ export function setLayerColor(session: Session, layer: number, color: number): P
   return sendNewest(session, 'layerColors', () => session.client.setLayerColors(colors))
 }
 
+/** Protocol version from which the halves of a split keep their keymaps the same over their cable. */
+export const SPLIT_PROTOCOL = 6
+
+const NO_SPLIT: SplitStatus = { connected: false, remote_positions: 0, leading: true,
+  sync: 'Unknown',
+  peer_uid: [0, 0, 0, 0, 0, 0, 0, 0],
+  revision: 0,
+  peer_revision: 0,
+  digest: 0,
+  base: null,
+}
+
+/** The cable pins a half is set up with. */
+export function linkPins(hardware: HardwareConfig): { tx: Pin; rx: Pin } | undefined {
+  const split = hardware.split
+  if (split === 'None' || split.Half.link === 'Ble') return undefined
+  return split.Half.link.Uart
+}
+
+/** Where this board's positions start in the keymap. */
+export const splitOffset = (hardware: HardwareConfig) => (hardware.split === 'None' ? 0 : hardware.split.Half.offset)
+
 /** Positions in the keymap: this half's own plus the other half's. */
 export function positionCount(session: Session): number {
   const own = localPositions(session.hardware)
-  const split = session.hardware.split
-  return split !== 'None' && 'Central' in split ? own + session.split.remote_positions : own
+  if (session.hardware.split === 'None') return own
+  const offset = splitOffset(session.hardware)
+  return offset > 0 ? offset + own : own + session.split.remote_positions
 }
 
 export function isConfigured(session: Session): boolean {
   return session.hardware.matrix !== 'None'
 }
 
-export function role(session: Session): 'single' | 'central' | 'peripheral' {
-  const split = session.hardware.split
-  return split === 'None' ? 'single' : 'Central' in split ? 'central' : 'peripheral'
+/** One piece, or which half of a split: the first half's keys come first in the keymap. */
+export function role(session: Session): 'single' | 'first' | 'second' {
+  if (session.hardware.split === 'None') return 'single'
+  return splitOffset(session.hardware) === 0 ? 'first' : 'second'
 }
 
 export async function openSession(transport: Transport, demo?: DemoHalf): Promise<Session> {
@@ -174,7 +200,7 @@ export async function openSession(transport: Transport, demo?: DemoHalf): Promis
     profiles: [],
     combos: [],
     macros: [],
-    split: { connected: false, remote_positions: 0 },
+    split: { ...NO_SPLIT },
     lighting: noLighting(),
     bootLightPin: null,
     lights: [],
@@ -230,7 +256,7 @@ export async function openSession(transport: Transport, demo?: DemoHalf): Promis
 export async function refresh(session: Session): Promise<void> {
   const { client } = session
   session.hardware = await client.hardware()
-  session.split = await client.splitStatus()
+  session.split = session.info.protocol >= SPLIT_PROTOCOL ? await client.splitStatus() : { ...NO_SPLIT }
   session.meta = await client.meta()
   session.layout = await client.layout()
   session.profiles = await client.profiles()
@@ -384,7 +410,7 @@ export async function save(session: Session): Promise<void> {
   session.unsaved = false
 }
 
-const linkOf = (hardware: HardwareConfig) => JSON.stringify(hardware.split === 'None' ? null : Object.values(hardware.split)[0])
+const linkOf = (hardware: HardwareConfig) => JSON.stringify(hardware.split === 'None' ? null : hardware.split.Half.link)
 
 /** The cable setting was changed and saved, but the firmware still runs the one it started with. */
 export function needsRestart(session: Session): boolean {
@@ -460,11 +486,10 @@ export async function applyDefinition(session: Session, definition: Definition, 
     name: definition.name.slice(0, LIMITS.nameLength),
     controller: definition.controller.slice(0, LIMITS.nameLength),
   })
-  if (half === 0) {
-    await session.client.setLayout(definition.layout)
-    await applyKeymap(session, definition.keymap)
-    if (definition.lighting && canLight(session)) await session.client.setLighting(definition.lighting)
-  }
+  // Both halves of a split hold the whole keymap; the lights are the first half's.
+  await session.client.setLayout(definition.layout)
+  await applyKeymap(session, definition.keymap)
+  if (half === 0 && definition.lighting && canLight(session)) await session.client.setLighting(definition.lighting)
   await session.client.save()
   await refresh(session)
   session.unsaved = false
@@ -486,7 +511,7 @@ export function starterLayout(hardware: HardwareConfig, populated?: number[]): K
 /** Key positions that are a knob's picture: the first of its two positions. */
 export function knobPositions(session: Session): number[] {
   const count = session.hardware.encoders.length
-  const first = localPositions(session.hardware) - 2 * count
+  const first = splitOffset(session.hardware) + localPositions(session.hardware) - 2 * count
   return [...Array(count).keys()].map((index) => first + 2 * index)
 }
 
@@ -498,30 +523,52 @@ export function knobSpot(layout: KeyGeometry[]): KeyGeometry {
   return { x: Math.round(box.x + taken * UNIT * 1.25), y, w: UNIT, h: UNIT, r: 0 }
 }
 
+/** What both halves of a split must agree on, as text to compare. */
+function sharedPart(session: Session): string {
+  const keymap = exportKeymap(session)
+  // No colour chosen and colour 0 are the same thing.
+  const part = [session.layout, { ...keymap, layerColors: keymap.layers.map((_, layer) => keymap.layerColors?.[layer] ?? 0) }]
+  // What was read from a keyboard and what was made here list their fields in different orders.
+  const sorted = (_: string, value: unknown) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1)))
+      : value
+  return JSON.stringify(part, sorted)
+}
+
 /**
- * Central half: when the other half reports more positions than the layout
- * has keys for, draw them to the right and give them starter actions.
- * `partner` is the other half's session, if it is open, for its key shapes.
+ * Make `to` hold the same keymap and key shapes as `from`, and make the
+ * second half's positions start where the first half's end. Does nothing
+ * where the two agree already. Returns whether anything was written.
  */
-export async function adoptRemoteKeys(session: Session, partner?: Session): Promise<boolean> {
-  const own = localPositions(session.hardware)
-  const total = positionCount(session)
-  if (role(session) !== 'central' || session.layout.length >= total) return false
-  const layout = session.layout.slice(0, Math.max(session.layout.length, own))
-  while (layout.length < own) layout.push({ ...NO_KEY })
-  const missing = total - layout.length
-  const box = bounds(layout)
-  const shiftX = Math.round(box.x + box.w + UNIT)
-  const theirs = partner?.layout.length === missing ? partner.layout : gridLayout({ Direct: { pins: Array(missing).fill(0), active_high: false } })
-  const first = layout.length
-  layout.push(...theirs.map((key) => ({ ...key, x: key.w > 0 ? key.x + shiftX : key.x })))
-  await session.client.setLayout(layout)
-  session.layout = layout
-  await fitLayers(session)
-  let letter = session.layers[0].slice(0, first).filter((a) => a !== 'Transparent').length
-  const actions = theirs.map((key) => (hasKey(key) ? starterAction(letter++) : 'Transparent'))
-  await session.client.setActions(0, first, actions)
-  session.layers[0].splice(first, actions.length, ...actions)
-  session.unsaved = true
-  return true
+export async function alignHalves(from: Session, to: Session): Promise<boolean> {
+  // Writing to one half must not echo back to the other while this runs.
+  const mirrors = [from.client.mirror, to.client.mirror]
+  from.client.mirror = to.client.mirror = undefined
+  try {
+    if (to.stale) await refresh(to)
+    to.stale = false
+    let changed = false
+    const [first, second] = splitOffset(from.hardware) <= splitOffset(to.hardware) ? [from, to] : [to, from]
+    const offset = localPositions(first.hardware)
+    const split = second.hardware.split
+    if (split !== 'None' && split.Half.offset !== offset) {
+      await setHardware(second, { ...second.hardware, split: { Half: { ...split.Half, offset } } })
+      changed = true
+    }
+    if (sharedPart(from) !== sharedPart(to)) {
+      await to.client.setLayout(from.layout)
+      await applyKeymap(to, exportKeymap(from))
+      await refresh(to)
+      to.unsaved = true
+      changed = true
+    }
+    if (from.meta.name !== to.meta.name) {
+      await setMeta(to, { ...to.meta, name: from.meta.name })
+      changed = true
+    }
+    return changed
+  } finally {
+    ;[from.client.mirror, to.client.mirror] = mirrors
+  }
 }

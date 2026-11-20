@@ -82,6 +82,16 @@ pub fn configured() -> bool {
     CONFIGURED.load(Ordering::Relaxed)
 }
 
+static SUSPENDED: AtomicBool = AtomicBool::new(false);
+
+/// True while a computer is actually listening: configured and not
+/// suspended. A pulled cable shows up as a suspended bus on chips that do
+/// not watch the supply pin, and a sleeping computer suspends it too. Of two
+/// connected halves of a split, the one this is true for does the typing.
+pub fn listening() -> bool {
+    configured() && !SUSPENDED.load(Ordering::Relaxed)
+}
+
 struct BusState;
 
 impl Handler for BusState {
@@ -94,6 +104,11 @@ impl Handler for BusState {
 
     fn reset(&mut self) {
         CONFIGURED.store(false, Ordering::Relaxed);
+        SUSPENDED.store(false, Ordering::Relaxed);
+    }
+
+    fn suspended(&mut self, suspended: bool) {
+        SUSPENDED.store(suspended, Ordering::Relaxed);
     }
 
     fn configured(&mut self, configured: bool) {

@@ -143,6 +143,7 @@ async fn main(_spawner: Spawner) {
         &link_queues,
         &config_queues,
         || watchdog.iter_mut().for_each(WatchdogHandle::pet),
+        || jmk_embassy::usb::listening() || ble::connected(),
         reboot,
     );
     let usb = async {

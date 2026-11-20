@@ -78,6 +78,8 @@ pub struct VirtualKeyboard {
     to_host: VecDeque<[u8; REPORT_SIZE]>,
     host: HostLog,
     in_bootloader: bool,
+    /// The USB cable to the computer is plugged in.
+    usb: bool,
     /// Quadrature phase of each encoder, 0..4.
     encoder_phase: Vec<u8>,
 }
@@ -100,6 +102,7 @@ impl VirtualKeyboard {
             to_host: VecDeque::new(),
             host: HostLog::default(),
             in_bootloader: false,
+            usb: true,
             encoder_phase,
         }
     }
@@ -125,6 +128,13 @@ impl VirtualKeyboard {
         if let Some(link) = &self.link {
             link.set_plugged(plugged);
         }
+    }
+
+    /// Plug this keyboard's USB cable to the computer in or out. Without it
+    /// nothing reaches the computer, but the keyboard keeps running (think
+    /// of a half powered through the cable from the other half).
+    pub fn set_usb(&mut self, plugged: bool) {
+        self.usb = plugged;
     }
 
     /// Feed raw bytes into this half's end of the cable.
@@ -177,7 +187,10 @@ impl VirtualKeyboard {
             if self.in_bootloader {
                 continue;
             }
-            let Self { device, host, to_host, link, now, .. } = self;
+            let Self { device, host, to_host, link, now, usb, .. } = self;
+            device.set_host(*usb);
+            let mut nowhere = HostLog::default();
+            let host = if *usb { host } else { &mut nowhere };
             let event = |event| push(to_host, &DeviceMessage::Event(event));
             match link {
                 Some(link) => device.poll(*now, host, link, event),
@@ -223,6 +236,7 @@ impl VirtualKeyboard {
         self.in_bootloader = false;
         self.assembler = Assembler::new();
         self.device = boot(&self.pins, &self.flash, self.uid);
+        self.device.set_host(self.usb);
     }
 
     /// Convenience for tests and scripts: send a request, return the reply.

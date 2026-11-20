@@ -1,7 +1,7 @@
 // Publishing to and installing from a real registry server.
 //   JMK_REGISTRY=http://127.0.0.1:8799 npx playwright test registry
 import { expect, test } from '@playwright/test'
-import { openDemo, runWizard, tap, typed } from './helpers'
+import { openDemo, pickDemo, plugInNew, runWizard, tap, typed } from './helpers'
 
 const registry = process.env.JMK_REGISTRY
 test.skip(!registry, 'set JMK_REGISTRY to a running registry server')
@@ -23,8 +23,9 @@ test('publish a keyboard, then set another one up from the registry', async ({ p
   // A second, fresh keyboard of the same build picks it from the list
   // instead of running the wizard.
   await page.click('nav .logo')
-  await page.click('[data-test=demo-macropad]')
-  await expect(page.locator('[data-test=next]')).toBeVisible()
+  await pickDemo(page, 'macropad')
+  await plugInNew(page)
+  await expect(page.locator('[data-test=next]')).toBeVisible({ timeout: 15_000 })
   await page.evaluate(() => {
     const app = (window as any).jmk.app
     app.sessions[1].setup = false // leave the wizard: this board will be set up from a file

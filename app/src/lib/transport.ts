@@ -96,8 +96,12 @@ class VirtualWorld {
 
   advance(ms: number) {
     if (this.keyboards.size === 0) return
-    const result = bridge<AdvanceResult>({ op: 'advance', ids: [...this.keyboards.keys()], ms })
-    for (const [id, keyboard] of this.keyboards) {
+    // A board without power stands still.
+    const ids = [...this.keyboards.values()].filter((keyboard) => keyboard.powered).map((keyboard) => keyboard.id)
+    if (ids.length === 0) return
+    const result = bridge<AdvanceResult>({ op: 'advance', ids, ms })
+    for (const id of ids) {
+      const keyboard = this.keyboards.get(id)!
       const out = result[id]
       keyboard.bootloader = out.bootloader
       if (out.lights) keyboard.onLights(out.lights)
@@ -113,6 +117,12 @@ export class VirtualTransport implements Transport {
   readonly kind = 'virtual'
   readonly id: number
   bootloader = false
+  /** False while neither USB nor the other half feeds it. */
+  powered = true
+  /** The computer cannot reach it: its USB cable is out. */
+  private unplugged = false
+  /** Another transport has taken this keyboard over (see `again`). */
+  private replaced = false
   onReport: (report: number[]) => void = () => {}
   onClose: () => void = () => {}
   /** What this keyboard "typed" into its computer. */
@@ -124,9 +134,38 @@ export class VirtualTransport implements Transport {
     readonly label: string,
     readonly wiring: Wiring,
     uid: number,
+    /** An existing virtual keyboard to talk to instead of making one. */
+    existing?: number,
   ) {
-    this.id = bridge<{ id: number }>({ op: 'create', wiring, uid: [uid, 0x4a, 0x4d, 0x4b, 0, 0, 0, 1] }).id
+    this.id = existing ?? bridge<{ id: number }>({ op: 'create', wiring, uid: [uid, 0x4a, 0x4d, 0x4b, 0, 0, 0, 1] }).id
     world.add(this)
+  }
+
+  /**
+   * The same keyboard plugged in again: a fresh connection to it, as a USB
+   * device that comes back is a new device to the computer. The old
+   * connection is dead from here on.
+   */
+  again(): VirtualTransport {
+    this.replaced = true
+    const next = new VirtualTransport(this.label, this.wiring, 0, this.id)
+    next.powered = this.powered
+    return next
+  }
+
+  /** Pull the USB cable: the computer loses the keyboard. Whether it keeps running is a matter of power. */
+  unplug() {
+    if (this.unplugged) return
+    this.unplugged = true
+    this.setUsb(false)
+    this.onReport = () => {}
+    this.onClose()
+  }
+
+  /** Give or take power. A board that gets power back starts afresh, losing what was not saved. */
+  setPowered(on: boolean) {
+    if (on && !this.powered) bridge({ op: 'flash', id: this.id })
+    this.powered = on
   }
 
   /** Join two halves with a cable; `wires` lists which pin of `a` reaches which pin of `b`. */
@@ -135,6 +174,7 @@ export class VirtualTransport implements Transport {
   }
 
   async send(report: number[]): Promise<void> {
+    if (this.unplugged || this.replaced) throw new Error('The keyboard is unplugged.')
     bridge({ op: 'send', id: this.id, report })
   }
 
@@ -150,12 +190,18 @@ export class VirtualTransport implements Transport {
     bridge({ op: 'cable', id: this.id, plugged })
   }
 
+  /** Plug the USB cable to the computer in or out. The half keeps running either way. */
+  setUsb(plugged: boolean) {
+    bridge({ op: 'usb', id: this.id, plugged })
+  }
+
   /** Complete a simulated firmware update. */
   finishFlash() {
     bridge({ op: 'flash', id: this.id })
   }
 
   async close(): Promise<void> {
+    if (this.replaced) return
     world.remove(this.id)
     bridge({ op: 'destroy', id: this.id })
   }

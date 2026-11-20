@@ -1,13 +1,59 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import VirtualBoard from './components/VirtualBoard.vue'
-import { app, closeSession, current, reconnectUsb } from './lib/app'
+import { app, benchOf, closeSession, current, halvesOf, partnerOf, reconnectUsb } from './lib/app'
 import { desktop } from './lib/desktop'
 import { watchBootDrives } from './lib/firmware'
-import { role } from './lib/session'
+import { role, type Session } from './lib/session'
 import Editor from './views/Editor.vue'
 import Home from './views/Home.vue'
 import Wizard from './views/Wizard.vue'
+
+/** The keyboards that are open: the two halves of a split are one keyboard. */
+const keyboards = computed(() => {
+  const seen = new Set<string>()
+  const list: Session[][] = []
+  for (const session of app.sessions) {
+    if (seen.has(session.id)) continue
+    const halves = halvesOf(session)
+    halves.forEach((half) => seen.add(half.id))
+    list.push(halves)
+  }
+  return list
+})
+const nameOf = (halves: Session[]) => halves.find((half) => half.meta.name)?.meta.name || (halves.length > 1 ? 'Split keyboard' : halves[0].transport.label)
+/** Bring a keyboard to the front: the half that is in front already, else one that is plugged in. */
+function show(halves: Session[]) {
+  if (halves.some((half) => half.id === app.currentId)) return
+  app.currentId = (halves.find((half) => !half.closed) ?? halves[0]).id
+}
+
+// A half whose USB cable was pulled hands the screen to the other half, so
+// the keyboard stays open as long as one of them is reachable.
+watch(
+  () => [current.value?.closed, current.value && partnerOf(current.value)?.closed],
+  () => {
+    const now = current.value
+    const partner = now && partnerOf(now)
+    if (now?.closed && !now.setup && !now.restarting && partner && !partner.closed && !partner.setup) app.currentId = partner.id
+  },
+)
+
+// The first screen and the wizard are one setup: going between them is a
+// fade in place, so what they share stays put. Anything else is a new page.
+const kind = computed(() => (!current.value ? 'home' : current.value.closed ? 'gone' : current.value.setup ? 'wizard' : 'editor'))
+const blending = ref(false)
+watch(
+  [kind, () => app.currentId],
+  ([now], [before]) => (blending.value = now !== before && [now, before].includes('home') && [now, before].includes('wizard')),
+  { flush: 'sync' },
+)
+
+/** The virtual workbench shown below: the keyboard in front, or boards that are not open yet. */
+const bench = computed(() => {
+  if (current.value) return benchOf(current.value) ?? app.benches.find((each) => each.halves.some((half) => half.sessionId === current.value!.id))
+  return app.benches.find((each) => each.halves.some((half) => !half.sessionId))
+})
 
 onMounted(() => {
   reconnectUsb()
@@ -38,22 +84,27 @@ onMounted(() => {
       </button>
       <TransitionGroup name="pop" tag="div" class="boards">
         <button
-          v-for="session in app.sessions"
-          :key="session.id"
+          v-for="halves in keyboards"
+          :key="halves[0].id"
           class="board"
-          :class="{ active: session.id === app.currentId, closed: session.closed }"
-          :title="session.meta.name || session.transport.label"
-          @click="app.currentId = session.id"
+          :class="{ active: halves.some((half) => half.id === app.currentId), closed: halves.every((half) => half.closed) }"
+          :title="nameOf(halves)"
+          data-test="rail-keyboard"
+          @click="show(halves)"
         >
-          <span class="initial">{{ (session.meta.name || session.transport.label).slice(0, 1).toUpperCase() }}</span>
-          <span v-if="session.transport.kind === 'virtual'" class="badge" title="Virtual keyboard">v</span>
-          <span v-if="session.unsaved" class="dot" title="Unsaved changes" />
+          <span v-if="halves.length === 1" class="initial">{{ nameOf(halves).slice(0, 1).toUpperCase() }}</span>
+          <span v-else class="pair" title="Two halves, one keyboard">
+            <i v-for="half in halves" :key="half.id" :class="{ off: half.closed }" />
+          </span>
+          <span v-if="halves[0].transport.kind === 'virtual'" class="badge" title="Virtual keyboard">v</span>
+          <span v-if="halves.some((half) => half.unsaved)" class="dot" title="Unsaved changes" />
         </button>
       </TransitionGroup>
     </nav>
 
     <main class="main">
-      <Transition name="rise" mode="out-in">
+      <div class="view">
+      <Transition :name="blending ? 'blend' : 'rise'" :mode="blending ? undefined : 'out-in'">
         <Home v-if="!current" key="home" />
         <div v-else-if="current.closed" :key="current.id + 'gone'" class="gone col">
           <template v-if="current.restarting">
@@ -63,15 +114,18 @@ onMounted(() => {
           </template>
           <template v-else>
             <h2>This keyboard was unplugged</h2>
-            <p class="muted">Plug it back in and it opens here again by itself.</p>
+            <p class="muted">
+              Plug it back in and it opens here again by itself<template v-if="current.setup">, with the keys you pressed so far</template>.
+            </p>
             <button class="btn" @click="closeSession(current)">Close</button>
           </template>
         </div>
         <Wizard v-else-if="current.setup" :key="current.id + 'wizard'" :session="current" />
         <Editor v-else :key="current.id + role(current)" :session="current" />
       </Transition>
+      </div>
       <Transition name="rise" mode="out-in">
-        <VirtualBoard v-if="current?.demo && !current.closed" :key="current.id" :session="current" />
+        <VirtualBoard v-if="bench" :key="bench.id" :bench="bench" :setup="!current || current.closed || current.setup" />
       </Transition>
     </main>
     </div>
@@ -202,6 +256,24 @@ onMounted(() => {
   transform: scale(1.06);
 }
 
+.pair {
+  display: flex;
+  gap: 3px;
+}
+
+.pair i {
+  width: 9px;
+  height: 14px;
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.pair i.off {
+  background: none;
+  border: 1.5px solid currentColor;
+  opacity: 0.6;
+}
+
 .logo.active {
   color: var(--accent);
 }
@@ -248,7 +320,15 @@ onMounted(() => {
   flex-direction: column;
 }
 
-.main > :first-child {
+.view {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.view > * {
   flex: 1;
   min-height: 0;
 }

@@ -25,6 +25,13 @@ const CONSUMER_REPORT_ID: u8 = 2;
 const INPUT_REPORT: u8 = 1;
 const OUTPUT_REPORT: u8 = 2;
 
+static CONNECTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// True while a host is connected over Bluetooth.
+pub fn connected() -> bool {
+    CONNECTED.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 static REPORT_MAP: [u8; REPORT_MAP_SIZE] = report_map(KEYBOARD_REPORT_ID, CONSUMER_REPORT_ID);
 
 /// HID version 1.11, no country, remote wake and normally connectable.
@@ -123,12 +130,14 @@ pub async fn run<C: Controller>(controller: C, address: [u8; 6], mut bonds: Bond
             let _ = connection.raw().set_bondable(true);
             // Whatever was typed while no host listened must not arrive now.
             reports.clear();
+            CONNECTED.store(true, core::sync::atomic::Ordering::Relaxed);
             select3(
                 handle_events(&stack, &connection, &mut bonds),
                 send_reports(&server, &connection, reports),
                 report_battery(&server, &connection),
             )
             .await;
+            CONNECTED.store(false, core::sync::atomic::Ordering::Relaxed);
         }
     };
     join(host, keyboard).await;

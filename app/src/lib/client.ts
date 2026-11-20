@@ -92,6 +92,27 @@ export class KeyboardClient {
     throw this.failure(response)
   }
 
+  /**
+   * The other half of a split. Both halves hold the same keymap, so every
+   * change to it is sent to both; `onMirrored` tells when that happened.
+   */
+  mirror?: KeyboardClient
+  onMirrored: () => void = () => {}
+
+  /** Send a change to the keymap, to the other half as well if there is one. */
+  private async shared(request: Request): Promise<void> {
+    await this.ok(request)
+    const other = this.mirror
+    if (!other) return
+    try {
+      await other.ok(request)
+      this.onMirrored()
+    } catch {
+      // Unplugged, or busy restarting: the halves are brought level again
+      // when both are saved.
+    }
+  }
+
   private async ok(request: Request): Promise<void> {
     const response = await this.request(request)
     if (response !== 'Ok') throw this.failure(response)
@@ -106,14 +127,17 @@ export class KeyboardClient {
   hardware = (): Promise<HardwareConfig> => this.expect('GetHardware', 'Hardware')
   setHardware = (hardware: HardwareConfig) => this.ok({ SetHardware: hardware })
   layerCount = (): Promise<number> => this.expect('GetLayerCount', 'LayerCount')
-  setLayerCount = (count: number) => this.ok({ SetLayerCount: count })
+  setLayerCount = (count: number) => this.shared({ SetLayerCount: count })
   profiles = (): Promise<HoldTapProfile[]> => this.expect('GetHoldTapProfiles', 'HoldTapProfiles')
-  setProfile = (index: number, profile: HoldTapProfile) => this.ok({ SetHoldTapProfile: { index, profile } })
+  setProfile = (index: number, profile: HoldTapProfile) => this.shared({ SetHoldTapProfile: { index, profile } })
   combos = (): Promise<Combo[]> => this.expect('GetCombos', 'Combos')
-  setCombos = (combos: Combo[]) => this.ok({ SetCombos: combos })
+  setCombos = (combos: Combo[]) => this.shared({ SetCombos: combos })
   meta = (): Promise<Meta> => this.expect('GetMeta', 'Meta')
   setMeta = (meta: Meta) => this.ok({ SetMeta: meta })
   splitStatus = (): Promise<SplitStatus> => this.expect('GetSplitStatus', 'SplitStatus')
+  /** Settle a conflict between the halves: this half's keymap for both, or the other's. */
+  resolveSplit = (keepThis: boolean) => this.ok({ ResolveSplit: { keep_this: keepThis } })
+  splitAgreed = (digest: number, revision: number) => this.ok({ SplitAgreed: { digest, revision } })
   save = () => this.ok('Save')
   factoryReset = () => this.ok('FactoryReset')
   watchKeys = (on: boolean) => this.ok({ WatchKeys: on })
@@ -124,7 +148,7 @@ export class KeyboardClient {
   setLighting = (lighting: LightingConfig) => this.ok({ SetLighting: lighting })
   identifyLed = (led: number | null) => this.ok({ IdentifyLed: led })
   layerColors = (): Promise<number[]> => this.expect('GetLayerColors', 'LayerColors')
-  setLayerColors = (colors: number[]) => this.ok({ SetLayerColors: colors })
+  setLayerColors = (colors: number[]) => this.shared({ SetLayerColors: colors })
   reboot = (bootloader: boolean) => this.ok({ Reboot: { bootloader } })
 
   async actions(layer: number, count: number): Promise<Action[]> {
@@ -139,7 +163,7 @@ export class KeyboardClient {
 
   async setActions(layer: number, pos: number, actions: Action[]): Promise<void> {
     for (let i = 0; i < actions.length; i += LIMITS.actionsPerChunk) {
-      await this.ok({ SetActions: { layer, pos: pos + i, actions: actions.slice(i, i + LIMITS.actionsPerChunk) } })
+      await this.shared({ SetActions: { layer, pos: pos + i, actions: actions.slice(i, i + LIMITS.actionsPerChunk) } })
     }
   }
 
@@ -158,7 +182,7 @@ export class KeyboardClient {
   async setLayout(keys: KeyGeometry[]): Promise<void> {
     // The first chunk also truncates, so an empty layout needs one request too.
     for (let i = 0; i === 0 || i < keys.length; i += LIMITS.layoutKeysPerChunk) {
-      await this.ok({ SetLayout: { start: i, keys: keys.slice(i, i + LIMITS.layoutKeysPerChunk) } })
+      await this.shared({ SetLayout: { start: i, keys: keys.slice(i, i + LIMITS.layoutKeysPerChunk) } })
     }
   }
 
@@ -176,7 +200,7 @@ export class KeyboardClient {
 
   async setMacro(index: number, steps: MacroStep[]): Promise<void> {
     for (let i = 0; i === 0 || i < steps.length; i += LIMITS.macroStepsPerChunk) {
-      await this.ok({ SetMacro: { index, start: i, steps: steps.slice(i, i + LIMITS.macroStepsPerChunk) } })
+      await this.shared({ SetMacro: { index, start: i, steps: steps.slice(i, i + LIMITS.macroStepsPerChunk) } })
     }
   }
 

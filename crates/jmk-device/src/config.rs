@@ -22,6 +22,60 @@ pub struct Config {
     pub lighting: LightingConfig,
     /// A colour number per layer, kept for the configurator.
     pub layer_colors: [u8; MAX_LAYERS],
+    /// How many times the shared part was saved with a change in it; see
+    /// [`crate::sync`].
+    pub revision: u32,
+    /// [`Config::shared_digest`] when the two halves last agreed.
+    pub base: Option<u32>,
+}
+
+/// The part both halves of a split hold alike: the keyboard's name, keymap,
+/// behaviours, macros, key shapes and layer colours. The wiring, the lights
+/// and the controller's name are each half's own.
+struct Shared<'a>(&'a Config);
+
+impl serde::Serialize for Shared<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeTuple;
+        let config = self.0;
+        let layers = &config.actions[..config.layer_count as usize];
+        let mut parts = serializer.serialize_tuple(8 + layers.len())?;
+        parts.serialize_element(&config.layer_count)?;
+        parts.serialize_element(&config.profiles)?;
+        parts.serialize_element(&config.combos)?;
+        parts.serialize_element(&config.layout)?;
+        parts.serialize_element(&config.macro_ends)?;
+        parts.serialize_element(&config.macro_steps)?;
+        parts.serialize_element(&config.layer_colors)?;
+        parts.serialize_element(&config.meta.name)?;
+        for layer in layers {
+            parts.serialize_element(&layer[..])?;
+        }
+        parts.end()
+    }
+}
+
+/// Keeps the bytes from `skip` on, as many as fit, and counts all of them.
+struct Window<'a> {
+    skip: usize,
+    out: &'a mut [u8],
+    filled: usize,
+    total: usize,
+}
+
+impl postcard::ser_flavors::Flavor for Window<'_> {
+    type Output = (usize, usize);
+    fn try_push(&mut self, byte: u8) -> postcard::Result<()> {
+        if self.total >= self.skip && self.filled < self.out.len() {
+            self.out[self.filled] = byte;
+            self.filled += 1;
+        }
+        self.total += 1;
+        Ok(())
+    }
+    fn finalize(self) -> postcard::Result<(usize, usize)> {
+        Ok((self.filled, self.total))
+    }
 }
 
 impl Config {
@@ -50,12 +104,28 @@ impl Config {
             macro_ends: [0; MAX_MACROS],
             lighting: LightingConfig::NONE,
             layer_colors: [0; MAX_LAYERS],
+            revision: 0,
+            base: None,
         }
     }
 
     /// Return to the unconfigured state without building a copy on the stack.
     pub fn reset(&mut self) {
-        let Config { hardware, layer_count, actions, profiles, combos, meta, layout, macro_steps, macro_ends, lighting, layer_colors } = self;
+        let Config {
+            hardware,
+            layer_count,
+            actions,
+            profiles,
+            combos,
+            meta,
+            layout,
+            macro_steps,
+            macro_ends,
+            lighting,
+            layer_colors,
+            revision,
+            base,
+        } = self;
         *hardware = Self::EMPTY_HARDWARE;
         *layer_count = 1;
         actions.iter_mut().flatten().for_each(|a| *a = Action::Transparent);
@@ -67,6 +137,62 @@ impl Config {
         *macro_ends = [0; MAX_MACROS];
         *lighting = LightingConfig::NONE;
         *layer_colors = [0; MAX_LAYERS];
+        *revision = 0;
+        *base = None;
+    }
+
+    /// A number that is the same on two halves exactly when they hold the
+    /// same shared part.
+    pub fn shared_digest(&self) -> u32 {
+        struct Fnv(u32);
+        impl postcard::ser_flavors::Flavor for Fnv {
+            type Output = u32;
+            fn try_push(&mut self, byte: u8) -> postcard::Result<()> {
+                self.0 = (self.0 ^ byte as u32).wrapping_mul(0x0100_0193);
+                Ok(())
+            }
+            fn finalize(self) -> postcard::Result<u32> {
+                Ok(self.0)
+            }
+        }
+        postcard::serialize_with_flavor(&Shared(self), Fnv(0x811C_9DC5)).unwrap_or(0)
+    }
+
+    /// Copy the shared part's bytes from `offset` on into `out`. Returns how
+    /// many were copied and how long the whole is.
+    pub(crate) fn shared_chunk(&self, offset: usize, out: &mut [u8]) -> (usize, usize) {
+        let window = Window { skip: offset, out, filled: 0, total: 0 };
+        postcard::serialize_with_flavor(&Shared(self), window).unwrap_or((0, 0))
+    }
+
+    /// Replace the shared part with what [`Config::shared_chunk`] produced on
+    /// the other half. On failure it may be half replaced.
+    pub(crate) fn set_shared(&mut self, mut bytes: &[u8]) -> Option<()> {
+        fn take<T: serde::de::DeserializeOwned>(bytes: &mut &[u8]) -> Option<T> {
+            let (value, rest) = postcard::take_from_bytes(bytes).ok()?;
+            *bytes = rest;
+            Some(value)
+        }
+        let layer_count: u8 = take(&mut bytes)?;
+        if layer_count == 0 || layer_count as usize > MAX_LAYERS {
+            return None;
+        }
+        self.layer_count = layer_count;
+        self.profiles = take(&mut bytes)?;
+        self.combos = take(&mut bytes)?;
+        self.layout = take(&mut bytes)?;
+        self.macro_ends = take(&mut bytes)?;
+        self.macro_steps = take(&mut bytes)?;
+        self.layer_colors = take(&mut bytes)?;
+        self.meta.name = take(&mut bytes)?;
+        for layer in &mut self.actions[..layer_count as usize] {
+            let actions: Vec<Action, MAX_KEYS> = take(&mut bytes)?;
+            if actions.len() != MAX_KEYS {
+                return None;
+            }
+            layer.copy_from_slice(&actions);
+        }
+        bytes.is_empty().then_some(())
     }
 
     fn macro_range(&self, index: usize) -> Option<core::ops::Range<usize>> {

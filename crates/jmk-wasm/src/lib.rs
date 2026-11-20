@@ -35,6 +35,8 @@ enum Command {
         wires: Vec<(u8, u8)>,
     },
     Cable { id: u32, plugged: bool },
+    /// Plug a keyboard's USB cable to the computer in or out.
+    Usb { id: u32, plugged: bool },
     Key { id: u32, key: usize, pressed: bool },
     Encoder { id: u32, encoder: usize, clockwise: bool },
     Send { id: u32, report: Vec<u8> },
@@ -107,6 +109,10 @@ fn execute(state: &mut State, command: Command) -> Result<Value, String> {
         }
         Command::Cable { id, plugged } => {
             keyboard(state, id)?.set_cable(plugged);
+            Ok(Value::Null)
+        }
+        Command::Usb { id, plugged } => {
+            keyboard(state, id)?.set_usb(plugged);
             Ok(Value::Null)
         }
         Command::Key { id, key, pressed } => {

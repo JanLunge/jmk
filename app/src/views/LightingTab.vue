@@ -9,7 +9,7 @@ import { bounds } from '../lib/layout'
 import { drawnAt, fromWire, hexToHueSat, lightMode, placeAtKey, ring, shown, underKeys, zoneHex, zonePreview, type LightMode } from '../lib/lighting'
 import type { Effect, Led, LightingConfig, LightZone, Pin } from '../lib/protocol'
 import { LIMITS, UNDERGLOW } from '../lib/protocol'
-import { canLight, knobPositions, needsRestart, restart, save, setLighting, type Session } from '../lib/session'
+import { linkPins, canLight, knobPositions, needsRestart, restart, save, setLighting, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 
@@ -20,12 +20,12 @@ const change = (patch: Partial<LightingConfig>) => attempt(() => setLighting(pro
 // --- The chain ---------------------------------------------------------------
 /** Pins nothing else uses. */
 const freePins = computed(() => {
-  const { matrix, reserved_pins, encoders, split } = props.session.hardware
+  const { matrix, reserved_pins, encoders } = props.session.hardware
   const taken = new Set<Pin>([...reserved_pins, ...encoders.flatMap((e) => [e.a, e.b])])
   if (matrix !== 'None' && 'Direct' in matrix) matrix.Direct.pins.forEach((pin) => taken.add(pin))
   if (matrix !== 'None' && 'Matrix' in matrix) [...matrix.Matrix.rows, ...matrix.Matrix.cols].forEach((pin) => taken.add(pin))
-  const link = split === 'None' ? undefined : 'Central' in split ? split.Central : split.Peripheral
-  if (link && link !== 'Ble') [link.Uart.tx, link.Uart.rx].forEach((pin) => taken.add(pin))
+  const link = linkPins(props.session.hardware)
+  if (link) [link.tx, link.rx].forEach((pin) => taken.add(pin))
   return wirablePins(board.value, props.session.info.usable_pins).filter((pin) => !taken.has(pin))
 })
 const pinDraft = ref<Pin | null>(lighting.value.pin ?? null)

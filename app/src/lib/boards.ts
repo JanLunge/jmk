@@ -44,7 +44,8 @@ const p = (port: 0 | 1, n: number): Pad => ({
 export const BOARDS: Board[] = [
   {
     id: 'pico',
-    name: 'Raspberry Pi Pico',
+    name: 'RP2040 controller, long',
+    alsoKnownAs: '40 pads in two rows, like the Raspberry Pi Pico',
     mcu: 'Rp2040',
     width: 8,
     left: [
@@ -64,7 +65,7 @@ export const BOARDS: Board[] = [
   },
   {
     id: 'promicro-rp2040',
-    name: 'Pro Micro style RP2040',
+    name: 'RP2040 controller, short',
     alsoKnownAs: '0xCB Helios, Elite-Pi, Sea-Picro',
     mcu: 'Rp2040',
     width: 7,
@@ -106,6 +107,37 @@ export function genericBoard(mcu: Mcu, usablePins: number): Board {
     right: pads.slice(half),
     internal: [],
   }
+}
+
+/**
+ * Every RP2040 board reports the same thing, so which of the two usual
+ * shapes this one has cannot be read from it. It shows in use: each shape
+ * brings out pins the other does not. Returns the board's id once a pin in
+ * use settles it.
+ */
+export function shapeFromPins(used: Pin[]): string | undefined {
+  const only = (id: string, otherId: string) => {
+    const [mine, theirs] = [id, otherId].map((each) => {
+      const board = BOARDS.find((candidate) => candidate.id === each)!
+      const internal = new Set(board.internal.map((i) => i.pin))
+      return new Set(boardPads(board).flatMap((pad) => (pad.pin !== undefined && !internal.has(pad.pin) ? [pad.pin] : [])))
+    })
+    return used.some((pin) => mine.has(pin) && !theirs.has(pin))
+  }
+  if (only('pico', 'promicro-rp2040')) return 'pico'
+  if (only('promicro-rp2040', 'pico')) return 'promicro-rp2040'
+  return undefined
+}
+
+/**
+ * Pins to look at while the shape of an RP2040 board is not known: all that
+ * either shape brings out. A pin that is wired to something on the board in
+ * both shapes is left alone.
+ */
+export function pinsOfAnyShape(mcu: Mcu, usablePins: number): Pin[] {
+  const shapes = boardsFor(mcu)
+  const pins = new Set(shapes.flatMap((board) => wirablePins(board, usablePins)))
+  return [...pins].sort((a, b) => a - b)
 }
 
 export function boardsFor(mcu: Mcu): Board[] {

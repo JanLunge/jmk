@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { bootDrives, installOnBoard } from '../lib/firmware'
-import type { BootDrive } from '../lib/desktop'
+import { computed, reactive, ref, watch } from 'vue'
+import { arrivals, installArrival } from '../lib/firmware'
+import SplitPicture, { type PictureBoard } from '../components/SplitPicture.vue'
+import SetupGuide from '../components/SetupGuide.vue'
 import { isConfigured, role } from '../lib/session'
 import KeyboardView from '../components/KeyboardView.vue'
 import { app, connectUsb, openDemo } from '../lib/app'
@@ -14,30 +15,77 @@ const canUsb = usbSupported()
 // Putting JMK on a board for the first time (desktop app only).
 const installing = ref<'idle' | 'waiting' | 'done'>('idle')
 const installError = ref('')
-async function install(drive?: BootDrive) {
+/**
+ * Boards seen without firmware since this screen opened. They stay in the
+ * picture while they restart as keyboards, so nothing blinks out between
+ * the firmware going on and the setup opening.
+ */
+const seen = reactive(new Map<string, string>())
+watch(
+  arrivals,
+  (now) => {
+    now.forEach((arrival) => seen.set(arrival.key, arrival.model))
+    // Unplugged again before anything was installed.
+    if (installing.value === 'idle') for (const key of [...seen.keys()]) if (!now.some((arrival) => arrival.key === key)) seen.delete(key)
+  },
+  { immediate: true },
+)
+
+async function install() {
   installing.value = 'waiting'
   installError.value = ''
+  const before = new Set(app.sessions.map((session) => session.id))
+  // Two new boards at once are most likely the halves of one keyboard:
+  // their setup opens once both are ready, not after the first.
+  app.holding = true
   try {
-    await installOnBoard(drive)
-    // The board restarts as a JMK keyboard and opens by itself.
+    await Promise.all(arrivals.value.map(installArrival))
+    // The boards restart as JMK keyboards and open by themselves.
     installing.value = 'done'
   } catch (error) {
     installing.value = 'idle'
     installError.value = error instanceof Error ? error.message : String(error)
   }
+  // The boards come back one by one, seconds after the copy. Two that were
+  // flashed together are most likely the halves of one keyboard: wait for
+  // both, so their setup opens once and as a pair.
+  const expected = seen.size
+  const back = () => app.sessions.filter((session) => !before.has(session.id) && !session.closed)
+  for (let waited = 0; installing.value === 'done' && back().length < expected && waited < 15_000; waited += 100) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  app.holding = false
+  if (!app.currentId && back().length) app.currentId = back()[0].id
 }
-// The next board in update mode is a new one.
-watch(bootDrives, (now) => now.length && installing.value === 'done' && (installing.value = 'idle'))
 
 /** What the top of the page is about, decided by what is plugged in. */
-const stage = computed(() => (installing.value === 'done' ? 'installed' : bootDrives.value.length ? 'install' : 'waiting'))
+const stage = computed(() => (!seen.size ? 'waiting' : installing.value === 'done' && !arrivals.value.length ? 'installed' : 'install'))
+const arriving = computed<PictureBoard[]>(() =>
+  [...seen.entries()].slice(0, 2).map(([key, model], index) => {
+    const arrival = arrivals.value.find((each) => each.key === key)
+    const label = seen.size > 1 ? (index ? 'second board' : 'first board') : model
+    if (!arrival) return { label, state: 'installing', progress: 1, note: 'restarting as a keyboard…' }
+    return { label, state: arrival.progress !== undefined || installing.value === 'waiting' ? 'installing' : 'new', progress: arrival.progress }
+  }),
+)
 const helping = ref(false)
+/** The list of virtual keyboards is open. */
+const trying = ref(false)
+const steps = computed(() => (seen.size > 1 ? ['Plug in', 'Firmware', 'Find the cable', 'Find the keys'] : ['Plug in', 'Firmware', 'Find the keys']))
+const tip = computed(() =>
+  stage.value === 'waiting'
+    ? {
+        title: 'From experience',
+        text: 'For a split, join the halves with their cable before the USB cables, and do not plug or pull that cable while a half has power: the plug shorts its contacts on the way in.',
+      }
+    : { title: 'Good to know', text: 'This is needed once. Later updates are one click in the Hardware tab and keep your keymap.' },
+)
 
 /** One line on what an open keyboard is, so it is clear the app has seen it. */
 function describe(session: (typeof app.sessions)[number]): string {
   if (session.closed) return session.restarting ? 'restarting…' : 'unplugged'
   if (!isConfigured(session)) return 'new, not set up yet'
-  const kind = { single: '', central: 'main half of a split, ', peripheral: 'other half of a split, ' }[role(session)]
+  const kind = role(session) === 'single' ? '' : 'half of a split, '
   return `${kind}${session.layout.filter((key) => key.w > 0).length} keys`
 }
 const serial = (session: (typeof app.sessions)[number]) =>
@@ -52,137 +100,154 @@ const previews = computed(() =>
 </script>
 
 <template>
-  <div class="home scroll">
-    <!-- Keyboards that are open already come first: they are what you came back for. -->
-    <section v-if="app.sessions.length" class="col open" data-test="found-boards">
-      <h2>Your keyboards</h2>
-      <TransitionGroup name="pop" tag="div" class="found-list col">
-        <button v-for="session in app.sessions" :key="session.id" class="found-row card row" :data-test="'found-' + session.id" @click="app.currentId = session.id">
-          <span class="status" :class="{ off: session.closed }" />
-          <div class="col">
-            <strong>{{ session.meta.name || session.demo?.label || session.transport.label }}</strong>
-            <span class="muted small">
-              {{ describe(session) }} · firmware {{ session.info.firmware.join('.') }}
-              <template v-if="session.transport.kind === 'usb'"> · serial …{{ serial(session) }}</template>
-            </span>
+  <div class="home">
+    <SetupGuide :steps="steps" :current="stage === 'waiting' ? 0 : 1" :tip="tip" />
+    <div class="side col">
+      <div class="setup-fill" :class="{ listed: app.sessions.length }">
+        <!-- Keyboards that are open already come first: they are what you came back for. -->
+        <section v-if="app.sessions.length" class="col open" data-test="found-boards">
+          <h2>Your keyboards</h2>
+          <TransitionGroup name="pop" tag="div" class="found-list col">
+            <button v-for="session in app.sessions" :key="session.id" class="found-row card row" :data-test="'found-' + session.id" @click="app.currentId = session.id">
+              <span class="status" :class="{ off: session.closed }" />
+              <div class="col">
+                <strong>{{ session.meta.name || session.demo?.label || session.transport.label }}</strong>
+                <span class="muted small">
+                  {{ describe(session) }} · firmware {{ session.info.firmware.join('.') }}
+                  <template v-if="session.transport.kind === 'usb'"> · serial …{{ serial(session) }}</template>
+                </span>
+              </div>
+              <span class="grow" />
+              <span class="chip" :class="{ accent: session.setup }">{{ session.setup ? 'Continue setup' : 'Open' }}</span>
+            </button>
+          </TransitionGroup>
+        </section>
+
+        <!-- One thing to do at a time, chosen by what is plugged in. The picture stays and changes with it. -->
+        <section class="setup-stage" :class="{ quiet: app.sessions.length }">
+          <Transition name="words" mode="out-in">
+            <div :key="stage + (installing === 'waiting') + seen.size" class="words" :data-test="stage === 'install' ? 'found-boot' : undefined">
+              <template v-if="stage === 'install'">
+                <h1>{{ installing === 'waiting' ? 'Installing the firmware…' : 'Install the firmware.' }}</h1>
+                <p class="muted lead">
+                  {{ seen.size > 1 ? 'Two boards without firmware are connected.' : 'A board without firmware is connected.' }}
+                  Copying it takes a few seconds.
+                </p>
+              </template>
+              <template v-else-if="stage === 'installed'">
+                <h1>Installed.</h1>
+                <p class="muted lead">{{ seen.size > 1 ? 'The boards are' : 'The board is' }} restarting. The setup opens in a moment…</p>
+              </template>
+              <template v-else>
+                <h1>{{ app.sessions.length ? 'Plug in another keyboard.' : 'Plug in your keyboard.' }}</h1>
+                <p class="muted lead">
+                  <template v-if="desktop">It shows up here by itself.</template>
+                  <template v-else>Then connect it below.</template>
+                  One board or two: for a split, give each half its own USB cable, just for the setup.
+                </p>
+              </template>
+            </div>
+          </Transition>
+          <SplitPicture :boards="arriving" cable="idle" />
+          <div class="below col">
+            <p v-if="installError" class="note warn">{{ installError }}</p>
+            <button v-if="stage === 'waiting'" class="btn small ghost help" data-test="boot-help" @click="helping = !helping">
+              {{ helping ? 'Hide' : 'It does not show up?' }}
+            </button>
+            <Transition name="rise">
+              <ul v-if="helping && stage === 'waiting'" class="help-list muted small">
+                <li>A board that runs JMK already opens by itself: new ones in the setup, the others where you left them.</li>
+                <li>
+                  A new board, or one with other firmware: unplug it completely (for a split, the cable between the
+                  halves too), hold BOOT or BOOTSEL, plug in the USB cable, let go.
+                  <template v-if="!desktop">A drive appears; copy the JMK firmware file onto it. The desktop app does this for you.</template>
+                </li>
+                <li>Try another USB cable: many carry power only.</li>
+                <li>Boards with a single button (the 0xCB Helios, for one): plug in, hold the button for a full second, let go.</li>
+                <li>A split keyboard has two boards. Do this for each half, each on its own USB cable.</li>
+              </ul>
+            </Transition>
+          </div>
+        </section>
+      </div>
+
+      <footer class="setup-bar row">
+        <template v-if="stage !== 'waiting'">
+          <span class="muted small">{{ seen.size > 1 ? seen.size + ' × ' : '' }}{{ [...seen.values()][0] }}</span>
+          <span class="grow" />
+          <span v-if="stage === 'installed'" class="muted small">continues by itself</span>
+          <button v-else class="btn primary" :disabled="installing === 'waiting' || !arrivals.length" data-test="install-found" @click="install()">
+            {{ installing === 'waiting' ? 'Copying…' : seen.size > 1 ? 'Install on both' : 'Install' }}
+          </button>
+        </template>
+        <template v-else>
+          <span class="muted small">No board at hand?</span>
+          <div class="menu-wrap">
+            <button class="btn ghost" :class="{ on: trying }" data-test="demos" @click="trying = !trying">Try a virtual keyboard ▾</button>
+            <Transition name="rise">
+              <div v-if="trying" class="menu card col" data-test="demo-list">
+                <span class="muted small">The real firmware, running inside the app. Click its keys as if you pressed them.</span>
+                <div class="demos">
+                  <button
+                    v-for="{ demo, layout } in previews"
+                    :key="demo.id"
+                    class="demo"
+                    :title="demo.blurb"
+                    :data-test="'demo-' + demo.id"
+                    @click="(trying = false), openDemo(demo)"
+                  >
+                    <div class="preview"><KeyboardView :layout="layout" :max-unit="14" /></div>
+                    <span>{{ demo.name }}</span>
+                  </button>
+                </div>
+              </div>
+            </Transition>
           </div>
           <span class="grow" />
-          <span class="chip" :class="{ accent: session.setup }">{{ session.setup ? 'Continue setup' : 'Open' }}</span>
-        </button>
-      </TransitionGroup>
-    </section>
-
-    <!-- One thing to do at a time, chosen by what is plugged in. -->
-    <section class="stage" :class="{ quiet: app.sessions.length }">
-      <Transition name="rise" mode="out-in">
-        <div v-if="stage === 'install'" key="install" class="col centre" data-test="found-boot">
-          <div class="pulse found"><span class="glyph">＋</span></div>
-          <h1>A new board is here.</h1>
-          <p class="muted lead">
-            {{ bootDrives[0].model }} is in update mode and has no JMK on it yet. Installing takes a few seconds and is
-            only needed once.
-          </p>
-          <button class="btn primary big" :disabled="installing === 'waiting'" data-test="install-found" @click="install(bootDrives[0])">
-            {{ installing === 'waiting' ? 'Copying the firmware…' : 'Install JMK on it' }}
+          <span class="muted small brand" data-test="brand"><strong>POG</strong> v2 · runs on JMK firmware</span>
+          <button v-if="canUsb" class="btn" :class="{ primary: !desktop }" data-test="connect" @click="connectUsb">
+            {{ desktop ? 'Look for a keyboard' : 'Connect a keyboard' }}
           </button>
-          <p v-if="installError" class="note warn">{{ installError }}</p>
-          <p class="muted small">Afterwards it restarts as a keyboard and the setup opens by itself.</p>
-        </div>
-
-        <div v-else-if="stage === 'installed'" key="installed" class="col centre">
-          <div class="pulse found"><span class="glyph">✓</span></div>
-          <h1>Installed.</h1>
-          <p class="muted lead waiting">The board is restarting as a keyboard. Its setup opens in a moment…</p>
-        </div>
-
-        <div v-else key="waiting" class="col centre">
-          <div class="pulse">
-            <svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true">
-              <rect x="3" y="8" width="26" height="16" rx="4" fill="none" stroke="currentColor" stroke-width="2.2" />
-              <rect v-for="i in 4" :key="i" :x="1 + i * 5.2" y="12" width="3.2" height="3.2" rx="1" fill="currentColor" />
-              <rect x="10" y="18" width="12" height="3" rx="1.5" fill="currentColor" />
-            </svg>
-          </div>
-          <h1>{{ app.sessions.length ? 'Plug in another keyboard.' : 'Plug in your keyboard.' }}</h1>
-          <p class="muted lead">
-            <template v-if="desktop">It shows up here by itself, and the app takes it from there.</template>
-            <template v-else>Then connect it here, and the app takes it from there.</template>
-          </p>
-          <span v-if="desktop" class="waiting small">Watching the USB ports…</span>
-
-          <div class="paths">
-            <div class="path col">
-              <span class="tag">Already runs JMK</span>
-              <strong>Just plug it in.</strong>
-              <p class="muted small">
-                <template v-if="desktop">It opens at once: new ones in the setup, the others where you left them.</template>
-                <template v-else>Then choose it from the browser's list.</template>
-              </p>
-              <button class="btn small" :class="{ primary: !desktop }" :disabled="!canUsb" data-test="connect" @click="connectUsb">
-                {{ desktop ? 'Not showing up? Look for it' : 'Connect a keyboard' }}
-              </button>
-              <span v-if="!canUsb" class="muted small">This browser cannot talk to USB keyboards. Use the desktop app.</span>
-            </div>
-            <div class="path col">
-              <span class="tag">New board, or other firmware on it</span>
-              <strong>Hold BOOT while plugging it in.</strong>
-              <p class="muted small">
-                <template v-if="desktop">That puts it in update mode. It appears here and JMK is installed with one click.</template>
-                <template v-else>
-                  A drive appears; copy the JMK firmware file onto it. The desktop app does this for you.
-                </template>
-              </p>
-              <button class="btn small ghost help" data-test="boot-help" @click="helping = !helping">
-                {{ helping ? 'Hide' : 'Nothing appears?' }}
-              </button>
-            </div>
-          </div>
-          <Transition name="rise">
-            <ul v-if="helping" class="help-list muted small">
-              <li>Unplug the board completely first (for a split, the cable between the halves too), then hold BOOT or BOOTSEL, plug in the USB cable, let go.</li>
-              <li>Try another USB cable: many carry power only.</li>
-              <li>Boards with a single button (the 0xCB Helios, for one): plug in, hold the button for a full second, let go.</li>
-              <li>A split keyboard has two boards. Do this for each half, each on its own USB cable.</li>
-            </ul>
-          </Transition>
-        </div>
-      </Transition>
-    </section>
-
-    <!-- For looking around without hardware. -->
-    <section class="virtual col">
-      <div class="row">
-        <span class="chip">No hardware needed</span>
-        <h3>Try a virtual keyboard</h3>
-        <span class="muted small">The real firmware, running inside the app. Click its keys as if you pressed them.</span>
-        <span class="grow" />
-        <span class="muted small brand" data-test="brand"><strong>POG</strong> v2 · runs on JMK firmware</span>
-      </div>
-      <div class="demos">
-        <button
-          v-for="({ demo, layout }, index) in previews"
-          :key="demo.id"
-          class="demo"
-          :style="{ animationDelay: 200 + index * 70 + 'ms' }"
-          :title="demo.blurb"
-          :data-test="'demo-' + demo.id"
-          @click="openDemo(demo)"
-        >
-          <div class="preview"><KeyboardView :layout="layout" :max-unit="14" /></div>
-          <span>{{ demo.name }}</span>
-        </button>
-      </div>
-    </section>
+          <span v-else class="muted small">This browser cannot talk to USB keyboards. Use the desktop app.</span>
+        </template>
+      </footer>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.side {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.listed {
+  gap: 32px;
+}
+
+.setup-stage.quiet h1 {
+  font-size: 1.5rem;
+}
+
+.menu-wrap {
+  position: relative;
+}
+
+.menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(560px, 80vw);
+  padding: 12px;
+  gap: 10px;
+  z-index: 5;
+  box-shadow: var(--shadow);
+}
+
 .home {
-  min-height: 100%;
-  padding: 40px clamp(24px, 6vw, 80px) 28px;
+  height: 100%;
   display: flex;
-  flex-direction: column;
-  gap: 40px;
 }
 
 .open {
@@ -194,12 +259,6 @@ const previews = computed(() =>
 }
 
 /* The stage takes whatever height is left, so the one thing to do sits in the middle of the window. */
-.stage {
-  flex: 1;
-  display: grid;
-  place-items: center;
-  padding: 24px 0;
-}
 
 .centre {
   align-items: center;
@@ -208,23 +267,6 @@ const previews = computed(() =>
   max-width: 720px;
 }
 
-.centre h1 {
-  font-size: 2.3rem;
-  margin-top: 10px;
-}
-
-.stage.quiet h1 {
-  font-size: 1.5rem;
-}
-
-.stage.quiet .pulse {
-  display: none;
-}
-
-.lead {
-  font-size: 1.08rem;
-  max-width: 520px;
-}
 
 .pulse {
   position: relative;
