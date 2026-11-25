@@ -44,8 +44,6 @@ export const app = reactive({
   /** Sessions that belong together as halves of one demo split. */
   pairs: [] as [string, string][],
   toasts: [] as Toast[],
-  /** Keyboards set up a moment ago: the editor keeps guiding them. */
-  fresh: [] as string[],
   /** Firmware is being put on boards: those that come back open quietly until all are done. */
   holding: false,
   busy: false,

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import KeyboardView from '../components/KeyboardView.vue'
-import ScratchPad from '../components/ScratchPad.vue'
-import { app, attempt, cabled, pairByCable, partnerOf, reconcile, resolveConflict, saveAll, sideOf, toast } from '../lib/app'
+import TryBox from '../components/TryBox.vue'
+import { attempt, cabled, pairByCable, partnerOf, reconcile, resolveConflict, saveAll, sideOf, toast } from '../lib/app'
+import { carriedVersion, updateDue, updateFirmware, updating } from '../lib/firmware'
+import { historyOf, redo, startHistory, undo } from '../lib/history'
 import { legend } from '../lib/keycodes'
 import { hasKey } from '../lib/layout'
 import { LIMITS } from '../lib/protocol'
@@ -22,10 +24,6 @@ const tab = ref<Tab>('keymap')
 const partner = computed(() => partnerOf(props.session))
 const saving = ref(false)
 
-// The scratch pad stays the way it was left, open or closed.
-const SCRATCH_KEY = 'pog.scratch'
-const scratch = ref(localStorage.getItem(SCRATCH_KEY) === 'open')
-watch(scratch, (open) => localStorage.setItem(SCRATCH_KEY, open ? 'open' : 'closed'))
 const keyCount = computed(() => props.session.layout.filter(hasKey).length - knobPositions(props.session).filter((pos) => hasKey(props.session.layout[pos])).length)
 
 const isHalf = computed(() => role(props.session) !== 'single')
@@ -33,37 +31,79 @@ const other = computed(() => (sideOf(props.session) === 'left' ? 'right' : 'left
 const partnerOpen = computed(() => !!partner.value && !partner.value.closed)
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// Every change is written to the keyboard's flash by itself, a moment after
+// the last one, so a burst of changes is one write.
+const SAVE_AFTER_MS = 700
+let saveTimer: ReturnType<typeof setTimeout> | undefined
+const saveFailed = ref(false)
+function saveSoon() {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(saveNow, SAVE_AFTER_MS)
+}
 async function saveNow() {
+  clearTimeout(saveTimer)
+  saveTimer = undefined
+  const { session } = props
+  if (session.closed || session.setup) return
+  // One save at a time; the one running looks again when it is done.
+  if (saving.value) return
   saving.value = true
-  if (await attempt(() => saveAll(props.session).then(() => true))) {
-    await attempt(reportSave)
-    for (const half of [props.session, partner.value]) {
-      if (half && !half.closed && needsRestart(half)) {
-        toast('Restarting the keyboard so the new pin setting takes effect')
-        await attempt(() => restart(half))
-      }
-    }
-  }
+  const upTo = session.edits
+  const done = await attempt(async () => {
+    await saveAll(session)
+    await noteSaved()
+    return true
+  })
+  saveFailed.value = !done
   saving.value = false
+  if (done && session.edits !== upTo) {
+    session.unsaved = true
+    saveSoon()
+  }
+}
+watch(() => props.session.edits, saveSoon)
+
+/** After a save this half's keymap is the one this editor shows. */
+async function noteSaved() {
+  if (!isHalf.value) return
+  const status = await props.session.client.splitStatus()
+  props.session.split = status
+  shownDigest = status.digest
+  // The other half fetches it when it is back; say so then.
+  if (!status.connected) owed = true
 }
 
-/** Say where a save went. A half reached only through the cable takes a moment to fetch it. */
-async function reportSave() {
-  if (!isHalf.value) return toast('Saved to the keyboard')
-  if (partnerOpen.value && !partner.value!.unsaved) return toast('Saved to both halves')
-  for (let tries = 0; tries < 16 && !props.session.closed; tries++) {
-    const status = await props.session.client.splitStatus()
-    props.session.split = status
-    shownDigest = status.digest
-    if (!status.connected) {
-      owed = true
-      return toast(`Saved. The ${other.value} half gets it when it is connected.`)
-    }
-    if (status.sync === 'Same') return toast('Saved to both halves')
-    if (status.sync === 'Conflict') return
-    await wait(250)
+const saveKind = computed(() => (saveFailed.value ? 'failed' : saving.value || props.session.unsaved ? 'saving' : 'saved'))
+const saveText = computed(() => ({ failed: 'Not saved · retry', saving: 'Saving…', saved: 'Saved' })[saveKind.value])
+
+/** On older firmware a changed data pin or cable setting only counts after a restart. */
+const restartNeeded = computed(() => [props.session, partner.value].some((half) => half && !half.closed && needsRestart(half)))
+/** A half runs older firmware than the app carries. */
+const outdated = computed(() => [props.session, partner.value].find((half) => half && updateDue(half)))
+const updateHint = computed(() => `Version ${outdated.value?.info.firmware.join('.')} to ${carriedVersion().join('.')}. The keyboard is away for a few seconds and comes back by itself; your settings are kept.`)
+const restartingNow = ref(false)
+async function restartNow() {
+  restartingNow.value = true
+  for (const half of [props.session, partner.value]) {
+    if (half && !half.closed && needsRestart(half)) await attempt(() => restart(half))
   }
-  toast(`Saved. The ${other.value} half is still fetching it.`)
+  restartingNow.value = false
+}
+
+// --- Undo and redo -----------------------------------------------------------
+const history = computed(() => historyOf(props.session))
+async function stepBack(which: 'undo' | 'redo') {
+  const moved = await attempt(() => (which === 'undo' ? undo : redo)(props.session))
+  if (moved) toast(which === 'undo' ? 'Undone' : 'Redone')
+}
+function onShortcut(event: KeyboardEvent) {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+  const key = event.key.toLowerCase()
+  if (key !== 'z' && key !== 'y') return
+  // Text being typed has its own undo.
+  if ((event.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return
+  event.preventDefault()
+  stepBack(key === 'y' || event.shiftKey ? 'redo' : 'undo')
 }
 
 // What is being typed is kept apart from the keyboard's name: the header
@@ -98,20 +138,19 @@ let owed = false
 const conflict = ref(false)
 const busy = ref(false)
 async function checkSplit() {
-  if (!isHalf.value || props.session.closed || busy.value) return
+  if (!isHalf.value || props.session.closed || busy.value || saving.value) return
   busy.value = true
   try {
     const status = await props.session.client.splitStatus()
     props.session.split = status
     pairByCable(props.session)
-    if (props.session.unsaved || shownDigest === undefined) shownDigest = status.digest
+    if (props.session.unsaved || saving.value || shownDigest === undefined) shownDigest = status.digest
     else if (status.digest !== shownDigest) {
       // This half fetched the other half's keymap over the cable.
       await refresh(props.session)
       shownDigest = status.digest
       toast(`The ${sideOf(props.session)} half caught up with the ${other.value} one`)
     }
-    if (status.connected && status.sync === 'Ahead') owed = true
     if (status.connected && status.sync === 'Same' && owed) {
       owed = false
       toast(`The ${other.value} half caught up`)
@@ -225,36 +264,24 @@ watch(conflict, async (now) => {
   if (now && partnerOpen.value) await attempt(() => refresh(partner.value!))
 })
 
-// --- The guide carries on for a keyboard that was just set up ----------------------
-const seenLayout = ref(false)
-watch(tab, (now) => now === 'layout' && (seenLayout.value = true))
-const coach = computed<{ title: string; text: string; go?: Tab; label?: string } | undefined>(() => {
-  if (!app.fresh.includes(props.session.id)) return undefined
-  if (!seenLayout.value) {
-    return {
-      title: 'It types',
-      text: 'Every key has a placeholder letter. Next: arrange the keys the way they sit on your desk.',
-      go: 'layout',
-      label: 'Open Layout',
-    }
-  }
-  if (tab.value === 'layout') return { title: 'Next up', text: 'Drag the keys into place. Then choose what each one does.', go: 'keymap', label: 'Open Keymap' }
-  return { title: 'Last step', text: 'Click a key and pick what it does. Changes work at once; Save keeps them on the keyboard.' }
-})
-function dismissCoach() {
-  app.fresh = app.fresh.filter((id) => id !== props.session.id && id !== partner.value?.id)
-}
-
 onMounted(async () => {
   // The other half's editor changed the keymap they share.
   if (props.session.stale) {
     await attempt(() => refresh(props.session))
     props.session.stale = false
   }
+  startHistory(props.session)
+  window.addEventListener('keydown', onShortcut)
+  if (props.session.unsaved) saveSoon()
   checkSplit()
   timer = setInterval(checkSplit, 1000)
 })
-onBeforeUnmount(() => clearInterval(timer))
+onBeforeUnmount(() => {
+  clearInterval(timer)
+  window.removeEventListener('keydown', onShortcut)
+  // Leaving with a change still waiting: write it now.
+  if (saveTimer) saveNow()
+})
 </script>
 
 <template>
@@ -290,12 +317,25 @@ onBeforeUnmount(() => clearInterval(timer))
       </div>
       <span v-else class="muted small" data-test="key-count">{{ keyCount }} keys</span>
       <span class="grow" />
-      <button v-if="!session.demo" class="btn" :class="{ on: scratch }" data-test="scratch-toggle" @click="scratch = !scratch">
-        <span class="caret" /> Try it
+      <TryBox v-if="!session.demo" />
+      <button v-if="outdated" class="btn small primary" :disabled="!!updating" :title="updateHint" data-test="firmware-due" @click="attempt(() => updateFirmware(session))">
+        Update firmware
       </button>
-      <button class="btn" :class="{ primary: session.unsaved, pulse: session.unsaved }" :disabled="saving || !session.unsaved" data-test="save" @click="saveNow">
-        {{ session.unsaved ? 'Save' : 'Saved' }}
+      <button v-else-if="restartNeeded" class="btn small primary" :disabled="restartingNow || session.unsaved" title="The new pin setting takes effect when the keyboard restarts" data-test="restart" @click="restartNow">
+        Restart to apply
       </button>
+      <!-- What became of the changes, in one place: step back, step forward, and whether the keyboard has them. -->
+      <div class="changes row">
+        <button class="step" :disabled="!history.undo || history.busy" title="Undo (Ctrl/⌘ Z). Only what was changed since the app opened." aria-label="Undo" data-test="undo" @click="stepBack('undo')">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></svg>
+        </button>
+        <button class="step" :disabled="!history.redo || history.busy" title="Redo (Ctrl/⌘ Shift Z)" aria-label="Redo" data-test="redo" @click="stepBack('redo')">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" /></svg>
+        </button>
+        <button class="save-state" :class="saveKind" :disabled="!saveFailed" :title="saveFailed ? 'Try to save again' : 'Changes are saved to the keyboard by themselves'" data-test="save" @click="saveNow">
+          <span class="dot" aria-hidden="true" />{{ saveText }}
+        </button>
+      </div>
     </header>
 
     <nav class="tabs row">
@@ -324,15 +364,6 @@ onBeforeUnmount(() => clearInterval(timer))
         </div>
       </div>
     </Transition>
-    <Transition name="rise">
-      <div v-if="coach && !conflict" class="coach row" data-test="coach">
-        <b>{{ coach.title }}</b>
-        <span>{{ coach.text }}</span>
-        <span class="grow" />
-        <button v-if="coach.go" class="btn small" data-test="coach-go" @click="tab = coach.go">{{ coach.label }}</button>
-        <button class="btn small ghost" title="Hide these hints" data-test="coach-close" @click="dismissCoach">×</button>
-      </div>
-    </Transition>
 
     <div class="content">
       <Transition name="rise" mode="out-in">
@@ -346,13 +377,102 @@ onBeforeUnmount(() => clearInterval(timer))
         </div>
       </Transition>
     </div>
-    <Transition name="drawer">
-      <ScratchPad v-if="scratch && !session.demo" @close="scratch = false" />
-    </Transition>
   </div>
 </template>
 
 <style scoped>
+.changes {
+  gap: 0;
+  align-items: stretch;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.step,
+.save-state {
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+
+.step {
+  width: 36px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.step svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.step:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+
+.step:disabled {
+  color: var(--muted);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.save-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px 0 12px;
+  border-left: 1px solid var(--line);
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.save-state.saving .dot {
+  width: 10px;
+  height: 10px;
+  background: none;
+  border: 1.5px solid var(--accent);
+  border-right-color: transparent;
+  animation: turn 0.8s linear infinite;
+}
+
+.save-state.failed {
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.save-state.failed:hover {
+  background: var(--panel-2);
+}
+
+.save-state.failed .dot {
+  background: var(--danger);
+}
+
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .name.empty {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -396,8 +516,7 @@ onBeforeUnmount(() => clearInterval(timer))
   margin: 0;
 }
 
-.conflict,
-.coach {
+.conflict {
   margin: 12px 24px 0;
   flex: none;
 }
@@ -417,23 +536,6 @@ onBeforeUnmount(() => clearInterval(timer))
 .side {
   gap: 8px;
   align-items: center;
-}
-
-.coach {
-  gap: 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  font-size: 0.9rem;
-}
-
-.coach b {
-  color: var(--accent);
-  font-size: 0.7rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  white-space: nowrap;
 }
 
 .halves {
@@ -560,37 +662,6 @@ onBeforeUnmount(() => clearInterval(timer))
 
 .peripheral {
   align-items: flex-start;
-}
-
-.btn.on {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.caret {
-  width: 2px;
-  height: 1em;
-  background: currentColor;
-  animation: blink 1s steps(2) infinite;
-}
-
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
-}
-
-.drawer-enter-active,
-.drawer-leave-active {
-  transition:
-    margin-bottom 0.25s var(--ease),
-    opacity 0.2s;
-}
-
-.drawer-enter-from,
-.drawer-leave-to {
-  margin-bottom: -132px;
-  opacity: 0;
 }
 
 .pulse {

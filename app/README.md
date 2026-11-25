@@ -2,8 +2,8 @@
 
 The configurator for keyboards running JMK firmware, and the second version
 of POG. It sets up a keyboard: controller and protected pins, key
-detection, layout, keymap, hold-tap, combos, macros, split halves, firmware
-updates and sharing through the registry.
+detection, layout, keymap, hold-tap, combos, macros, lights, split halves,
+firmware updates and keyboard files.
 
 It is a Vue application that runs in two places:
 

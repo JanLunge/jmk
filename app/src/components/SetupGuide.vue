@@ -1,122 +1,117 @@
 <script setup lang="ts">
 // The way from a bare controller to a working keyboard, kept in view for the
-// whole setup: which step this is, and one thing worth knowing about it.
+// whole setup as one line of dots. A dot says what its step is when pointed at.
 defineProps<{
   steps: string[]
   /** Index of the step in progress; the ones before it are done. */
   current: number
-  tip?: { title: string; text: string }
 }>()
 </script>
 
 <template>
-  <aside class="setup-guide col" data-test="setup-guide">
-    <h4>Setup</h4>
-    <ol>
-      <li v-for="(step, index) in steps" :key="step" :class="{ done: index < current, now: index === current }">
-        <span class="mark">{{ index < current ? '✓' : '' }}</span>{{ step }}
-      </li>
-    </ol>
-    <Transition name="fade" mode="out-in">
-      <div v-if="tip" :key="tip.text" class="tip" data-test="guide-tip">
-        <strong>{{ tip.title }}</strong>
-        {{ tip.text }}
-      </div>
-    </Transition>
-  </aside>
+  <ol class="setup-guide" data-test="setup-guide" :aria-label="`Setup, step ${current + 1} of ${steps.length}: ${steps[current]}`">
+    <li
+      v-for="(step, index) in steps"
+      :key="step"
+      :class="{ done: index < current, now: index === current }"
+      :aria-current="index === current ? 'step' : undefined"
+      tabindex="0"
+    >
+      <span class="dot" />
+      <span class="name">{{ step }}</span>
+    </li>
+  </ol>
 </template>
 
 <style scoped>
 .setup-guide {
-  width: 210px;
-  flex: none;
-  padding: 22px 16px 16px;
-  border-right: 1px solid var(--line);
-  background: var(--panel);
-  gap: 10px;
-}
-
-h4 {
-  margin: 0;
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  font-weight: 600;
-}
-
-ol {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 14px 0 0;
+  flex: none;
   display: flex;
-  flex-direction: column;
-  gap: 9px;
+  justify-content: center;
+  align-items: center;
 }
 
 li {
+  position: relative;
   display: flex;
-  gap: 9px;
   align-items: center;
-  color: var(--muted);
-  transition: color 0.3s var(--ease);
+  /* A target larger than the dot, so it is easy to point at. */
+  padding: 8px 0;
+  outline: none;
 }
 
-.mark {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 1.5px solid var(--line);
-  flex: none;
-  display: grid;
-  place-items: center;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--accent-ink);
+/* The line to the step before. */
+li + li::before {
+  content: '';
+  width: 26px;
+  height: 2px;
+  margin: 0 5px;
+  border-radius: 1px;
+  background: var(--line);
+  transition: background 0.3s var(--ease);
+}
+
+li.done + li::before {
+  background: var(--ok);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--line);
   transition: all 0.3s var(--ease);
 }
 
-li.done {
-  color: var(--text);
-}
-
-li.done .mark {
+li.done .dot {
   background: var(--ok);
-  border-color: var(--ok);
 }
 
-li.now {
-  color: var(--text);
-  font-weight: 600;
+li.now .dot {
+  width: 22px;
+  background: var(--accent);
 }
 
-li.now .mark {
-  border-color: var(--accent);
+li:focus-visible .dot {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.tip {
-  margin-top: auto;
+.name {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  transform: translate(calc(50% - 4px), -4px);
+  padding: 3px 9px;
+  border-radius: 7px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 9px 11px;
-  font-size: 0.82rem;
-  color: var(--muted);
-  background: var(--bg);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  color: var(--text);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.15s var(--ease),
+    transform 0.15s var(--ease);
+  z-index: 6;
 }
 
-.tip strong {
-  display: block;
-  color: var(--accent);
-  font-size: 0.7rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  margin-bottom: 2px;
+li.now .name {
+  transform: translate(calc(50% - 11px), -4px);
 }
 
-@media (max-width: 860px) {
-  .setup-guide {
-    display: none;
-  }
+li:hover .name,
+li:focus-visible .name {
+  opacity: 1;
+  transform: translate(calc(50% - 4px), 0);
+}
+
+li.now:hover .name,
+li.now:focus-visible .name {
+  transform: translate(calc(50% - 11px), 0);
 }
 </style>

@@ -5,4 +5,5 @@ contextBridge.exposeInMainWorld('jmkDesktop', {
   platform: process.platform,
   flash: (mcu, onto) => ipcRenderer.invoke('jmk:flash', mcu, onto),
   drives: () => ipcRenderer.invoke('jmk:drives'),
+  bundled: () => ipcRenderer.invoke('jmk:bundled'),
 })

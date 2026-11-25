@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { assign, chord, hold, openDemo, openShape, pickDemo, plugInNew, release, runSplitWizard, runWizard, showBench, tap, typed, virtualKeys } from './helpers'
+import { assign, chord, giveLetters, hold, openDemo, openShape, pickDemo, plugInNew, release, runSplitWizard, runWizard, saved, showBench, skipArranging, tap, typed, virtualKeys } from './helpers'
 
 test('macro pad: setup finds the matrix, keys type, edits are live and survive a restart', async ({ page }) => {
   await openDemo(page, 'macropad')
@@ -17,14 +17,125 @@ test('macro pad: setup finds the matrix, keys type, edits are live and survive a
   await page.click('[data-test=nav-hardware]')
   await expect(page.locator('[data-test=wiring-summary]')).toContainText('rows GP16, GP17; columns GP18, GP19, GP20')
 
-  await page.click('[data-test=save]')
-  await expect(page.locator('[data-test=save]')).toHaveText('Saved')
+  await saved(page)
   // A firmware update restarts the keyboard; saved settings must come back.
   await page.click('[data-test=update-firmware]')
   await expect(page.getByText('update mode')).toBeVisible()
   await expect(page.locator('[data-test=update-firmware]')).toBeVisible({ timeout: 10_000 })
   await tap(page, 0)
   await expect(typed(page)).toHaveText('afqq')
+})
+
+test('a keyboard file restores a board that is set up again', async ({ page }) => {
+  await openDemo(page, 'macropad')
+  await runWizard(page)
+  await page.fill('[data-test=rename]', 'Pad')
+  await page.keyboard.press('Enter')
+  await assign(page, 0, 0x14) // Q
+  await page.click('[data-test=nav-share]')
+  const [download] = await Promise.all([page.waitForEvent('download'), page.click('[data-test=export]')])
+  const file = await download.path()
+
+  // A new board, as after flashing anew: its setup takes the file instead of key presses.
+  await page.goto('/')
+  await openDemo(page, 'macropad')
+  await expect(page.locator('[data-test=found]')).toBeVisible()
+  await page.locator('[data-test=restore-file]').setInputFiles(file)
+  await expect(page.locator('[data-test=restore-dialog]')).toContainText('Restore “Pad”')
+  await page.click('[data-test=restore-apply]')
+  await expect(page.locator('[data-test=rename]')).toHaveValue('Pad')
+  await tap(page, 0)
+  await tap(page, 1)
+  await expect(typed(page)).toHaveText('qb')
+})
+
+test('setup: row ends give the picture, painted rows give the letters', async ({ page }) => {
+  await openDemo(page, 'macropad')
+  await expect(page.locator('[data-test=found]')).toBeVisible()
+  await page.waitForTimeout(750)
+  // The bottom row of the bench first: the order pressed is the order drawn.
+  for (const key of [3, 4, 5, 0, 1, 2]) await tap(page, key)
+  await page.click('[data-test=next]')
+
+  // The last key of the first row, pressed on the keyboard; a key not pressed before does not count.
+  await expect(page.locator('[data-test=rows-1] .line')).toHaveCount(1)
+  await tap(page, 5)
+  await expect(page.locator('[data-test=rows-1] .line')).toHaveCount(2)
+  await expect(page.locator('[data-test=row-key-1-2]')).toHaveClass(/end/)
+  // Taken back and set again with a click.
+  await page.click('[data-test=row-key-1-2]')
+  await expect(page.locator('[data-test=rows-1] .line')).toHaveCount(1)
+  await page.click('[data-test=row-key-1-2]')
+  await expect(page.locator('[data-test=next]')).toHaveText('Continue')
+  await page.click('[data-test=next]')
+
+  // Colemak-DH: a click on the first key of a row takes the keys to its right too.
+  const board = (pos: number) => page.locator(`[data-test=letters-board] [data-pos="${pos}"]`)
+  await page.click('[data-test=alphas-colemak-dh]')
+  // Positions are numbered in the order the keys were pressed.
+  await board(0).dispatchEvent('pointerdown')
+  await page.dispatchEvent('body', 'pointerup')
+  await expect(page.locator('[data-test=letter-row-0]')).toContainText('3 keys')
+  await expect(page.locator('[data-test=letter-row-1]')).toHaveClass(/on/)
+  await board(3).dispatchEvent('pointerdown')
+  await page.dispatchEvent('body', 'pointerup')
+  await expect(board(2)).toHaveText('F')
+  await expect(page.locator('[data-test=next]')).toHaveText('Finish')
+  await page.click('[data-test=next]')
+  await expect(page.locator('[data-test=rename]')).toBeVisible()
+
+  // The first key pressed is top left and types Q; the row pressed second sits below and starts with A.
+  const legends = await page.locator('[data-test=keymap-board] [data-pos]').evaluateAll((keys) =>
+    keys
+      .map((key) => ({ text: key.textContent!.trim(), box: key.getBoundingClientRect() }))
+      .sort((a, b) => Math.round(a.box.y - b.box.y) || a.box.x - b.box.x)
+      .map((key) => key.text),
+  )
+  expect(legends).toEqual(['Q', 'W', 'F', 'A', 'R', 'S'])
+  await tap(page, 3)
+  await tap(page, 5)
+  await tap(page, 0)
+  await expect(typed(page)).toHaveText('qfa')
+})
+
+test('split setup: rows on both halves, letters across them', async ({ page }) => {
+  await openDemo(page, 'split')
+  await expect(page.locator('[data-test=found-other]')).toBeVisible({ timeout: 20_000 })
+  await page.waitForTimeout(750)
+  const count = await virtualKeys(page).count()
+  for (let key = 0; key < count; key++) await tap(page, key)
+  await page.click('[data-test=next]')
+  // Five keys a row and two thumb keys, on either half.
+  for (const key of [4, 9, 14, 21, 26, 31]) await tap(page, key)
+  await expect(page.locator('[data-test=rows-1] .line')).toHaveCount(4)
+  await expect(page.locator('[data-test=rows-2] .line')).toHaveCount(4)
+  await page.click('[data-test=next]')
+
+  // QWERTY: each row runs on from the left half into the right one.
+  for (const first of [0, 5, 10]) {
+    await page.locator(`[data-test=letters-board] [data-pos="${first}"]`).dispatchEvent('pointerdown')
+    await page.dispatchEvent('body', 'pointerup')
+  }
+  await expect(page.locator('[data-test=letter-row-2]')).toContainText('10 keys')
+  await page.click('[data-test=next]')
+  await expect(page.locator('[data-test=split-status]')).toHaveAttribute('title', /types for both/, { timeout: 10_000 })
+  for (const key of [0, 17, 9, 31, 15]) await tap(page, key)
+  // The thumb key types nothing yet.
+  await expect(typed(page)).toHaveText('qyg/')
+
+  // The keyboard remembers the rows: another arrangement is picked, not painted again.
+  await page.locator('[data-test=keymap-board] [data-pos="0"]').dispatchEvent('pointerdown')
+  await page.check('[data-test=hold-tap]') // Q, held: Shift
+  await page.click('[data-test=letters-open]')
+  await expect(page.locator('[data-test=letters-dialog] [data-test=alphas-qwerty]')).toHaveClass(/on/)
+  await expect(page.locator('[data-test=letters-dialog] [data-test=letter-row-1]')).toContainText('10 keys')
+  await page.click('[data-test=letters-dialog] [data-test=alphas-dvorak]')
+  await page.click('[data-test=letters-apply]')
+  await expect(page.locator('[data-test=letters-dialog]')).toHaveCount(0)
+  for (const key of [0, 17, 9, 31]) await tap(page, key)
+  await expect(typed(page)).toHaveText("qyg/'fiz")
+  // The key that is Shift when held is still that.
+  await expect(page.locator('[data-test=keymap-board] [data-pos="0"]')).toContainText('Shift')
 })
 
 test('layers and hold-tap', async ({ page }) => {
@@ -92,6 +203,29 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
 })
 
 const splitStatus = (page: Page) => page.locator('[data-test=split-status]')
+
+test('split keyboard: a keyboard file restores both halves', async ({ page }) => {
+  await openDemo(page, 'split')
+  await runSplitWizard(page)
+  await assign(page, 0, 0x14) // left half, first key: Q
+  // The right half's first key, "r" until now: Z.
+  await page.locator('[data-test=keymap-board] [data-pos]', { hasText: /^R$/ }).dispatchEvent('pointerdown')
+  await page.click('.picker [data-usage="29"]')
+  await page.click('[data-test=nav-share]')
+  const [download] = await Promise.all([page.waitForEvent('download'), page.click('[data-test=export]')])
+  const file = await download.path()
+
+  await page.goto('/')
+  await openDemo(page, 'split')
+  await expect(page.locator('[data-test=found-other]')).toBeVisible({ timeout: 20_000 })
+  await page.locator('[data-test=restore-file]').setInputFiles(file)
+  await expect(page.locator('[data-test=restore-dialog]')).toContainText('across two halves')
+  await page.click('[data-test=restore-apply]')
+  await expect(splitStatus(page)).toHaveAttribute('title', /types for both/, { timeout: 15_000 })
+  await tap(page, 0)
+  await tap(page, 17)
+  await expect(typed(page)).toHaveText('qz')
+})
 const toast = (page: Page, text: string) => page.locator('.toast', { hasText: text })
 
 test('split keyboard: set up together, either half types, the keymap follows through the cable', async ({ page }) => {
@@ -100,8 +234,6 @@ test('split keyboard: set up together, either half types, the keymap follows thr
   // Two halves, one keyboard: one entry at the side, one keymap.
   await expect(page.locator('[data-test=rail-keyboard]')).toHaveCount(1)
   await expect(page.locator('[data-test=keymap-board] .key')).toHaveCount(34)
-  // The setup ends in the editor, which says what comes next and where the name goes.
-  await expect(page.locator('[data-test=coach]')).toContainText('It types')
   // Typed at a person's pace: the header redraws meanwhile and must leave the field alone.
   await page.click('[data-test=rename]')
   await page.keyboard.type('Sweep', { delay: 400 })
@@ -109,7 +241,7 @@ test('split keyboard: set up together, either half types, the keymap follows thr
   await page.keyboard.press('Enter')
   await expect(page.locator('[data-test=rail-keyboard]')).toHaveAttribute('title', 'Sweep')
   await page.click('[data-test=split-status]')
-  await expect(page.locator('[data-test=split-details]')).toContainText('revision 1')
+  await expect(page.locator('[data-test=split-details]')).toContainText(/revision \d+, same on both/)
   await page.click('[data-test=split-details]')
   await expect(splitStatus(page)).toHaveAttribute('title', /the left half types for both/)
 
@@ -127,12 +259,10 @@ test('split keyboard: set up together, either half types, the keymap follows thr
   await expect(typed(page)).toHaveText('arar')
 
   // A change saved there reaches the left half through the cable.
+  const before = Number(await splitStatus(page).getAttribute('data-revision'))
   await assign(page, 1, 29) // Z
-  // The setup's own "saved" note is gone by now, so the next one is this save's.
-  await expect(toast(page, 'Saved to both halves')).toHaveCount(0)
-  await page.click('[data-test=save]')
-  await expect(toast(page, 'Saved to both halves')).toBeVisible({ timeout: 8000 })
-  await expect(splitStatus(page)).toHaveAttribute('data-revision', '2')
+  await saved(page)
+  await expect(splitStatus(page)).toHaveAttribute('data-revision', String(before + 1))
 
   // Without the cable each half is a keyboard of its own. The left half
   // lost its power in between and still has the new key.
@@ -153,8 +283,7 @@ test('split keyboard: a half that was away catches up; two changed halves ask wh
   await page.click('[data-test=usb-1]')
   await expect(splitStatus(page)).toHaveAttribute('title', /the right half is away/, { timeout: 8000 })
   await assign(page, 1, 29) // Z
-  await page.click('[data-test=save]')
-  await expect(toast(page, 'The right half gets it when it is connected')).toBeVisible()
+  await saved(page)
   // Joined again by the cable alone, it fetches the keymap without being asked.
   await page.click('[data-test=cable]')
   await expect(toast(page, 'The right half caught up')).toBeVisible({ timeout: 10_000 })
@@ -162,14 +291,12 @@ test('split keyboard: a half that was away catches up; two changed halves ask wh
   // Now each half is changed while the other is away.
   await page.click('[data-test=cable]')
   await assign(page, 2, 27) // X on the left
-  await page.click('[data-test=save]')
-  await expect(toast(page, 'gets it when it is connected')).toBeVisible()
+  await saved(page)
   await page.click('[data-test=usb-0]')
   await page.click('[data-test=usb-1]')
   await expect(splitStatus(page)).toHaveAttribute('title', /the left half is away/, { timeout: 8000 })
   await assign(page, 2, 28) // Y on the right
-  await page.click('[data-test=save]')
-  await expect(page.locator('[data-test=save]')).toHaveText('Saved')
+  await saved(page)
   // Both plugged in: nothing is overwritten until the user says which one counts.
   await page.click('[data-test=usb-0]')
   await expect(page.locator('[data-test=halves-conflict]')).toBeVisible({ timeout: 8000 })
@@ -193,10 +320,10 @@ test('layout editor: drag, type exact values, import from keyboard-layout-editor
   await page.mouse.down()
   await page.mouse.move(box.x + box.width / 2 - box.width, box.y + box.height / 2, { steps: 4 })
   await page.mouse.up()
-  await expect(page.locator('[data-test=field-x]')).toHaveValue('-1')
+  // Kept at once, and the picture moves back to start at the left edge.
+  await expect(page.locator('[data-test=field-x]')).toHaveValue('0')
   await page.fill('[data-test=field-w]', '2')
   await page.locator('[data-test=field-w]').blur()
-  await page.click('[data-test=layout-apply]')
   await page.click('[data-test=nav-keymap]')
   await expect(page.locator('[data-test=keymap-board] .key')).toHaveCount(6)
   const widths = await page.locator('[data-test=keymap-board] .key .base').evaluateAll((rects) => rects.map((r) => r.getAttribute('width')))
@@ -206,7 +333,6 @@ test('layout editor: drag, type exact values, import from keyboard-layout-editor
   await page.click('[data-test=import-kle]')
   await page.fill('[data-test=kle-text]', '["A","B","C","D","E","F"]')
   await page.click('[data-test=kle-apply]')
-  await page.click('[data-test=layout-apply]')
   await page.click('[data-test=nav-keymap]')
   await expect(page.locator('[data-test=keymap-board] .key')).toHaveCount(6)
   const ys = await page.locator('[data-test=keymap-board] .key .base').evaluateAll((rects) => new Set(rects.map((r) => r.getAttribute('y'))).size)
@@ -218,6 +344,7 @@ test('macros and combos', async ({ page }) => {
   await runWizard(page)
   await page.click('[data-test=nav-behaviours]')
   await page.click('[data-test=section-macros]')
+  await page.click('[data-test=macro-by-hand]')
   await page.fill('[data-test=macro-text]', 'Hi!')
   await page.click('[data-test=macro-add-text]')
   await expect(page.locator('[data-test=macro-steps] li')).toHaveCount(7)
@@ -242,6 +369,126 @@ test('macros and combos', async ({ page }) => {
   await expect(typed(page)).toHaveText('Hi!zb')
 })
 
+test('a macro is named and recorded right in the keymap', async ({ page }) => {
+  await openDemo(page, 'macropad')
+  await runWizard(page)
+  const key = (pos: number) => page.locator(`[data-test=keymap-board] [data-pos="${pos}"]`)
+  const steps = page.locator('[data-test=macro-steps] li')
+  const titles = () => steps.evaluateAll((items) => items.map((item) => item.getAttribute('title')))
+
+  // Macro 3 goes on the first key; its editor opens beside the list.
+  await key(0).dispatchEvent('pointerdown')
+  await page.click('[data-test=tab-macros]')
+  await page.click('[data-test=macro-2]')
+  await expect(page.locator('[data-test=macro-name]')).toHaveAttribute('placeholder', 'Macro 3')
+
+  // Named at a person's pace, while the keyboard keeps reporting.
+  await page.locator('[data-test=macro-name]').pressSequentially('Greet', { delay: 300 })
+  await page.keyboard.press('Enter')
+  await expect(page.locator('[data-test=macro-2]')).toContainText('Greet')
+  await expect(key(0)).toContainText('Greet')
+  await expect(page.locator('[data-test=action-description]')).toHaveText('Macro: Greet')
+
+  // Shift+H, then I, played slowly. Nothing of it reaches the page while recording.
+  await page.click('[data-test=macro-record]')
+  await page.keyboard.down('ShiftLeft')
+  await page.waitForTimeout(150)
+  await page.keyboard.press('KeyH', { delay: 60 })
+  await page.waitForTimeout(100)
+  await page.keyboard.up('ShiftLeft')
+  await page.waitForTimeout(300)
+  await page.keyboard.press('KeyI', { delay: 60 })
+  await expect(page.locator('[data-test=macro-heard] .chip')).toHaveCount(3)
+  await page.click('[data-test=macro-stop]')
+  // The keys went into the recording only: the selected key still holds the macro.
+  await expect(key(0)).toContainText('Greet')
+
+  // Just the keys: four steps and no waiting.
+  await expect.poll(titles).toEqual(['Hold Left Shift', 'Tap H', 'Release Left Shift', 'Tap I'])
+  // The same recording as it was played, without recording again.
+  await page.click('[data-test=timing-played]')
+  await expect(steps).toHaveCount(11)
+  await expect(page.locator('[data-test=macro-steps] li.wait')).toHaveCount(5)
+  // And back, with an even pause between the keys.
+  await page.click('[data-test=timing-order]')
+  await page.selectOption('[data-test=timing-pause]', '30')
+  await expect.poll(titles).toEqual(['Hold Left Shift', 'Wait 30 ms', 'Tap H', 'Release Left Shift', 'Wait 30 ms', 'Tap I'])
+
+  // The keyboard stops a macro that is replaced while it plays, so let the change arrive first.
+  await page.waitForTimeout(400)
+  await tap(page, 0)
+  await expect(typed(page)).toHaveText('Hi')
+
+  // The same macro, with its name, under Behaviours.
+  await page.click('[data-test=nav-behaviours]')
+  await page.click('[data-test=section-macros]')
+  await expect(page.locator('[data-test=macro-slot-2]')).toContainText('Greet')
+  await page.click('[data-test=macro-slot-2]')
+  await expect(page.locator('[data-test=macro-name]')).toHaveValue('Greet')
+  await expect(steps).toHaveCount(6)
+})
+
+test('keymap: several keys are selected and changed together', async ({ page }) => {
+  await openDemo(page, 'macropad')
+  await runWizard(page)
+  const key = (pos: number) => page.locator(`[data-test=keymap-board] [data-pos="${pos}"]`)
+  const legends = () => page.locator('[data-test=keymap-board] [data-pos]').allTextContents()
+
+  // Shift-click adds keys; what is picked goes on all of them.
+  await key(0).dispatchEvent('pointerdown')
+  await key(2).dispatchEvent('pointerdown', { shiftKey: true })
+  await key(4).dispatchEvent('pointerdown', { shiftKey: true })
+  await expect(page.locator('[data-test=picker-target]')).toHaveText('3 keys')
+  await page.click('.picker [data-usage="30"]') // 1
+  await expect.poll(async () => (await legends()).filter((text) => text.trim() === '1').length).toBe(3)
+  await expect(page.locator('[data-test=action-description]')).toHaveText('1')
+
+  // A plain click is one key again.
+  await key(1).dispatchEvent('pointerdown')
+  await expect(page.locator('[data-test=picker-target]')).toHaveText('This key')
+
+  // Dragging across the board selects what the rectangle touches: here every key.
+  const box = (await page.locator('[data-test=keymap-board]').boundingBox())!
+  await page.mouse.move(box.x + 2, box.y + 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 4 })
+  await page.mouse.move(box.x + box.width - 2, box.y + box.height - 2, { steps: 4 })
+  await page.mouse.up()
+  const count = await page.locator('[data-test=keymap-board] [data-pos]').count()
+  await expect(page.locator('[data-test=picker-target]')).toHaveText(`${count} keys`)
+  await page.click('[data-test=tab-more]')
+  await page.click('[data-test=none]')
+  await expect(page.locator('[data-test=action-description]')).toHaveText('Nothing')
+  await tap(page, 0)
+  await tap(page, 3)
+  await expect(typed(page)).toHaveText('')
+})
+
+test('a duplex matrix and keys on pins of their own are found on one board', async ({ page }) => {
+  await openDemo(page, 'duplex')
+  await runWizard(page)
+  await expect(page.locator('[data-test=key-count]')).toHaveText('15 keys')
+  // Every switch has a position of its own: fifteen taps, fifteen different letters.
+  for (let key = 0; key < 15; key++) await tap(page, key)
+  const letters = (await typed(page).innerText()).replace(/\s/g, '')
+  expect(new Set(letters).size).toBe(15)
+
+  await page.click('[data-test=nav-hardware]')
+  const summary = page.locator('[data-test=wiring-summary]')
+  await expect(summary).toContainText('Duplex matrix: rows GP2, GP3; columns GP4, GP5, GP6')
+  await expect(summary).toContainText('2 keys, each on its own pin (GP10, GP11)')
+  await expect(summary).toContainText('1 key on its own pin to supply voltage (GP12)')
+
+  // The wiring is kept through a restart.
+  await saved(page)
+  await page.click('[data-test=update-firmware]')
+  await expect(page.getByText('update mode')).toBeVisible()
+  await expect(page.locator('[data-test=update-firmware]')).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('[data-test=wiring-summary]')).toContainText('1 key on its own pin to supply voltage (GP12)')
+  await tap(page, 14)
+  await expect(typed(page)).not.toBeEmpty()
+})
+
 test('forty keys: a full hand-wired matrix is found', async ({ page }) => {
   test.setTimeout(90_000)
   await openDemo(page, 'forty')
@@ -249,6 +496,65 @@ test('forty keys: a full hand-wired matrix is found', async ({ page }) => {
   await page.click('[data-test=nav-hardware]')
   await expect(page.locator('[data-test=wiring-summary]')).toContainText('rows GP2, GP3, GP4, GP5; columns GP6')
   await expect(page.locator('[data-test=key-count]')).toHaveText('40 keys')
+})
+
+test('changes save themselves and can be undone; an empty keyboard offers its letters', async ({ page }) => {
+  test.setTimeout(90_000)
+  await openDemo(page, 'forty')
+  await runWizard(page, { empty: true })
+  const first = page.locator('[data-test=keymap-board] [data-pos="0"]')
+  const undo = page.locator('[data-test=undo]')
+  const redo = page.locator('[data-test=redo]')
+  await expect(undo).toBeDisabled()
+
+  // The key picker folds down to one bar, and searching for a key opens it again.
+  await page.click('[data-test=picker-fold]')
+  await expect(page.locator('[data-test=tab-keys]')).toBeHidden()
+  await expect(page.locator('[data-test=action-description]')).toBeVisible()
+  await page.fill('[data-test=search]', 'esc')
+  await expect(page.locator('[data-test=picker] .key-btn').first()).toBeVisible()
+  await page.fill('[data-test=search]', '')
+  await expect(page.locator('[data-test=tab-keys]')).toBeVisible()
+
+  // Nothing types yet, and the quick way to the letters is pointed out.
+  await expect(page.locator('[data-test=letters-nudge]')).toBeVisible()
+  await page.click('[data-test=letters-nudge-open]')
+  await expect(page.locator('[data-test=letters-dialog]')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await page.locator('[data-test=letters-dialog] .btn.ghost').click()
+
+  await assign(page, 0, 0x14) // Q
+  await expect(first).toContainText('Q')
+  await expect(page.locator('[data-test=letters-nudge]')).toHaveCount(0)
+  await saved(page)
+  await tap(page, 0)
+  await expect(typed(page)).toHaveText('q')
+
+  // Saved already, and still taken back: on the keyboard too.
+  await undo.click()
+  await expect(first).not.toContainText('Q')
+  await saved(page)
+  await tap(page, 0)
+  await expect(typed(page)).toHaveText('q')
+  await expect(undo).toBeDisabled()
+  await redo.click()
+  await expect(first).toContainText('Q')
+
+  // The picture of the keys is kept as it is changed, and undone the same way.
+  await page.click('[data-test=nav-layout]')
+  await page.locator('[data-test=layout-canvas] [data-pos="0"]').dispatchEvent('pointerdown')
+  await page.dispatchEvent('body', 'pointerup')
+  await page.fill('[data-test=field-w]', '2')
+  await page.locator('[data-test=field-w]').blur()
+  await saved(page)
+  await page.click('[data-test=nav-keymap]')
+  const width = () => page.locator('[data-test=keymap-board] [data-pos="0"] .base').getAttribute('width')
+  const wide = await width()
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect.poll(width).not.toBe(wide)
+  await expect(redo).toBeEnabled()
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect.poll(width).toBe(wide)
 })
 
 test('typing on the computer keyboard fills the keymap key by key', async ({ page }) => {
@@ -282,6 +588,7 @@ test('a key skipped during setup is added afterwards', async ({ page }) => {
   for (let key = 0; key < 5; key++) await tap(page, key)
   await expect(page.locator('[data-test=count]')).toContainText('5 keys')
   await page.click('[data-test=next]')
+  await skipArranging(page)
   await expect(page.locator('[data-test=key-count]')).toHaveText('5 keys')
 
   await page.click('[data-test=nav-hardware]')
@@ -293,6 +600,9 @@ test('a key skipped during setup is added afterwards', async ({ page }) => {
   await tap(page, 5)
   await expect(page.locator('[data-test=key-count]')).toHaveText('6 keys')
   await expect(page.locator('[data-test=add-key]')).toBeVisible()
+  // Like every key of a new keyboard it starts empty.
+  await page.click('[data-test=nav-keymap]')
+  await giveLetters(page)
   await tap(page, 5)
   await tap(page, 0)
   await expect(typed(page)).toHaveText('fa')
@@ -476,10 +786,13 @@ test('lights: switched on, placed one by one and given an effect per group', asy
   await page.selectOption('[data-test=light-pin]', { label: 'GP16' })
   await page.fill('[data-test=light-count]', '6')
   await page.click('[data-test=light-on]')
-  // The board restarts with the pin in use and shows the starting rainbow.
+  // The board takes the pin into use at once and shows the starting rainbow.
   await expect(bulbs.first()).not.toHaveAttribute('data-color', '#000000')
   await expect(page.locator('[data-test=light-board] [data-light]')).toHaveCount(6)
   // To begin with they are underglow, spread around the keyboard.
+  await expect(page.locator('[data-test=chain-summary]')).toHaveText('6 lights on GP16 · underglow')
+  // The wiring is folded away until it is needed.
+  await page.click('[data-test=chain-toggle]')
   await expect(page.locator('[data-test=mode-underglow]')).toHaveClass(/on/)
   await expect(page.locator('[data-test=zone-underglow]')).toContainText('6')
   await expect(page.locator('[data-test=zone-keys]')).toHaveCount(0)
@@ -508,8 +821,8 @@ test('lights: switched on, placed one by one and given an effect per group', asy
   await expect(page.locator('[data-test=zone-underglow]')).toContainText('2')
 
   // Keys light up on a press only; the underglow is off.
-  await page.selectOption('[data-test=effect-keys]', 'Reactive')
-  await page.selectOption('[data-test=effect-underglow]', 'Off')
+  await page.click('[data-test=effect-keys-Reactive]')
+  await page.click('[data-test=effect-underglow-Off]')
   await expect(bulbs.nth(2)).toHaveAttribute('data-color', '#000000')
   await showBench(page)
   await virtualKeys(page).nth(2).dispatchEvent('pointerdown')
@@ -519,9 +832,8 @@ test('lights: switched on, placed one by one and given an effect per group', asy
   await page.dispatchEvent('body', 'pointerup')
 
   // It all survives a save and restart of the board.
-  await page.selectOption('[data-test=effect-underglow]', 'Solid')
-  await page.click('[data-test=save]')
-  await expect(page.locator('[data-test=save]')).toHaveText('Saved')
+  await page.click('[data-test=effect-underglow-Solid]')
+  await saved(page)
   await expect(bulbs.nth(5)).not.toHaveAttribute('data-color', '#000000')
 })
 
@@ -575,13 +887,13 @@ test('keymap: drag from the picker, swap keys, colour a layer, see all layers', 
   await page.click('[data-test=color-4]')
   await expect(page.locator('[data-test=layer-colors]')).toHaveCount(0)
   await page.click('[data-test=layer-0]')
+  await page.click('[data-test=tab-layers]')
   await page.dragAndDrop('[data-test=layer-hold-1]', '[data-test=keymap-board] [data-pos="5"]')
   await expect(key(5)).toHaveClass(/tinted/)
   await expect(key(5)).toHaveAttribute('style', /#ef4444/)
 
   // The colour is kept by the keyboard.
-  await page.click('[data-test=save]')
-  await expect(page.locator('[data-test=save]')).toHaveText('Saved')
+  await saved(page)
 
   // All layers as one picture, in both arrangements.
   await page.click('[data-test=all-layers]')
@@ -602,7 +914,7 @@ test('setup: one keyboard in one piece is guided through, and its controller wor
   const guide = page.locator('.wizard [data-test=setup-guide]')
   await expect(guide).toContainText('Find the keys')
   await expect(guide).not.toContainText('Find the cable')
-  await expect(guide.locator('[data-test=guide-tip]')).toContainText('row by row')
+  await expect(guide.locator('[aria-current=step]')).toHaveText('Find the keys')
   // An RP2040 board does not say which shape it has; the pins in use do.
   const controller = page.locator('[data-test=show-pins]')
   await expect(controller).toContainText('RP2040 controller')
@@ -620,10 +932,6 @@ test('setup: one keyboard in one piece is guided through, and its controller wor
   await runWizard(page)
   // Straight into the editor: no page in between.
   await expect(page.locator('[data-test=rename]')).toHaveValue('Macro pad')
-  await page.click('[data-test=coach-go]')
-  await expect(page.locator('[data-test=coach]')).toContainText('Drag the keys into place')
-  await page.click('[data-test=coach-close]')
-  await expect(page.locator('[data-test=coach]')).toHaveCount(0)
 })
 
 test('two virtual keyboards stay apart and can be switched between', async ({ page }) => {

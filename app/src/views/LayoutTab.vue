@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Arrange the keys on screen the way they sit on the desk.
+// Arrange the keys on screen the way they sit on the desk. Every change goes
+// to the keyboard when the gesture ends; the editor's undo takes it back.
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { attempt, toast } from '../lib/app'
 import { legend } from '../lib/keycodes'
@@ -12,7 +13,6 @@ const props = defineProps<{ session: Session }>()
 const SNAP = UNIT / 4
 const draft = ref<KeyGeometry[]>(copy(props.session.layout))
 const selection = reactive(new Set<number>())
-const dirty = computed(() => JSON.stringify(draft.value) !== JSON.stringify(props.session.layout))
 const followPresses = ref(true)
 const importing = ref(false)
 const kleText = ref('')
@@ -21,8 +21,24 @@ function copy(layout: KeyGeometry[]): KeyGeometry[] {
   return layout.map((key) => ({ ...key }))
 }
 
-// The layout on the keyboard can change underneath (other half added).
-watch(() => props.session.layout, (layout) => !dragging && (draft.value = copy(layout)))
+// The layout on the keyboard can change underneath (an undo, the other half added).
+watch(
+  () => props.session.layout,
+  (layout) => {
+    if (dragging) return
+    draft.value = copy(layout)
+    for (const pos of [...selection]) if (!hasKey(draft.value[pos])) selection.delete(pos)
+    view.value = fit()
+  },
+)
+
+/** Give the keyboard the picture as it is drawn now. */
+function commit() {
+  const tidy = normalised(draft.value)
+  draft.value = copy(tidy)
+  view.value = fit()
+  if (JSON.stringify(tidy) !== JSON.stringify(props.session.layout)) attempt(() => setLayout(props.session, tidy))
+}
 
 const keys = computed(() => draft.value.map((key, pos) => ({ key, pos })).filter(({ key }) => hasKey(key)))
 /** Knobs have a place in the picture too; it lives at the first of their two positions. */
@@ -36,7 +52,7 @@ function placeKnob(pos: number) {
   draft.value[pos] = knobSpot(draft.value)
   selection.clear()
   selection.add(pos)
-  view.value = fit()
+  commit()
 }
 
 const chosen = computed(() => [...selection].map((pos) => draft.value[pos]).filter(hasKey))
@@ -97,7 +113,7 @@ function move(event: PointerEvent) {
 function up() {
   window.removeEventListener('pointermove', move)
   dragging = undefined
-  view.value = fit()
+  commit()
 }
 
 // --- Selecting with a rectangle, as in a file manager ---------------------------
@@ -159,7 +175,7 @@ function onKeydown(event: KeyboardEvent) {
   const delta = moves[event.key]
   if (delta) {
     chosen.value.forEach((key) => ((key.x += delta[0]), (key.y += delta[1])))
-    view.value = fit()
+    commit()
     event.preventDefault()
   } else if (event.key === 'r' || event.key === 'R') {
     rotate(event.shiftKey ? -150 : 150)
@@ -188,6 +204,7 @@ watch(
 // --- Tools -------------------------------------------------------------------
 function rotate(tenths: number) {
   chosen.value.forEach((key) => (key.r = ((key.r + tenths + 1800) % 3600) - 1800))
+  commit()
 }
 
 function setField(field: 'x' | 'y' | 'w' | 'h' | 'r', event: Event) {
@@ -203,7 +220,7 @@ function setField(field: 'x' | 'y' | 'w' | 'h' | 'r', event: Event) {
   } else {
     chosen.value.forEach((key) => (key[field] = field === 'h' ? Math.max(SNAP, scaled) : scaled))
   }
-  view.value = fit()
+  commit()
 }
 
 /**
@@ -250,6 +267,7 @@ function mirror() {
     key.x = Math.round(box.x + box.w - (key.x - box.x) - key.w)
     key.r = -key.r
   })
+  commit()
 }
 
 function resetGrid() {
@@ -260,7 +278,7 @@ function resetGrid() {
     draft.value[pos] = { x: 0, y: 0, w: 0, h: 0, r: 0 }
     draft.value[pos] = knobSpot(draft.value)
   })
-  view.value = fit()
+  commit()
 }
 
 function importKle() {
@@ -274,23 +292,10 @@ function importKle() {
     targets.forEach(({ pos }, index) => (draft.value[pos] = shapes[index]))
     importing.value = false
     kleText.value = ''
-    view.value = fit()
+    commit()
   } catch (error) {
     toast(error instanceof Error ? error.message : String(error), 'error')
   }
-}
-
-async function apply() {
-  const tidy = normalised(draft.value)
-  if (await attempt(() => setLayout(props.session, tidy).then(() => true))) {
-    draft.value = copy(tidy)
-    view.value = fit()
-  }
-}
-
-function revert() {
-  draft.value = copy(props.session.layout)
-  view.value = fit()
 }
 
 const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.session.layers[0][pos]).main : '')
@@ -333,8 +338,8 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
       <div>
         <h2>Layout</h2>
         <p class="muted small">
-          Drag keys to where they sit on your keyboard. Drag across the empty background to select several, then
-          move or resize them together; Shift adds to the selection. Arrow keys nudge, R rotates.
+          Drag keys to where they sit on your keyboard. Drag across the background to select several; arrow keys
+          nudge, R rotates. Changes are kept as you make them.
         </p>
       </div>
 
@@ -377,12 +382,6 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
             <button class="btn small primary" :disabled="!kleText.trim()" data-test="kle-apply" @click="importKle">Use this layout</button>
           </div>
         </Transition>
-      </div>
-
-      <span class="grow" />
-      <div class="row">
-        <button class="btn primary grow" :disabled="!dirty" data-test="layout-apply" @click="apply">Apply layout</button>
-        <button class="btn ghost" :disabled="!dirty" @click="revert">Revert</button>
       </div>
     </aside>
   </div>

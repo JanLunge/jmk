@@ -17,6 +17,8 @@ export class KeyCollector {
   last: number | undefined
   /** Set when the last press could not be read as one key. */
   confused = false
+  /** How many presses were read as one key so far. */
+  presses = 0
   private previous = new Set<string>()
   private readonly startedAt: number
 
@@ -39,6 +41,7 @@ export class KeyCollector {
     const signature = signatureOf(fresh)
     this.confused = !signature
     if (!signature) return
+    this.presses++
     const known = this.keys.findIndex((key) => sameKey(key, signature))
     if (known >= 0) {
       this.last = known

@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import VirtualBoard from './components/VirtualBoard.vue'
 import { app, benchOf, closeSession, current, halvesOf, partnerOf, reconnectUsb } from './lib/app'
 import { desktop } from './lib/desktop'
-import { watchBootDrives } from './lib/firmware'
+import { updating, watchBootDrives } from './lib/firmware'
 import { role, type Session } from './lib/session'
 import Editor from './views/Editor.vue'
 import Home from './views/Home.vue'
@@ -70,7 +70,6 @@ onMounted(() => {
       <span class="title">
         <strong>POG</strong><span class="version" title="The second POG, built on JMK firmware">v2</span>
         <template v-if="current"> · {{ current.meta.name || current.transport.label }}</template>
-        <span v-if="current?.unsaved" class="unsaved" title="Unsaved changes" />
       </span>
     </header>
     <div class="frame">
@@ -97,7 +96,6 @@ onMounted(() => {
             <i v-for="half in halves" :key="half.id" :class="{ off: half.closed }" />
           </span>
           <span v-if="halves[0].transport.kind === 'virtual'" class="badge" title="Virtual keyboard">v</span>
-          <span v-if="halves.some((half) => half.unsaved)" class="dot" title="Unsaved changes" />
         </button>
       </TransitionGroup>
     </nav>
@@ -108,7 +106,7 @@ onMounted(() => {
         <Home v-if="!current" key="home" />
         <div v-else-if="current.closed" :key="current.id + 'gone'" class="gone col">
           <template v-if="current.restarting">
-            <h2>The keyboard is restarting…</h2>
+            <h2>{{ updating ?? 'The keyboard is restarting…' }}</h2>
             <p class="muted">It comes back here by itself in a few seconds. Leave it plugged in.</p>
             <button class="btn ghost" @click="closeSession(current)">Close</button>
           </template>

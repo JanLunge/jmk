@@ -154,8 +154,8 @@ const strip = computed(() => {
   const lights = half.demo.lights
   const session = sessionOf(0)
   if (!lights) return undefined
-  // Lit once the app has been told the pin and the board restarted.
-  const live = session && session.lighting.pin === lights.pin && session.bootLightPin === lights.pin ? session.lights : []
+  // Lit once the app has been told the pin.
+  const live = session && session.lighting.pin === lights.pin ? session.lights : []
   const order = session?.lighting.order ?? 'Grb'
   return { pin: lights.pin, colors: [...Array(lights.count).keys()].map((n) => (live[n] ? shown(fromWire(order, live[n])) : '#000000')) }
 })

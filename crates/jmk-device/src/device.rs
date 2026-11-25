@@ -2,7 +2,7 @@ use embedded_storage::nor_flash::NorFlash;
 use heapless::Vec;
 use jmk_core::{Engine, Millis, Output};
 use jmk_proto::{
-    Contact, Error, Event, HardwareConfig, Info, LightingConfig, Mcu, Pin, Request, Response, SplitConfig, SplitStatus, SplitSync,
+    Contact, Error, Event, HardwareConfig, Info, LightingConfig, MatrixConfig, Mcu, Pin, Request, Response, SplitConfig, SplitStatus, SplitSync,
     ACTIONS_PER_CHUNK, LAYOUT_KEYS_PER_CHUNK, MACRO_STEPS_PER_CHUNK, MAX_CONTACTS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, PROTOCOL_VERSION,
 };
@@ -88,12 +88,14 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     pub fn new(board: Board, mut pins: P, mut storage: Storage<F>, config: &'a mut Config) -> Self {
         storage.load(config);
         // A save from another chip may name pins this one does not have.
-        if validate(&config.hardware, &config.lighting, &pins).is_err() {
+        if validate(&config.hardware, &config.more_wiring, &config.lighting, &pins).is_err() {
             config.reset();
         }
         let mut scanner = Scanner::new();
-        scanner.configure(&config.hardware, &mut pins);
+        scanner.configure(&config.hardware, &config.more_wiring, &mut pins);
         let stored_digest = config.shared_digest();
+        // A half first listens for the other one; see `Split::leading`.
+        let leading = config.hardware.split == SplitConfig::None;
         Self {
             board,
             pins,
@@ -104,7 +106,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             lights: Lights::new(),
             split: Split::new(),
             host: true,
-            leading: true,
+            leading,
             digest: Some(stored_digest),
             stored_digest,
             force: false,
@@ -157,7 +159,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 let mut changes: Vec<Change, 16> = Vec::new();
                 // More than 16 changes in one millisecond wait for the next
                 // scan; by hand this is unreachable.
-                scanner.scan(hardware, pins, |change| {
+                scanner.scan(hardware, &config.more_wiring, pins, |change| {
                     let _ = changes.push(change);
                 });
 
@@ -196,7 +198,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                     }
                 }
                 if is_half {
-                    let local = hardware.local_positions();
+                    let local = hardware.local_positions(&config.more_wiring);
                     // The first half's positions come first in the keymap.
                     let first = offset == 0;
                     let theirs = if first { local } else { 0 };
@@ -372,6 +374,14 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         self.take = false;
     }
 
+    /// Call once the port's drivers for the lights and the cable follow a
+    /// changed [`lighting`](Self::lighting) pin or split link: a pin they
+    /// let go of may be wired to a key now, and letting go undid its setup.
+    pub fn claim_pins(&mut self) {
+        self.pins.reclaim();
+        crate::scan::idle_pins(&self.config.hardware, &self.config.more_wiring, &mut self.pins);
+    }
+
     /// Pending reboot request, if any: `Some(true)` for the bootloader.
     pub fn take_reboot(&mut self) -> Option<bool> {
         self.reboot.take()
@@ -399,10 +409,22 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             })),
             Request::GetHardware => Ok(Response::Hardware(self.config.hardware.clone())),
             Request::SetHardware(hardware) => {
-                validate(&hardware, &self.config.lighting, &self.pins)?;
+                validate(&hardware, &self.config.more_wiring, &self.config.lighting, &self.pins)?;
                 self.stop_probe();
                 self.release_matrix_pins();
                 self.config.hardware = hardware;
+                self.restart_scanning(out);
+                Ok(Response::Ok)
+            }
+            Request::GetMoreWiring => Ok(Response::MoreWiring(self.config.more_wiring.clone())),
+            Request::SetMoreWiring(more) => {
+                if more.iter().any(|part| *part == MatrixConfig::None) {
+                    return Err(Error::OutOfRange);
+                }
+                validate(&self.config.hardware, &more, &self.config.lighting, &self.pins)?;
+                self.stop_probe();
+                self.release_matrix_pins();
+                self.config.more_wiring = more;
                 self.restart_scanning(out);
                 Ok(Response::Ok)
             }
@@ -586,7 +608,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             }
             Request::GetLighting => Ok(Response::Lighting(self.config.lighting.clone())),
             Request::SetLighting(lighting) => {
-                validate(&self.config.hardware, &lighting, &self.pins)?;
+                validate(&self.config.hardware, &self.config.more_wiring, &lighting, &self.pins)?;
                 self.config.lighting = lighting;
                 self.lights.changed();
                 Ok(Response::Ok)
@@ -605,6 +627,22 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 self.config.layer_colors[..colors.len()].copy_from_slice(&colors);
                 Ok(Response::Ok)
             }
+            Request::GetMacroName { index } => match self.config.macro_names.get(index as usize) {
+                Some(name) => Ok(Response::MacroName(name.clone())),
+                None => Err(Error::OutOfRange),
+            },
+            Request::GetLetterRows => Ok(Response::LetterRows(self.config.letter_rows.clone())),
+            Request::SetLetterRows(rows) => {
+                self.config.letter_rows = rows;
+                Ok(Response::Ok)
+            }
+            Request::SetMacroName { index, name } => match self.config.macro_names.get_mut(index as usize) {
+                Some(slot) => {
+                    *slot = name;
+                    Ok(Response::Ok)
+                }
+                None => Err(Error::OutOfRange),
+            },
         }
     }
 
@@ -632,7 +670,8 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     fn release_matrix_pins(&mut self) {
         // The link pins belong to the port's serial driver, not to us.
         let hardware = &self.config.hardware;
-        for pin in hardware.matrix.pins().chain(hardware.encoders.iter().flat_map(|e| [e.a, e.b])) {
+        let switches = hardware.wiring(&self.config.more_wiring).flat_map(MatrixConfig::pins);
+        for pin in switches.chain(hardware.encoders.iter().flat_map(|e| [e.a, e.b])) {
             self.pins.input(pin, Pull::None);
         }
     }
@@ -640,16 +679,17 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     fn restart_scanning(&mut self, out: &mut impl Output) {
         self.engine.reset(out);
         self.split = Split::new();
-        self.leading = true;
+        // A half first listens for the other one; see `Split::leading`.
+        self.leading = self.config.hardware.split == SplitConfig::None;
         self.compared = None;
         self.fetch = None;
         self.sync = SplitSync::Unknown;
-        self.scanner.configure(&self.config.hardware, &mut self.pins);
+        self.scanner.configure(&self.config.hardware, &self.config.more_wiring, &mut self.pins);
     }
 }
 
-fn validate(hardware: &HardwareConfig, lighting: &LightingConfig, pins: &impl Pins) -> Result<(), Error> {
-    if hardware.split.offset() + hardware.local_positions() > MAX_KEYS {
+fn validate(hardware: &HardwareConfig, more: &[MatrixConfig], lighting: &LightingConfig, pins: &impl Pins) -> Result<(), Error> {
+    if hardware.split.offset() + hardware.local_positions(more) > MAX_KEYS {
         return Err(Error::TooManyKeys);
     }
     if hardware.split.link().is_some_and(|link| !pins.supports_link(&link)) {
@@ -658,7 +698,7 @@ fn validate(hardware: &HardwareConfig, lighting: &LightingConfig, pins: &impl Pi
     if lighting.pin.is_some_and(|pin| is_usable(pins, pin) && !pins.supports_lights(pin)) {
         return Err(Error::Unsupported);
     }
-    check_pins(hardware.used_pins().chain(lighting.pin), &hardware.reserved_pins, pins)
+    check_pins(hardware.used_pins(more).chain(lighting.pin), &hardware.reserved_pins, pins)
 }
 
 /// Every pin must exist, be free for wiring, not be reserved and appear once.

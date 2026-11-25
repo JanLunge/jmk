@@ -12,6 +12,7 @@ import type {
   KeyGeometry,
   LightingConfig,
   MacroStep,
+  MatrixConfig,
   Meta,
   Pin,
   Request,
@@ -23,6 +24,8 @@ import type { Transport } from './transport'
 import { bridge } from './wasm'
 
 const REPLY_TIMEOUT_MS = 3000
+/** Protocol version from which a board can mix wiring styles and scan a duplex matrix. */
+export const MORE_WIRING_PROTOCOL = 9
 let nextChannel = 1
 
 export class KeyboardError extends Error {}
@@ -123,9 +126,43 @@ export class KeyboardClient {
     return new KeyboardError('The keyboard sent an unexpected reply.')
   }
 
-  info = (): Promise<Info> => this.expect('GetInfo', 'Info')
-  hardware = (): Promise<HardwareConfig> => this.expect('GetHardware', 'Hardware')
-  setHardware = (hardware: HardwareConfig) => this.ok({ SetHardware: hardware })
+  /** What the keyboard's firmware understands; known once `info` was asked. */
+  private protocol = 0
+
+  async info(): Promise<Info> {
+    const info: Info = await this.expect('GetInfo', 'Info')
+    this.protocol = info.protocol
+    return info
+  }
+
+  /** The wiring, with the groups of switches beyond the first where the firmware knows of them. */
+  async hardware(): Promise<HardwareConfig> {
+    const hardware: HardwareConfig = await this.expect('GetHardware', 'Hardware')
+    if (this.protocol < MORE_WIRING_PROTOCOL) return hardware
+    const more: MatrixConfig[] = await this.expect('GetMoreWiring', 'MoreWiring')
+    return more.length ? { ...hardware, more } : hardware
+  }
+
+  async setHardware(hardware: HardwareConfig): Promise<void> {
+    const { more = [], ...first } = hardware
+    const matrix = first.matrix
+    const duplex = [matrix, ...more].some((part) => part !== 'None' && 'Matrix' in part && part.Matrix.diodes === 'Both')
+    if (this.protocol < MORE_WIRING_PROTOCOL) {
+      if (more.length || duplex) throw new KeyboardError("This keyboard's firmware is too old for this wiring. Update the firmware first.")
+      return this.ok({ SetHardware: first })
+    }
+    // The keyboard checks each part against what it holds, so the old extra
+    // groups go first: their pins may be wanted elsewhere now.
+    const before: MatrixConfig[] = await this.expect('GetMoreWiring', 'MoreWiring')
+    if (before.length) await this.ok({ SetMoreWiring: [] })
+    try {
+      await this.ok({ SetHardware: first })
+      if (more.length) await this.ok({ SetMoreWiring: more })
+    } catch (error) {
+      if (before.length) await this.ok({ SetMoreWiring: before }).catch(() => {})
+      throw error
+    }
+  }
   layerCount = (): Promise<number> => this.expect('GetLayerCount', 'LayerCount')
   setLayerCount = (count: number) => this.shared({ SetLayerCount: count })
   profiles = (): Promise<HoldTapProfile[]> => this.expect('GetHoldTapProfiles', 'HoldTapProfiles')
@@ -149,6 +186,10 @@ export class KeyboardClient {
   identifyLed = (led: number | null) => this.ok({ IdentifyLed: led })
   layerColors = (): Promise<number[]> => this.expect('GetLayerColors', 'LayerColors')
   setLayerColors = (colors: number[]) => this.shared({ SetLayerColors: colors })
+  macroName = (index: number): Promise<string> => this.expect({ GetMacroName: { index } }, 'MacroName')
+  setMacroName = (index: number, name: string) => this.shared({ SetMacroName: { index, name } })
+  letterRows = (): Promise<number[][]> => this.expect('GetLetterRows', 'LetterRows')
+  setLetterRows = (rows: number[][]) => this.shared({ SetLetterRows: rows })
   reboot = (bootloader: boolean) => this.ok({ Reboot: { bootloader } })
 
   async actions(layer: number, count: number): Promise<Action[]> {

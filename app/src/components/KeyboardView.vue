@@ -376,6 +376,24 @@ text {
 .kind-through text {
   opacity: 0.35;
 }
+
+/* A see-through key has only a dashed outline, so being pointed at or selected has to show on it as well. */
+.kind-through.interactive:hover .base,
+.kind-empty.interactive:hover .base {
+  stroke: var(--muted);
+  stroke-dasharray: none;
+}
+
+.kind-through.selected .base,
+.kind-empty.selected .base {
+  stroke: var(--accent);
+  stroke-dasharray: none;
+  fill: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.kind-through.selected text {
+  opacity: 0.75;
+}
 .key.pressed .top {
   fill: var(--accent);
 }

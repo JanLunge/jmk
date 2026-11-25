@@ -12,7 +12,8 @@ import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../.
 import { keymapPoster } from '../../src/lib/poster'
 import { layerHex } from '../../src/lib/layers'
 import { gridLayout } from '../../src/lib/layout'
-import { addKey, alignHalves, knobPositions, needsRestart, restart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterAction, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { addKey, alignHalves, knobPositions, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { starterAction } from './keys'
 import { advanceVirtualTime, VirtualTransport } from '../../src/lib/transport'
 import { loadBridge } from '../../src/lib/wasm'
 
@@ -104,7 +105,7 @@ describe('a key that was missed during setup', () => {
     expect(await during(addKey(session, plan))).toBe(2)
     expect(session.hardware.matrix).toEqual({ Matrix: { rows: [16, 17], cols: [18, 19, 20], diodes: 'Col2Row' } })
     // The second row moved from positions 2, 3 to 3, 4 and kept its letters.
-    expect(session.layers[0].slice(0, 5)).toEqual([starterAction(0), starterAction(1), starterAction(4), starterAction(2), starterAction(3)])
+    expect(session.layers[0].slice(0, 5)).toEqual([starterAction(0), starterAction(1), 'Transparent', starterAction(2), starterAction(3)])
     expect(session.layout.filter((k) => k.w > 0).length).toBe(5)
 
     const tapKey = (index: number) => {
@@ -113,6 +114,8 @@ describe('a key that was missed during setup', () => {
       transport.setKey(index, false)
       advanceVirtualTime(20)
     }
+    // The added key starts empty, like every key of a new keyboard.
+    await during(setAction(session, 0, 2, starterAction(4)))
     tapKey(3) // second row, first column: still C
     tapKey(2) // the added key: E
     expect(keys(typed).filter((k) => k.length)).toEqual([[0x06], [0x08]])
@@ -216,7 +219,7 @@ describe('virtual knob pad', () => {
 })
 
 describe('lights', () => {
-  it('shine on a virtual keyboard after the pin is saved and the board restarted', async () => {
+  it('shine on a virtual keyboard as soon as it is told the pin', async () => {
     const { session, transport } = await open('knobpad')
     const hardware = {
       matrix: { Direct: { pins: [2, 3, 4, 5], active_high: false } },
@@ -234,8 +237,6 @@ describe('lights', () => {
     leds[0] = { key: 1, ...placeAtKey(session.layout, 1) }
     await during(setLighting(session, { pin: 16, order: 'Grb', limit: 255, leds, keys: red, underglow: { ...red, effect: 'Off' } }))
     await during(save(session))
-    expect(needsRestart(session)).toBe(true)
-    await during(restart(session))
     expect(needsRestart(session)).toBe(false)
     expect(session.lighting.leds[0].key).toBe(1)
     advanceVirtualTime(40)

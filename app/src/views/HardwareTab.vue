@@ -5,10 +5,10 @@ import { attempt, toast } from '../lib/app'
 import { planAddedKey } from '../lib/addkey'
 import { findBoard, pinLabel, wirablePins } from '../lib/boards'
 import { KeyCollector } from '../lib/collector'
-import { describeAction } from '../lib/keycodes'
 import { desktop } from '../lib/desktop'
-import type { Contact, HardwareConfig, Pin } from '../lib/protocol'
-import { registryMcu } from '../lib/registry'
+import { carriedVersion, isOlder, updateFirmware as updateByItself } from '../lib/firmware'
+import { wiringParts } from '../lib/definition'
+import type { Contact, HardwareConfig, MatrixConfig, Pin } from '../lib/protocol'
 import { addKey, linkPins, refresh, role, setHardware, type Session } from '../lib/session'
 import { VirtualTransport } from '../lib/transport'
 
@@ -21,12 +21,15 @@ const name = (pin: Pin) => pinLabel(board.value, pin)
 
 const roles = computed(() => {
   const map = new Map<Pin, PinRole>()
-  const { matrix, reserved_pins, encoders } = hardware.value
+  const { reserved_pins, encoders } = hardware.value
   reserved_pins.forEach((pin) => map.set(pin, 'reserved'))
-  if (matrix !== 'None' && 'Direct' in matrix) matrix.Direct.pins.forEach((pin) => map.set(pin, 'direct'))
-  if (matrix !== 'None' && 'Matrix' in matrix) {
-    matrix.Matrix.rows.forEach((pin) => map.set(pin, 'row'))
-    matrix.Matrix.cols.forEach((pin) => map.set(pin, 'col'))
+  for (const part of wiringParts(hardware.value)) {
+    if (part === 'None') continue
+    if ('Direct' in part) part.Direct.pins.forEach((pin) => map.set(pin, 'direct'))
+    else {
+      part.Matrix.rows.forEach((pin) => map.set(pin, 'row'))
+      part.Matrix.cols.forEach((pin) => map.set(pin, 'col'))
+    }
   }
   encoders.forEach((e) => [e.a, e.b].forEach((pin) => map.set(pin, 'encoder')))
   const link = linkPins(hardware.value)
@@ -34,13 +37,20 @@ const roles = computed(() => {
   return map
 })
 
-const summary = computed(() => {
-  const matrix = hardware.value.matrix
-  if (matrix === 'None') return 'No keys set up.'
-  if ('Direct' in matrix) return `${matrix.Direct.pins.length} keys, each on its own pin (${matrix.Direct.pins.map(name).join(', ')}).`
-  const { rows, cols, diodes } = matrix.Matrix
-  return `Matrix: rows ${rows.map(name).join(', ')}; columns ${cols.map(name).join(', ')}. The chip switches the ${diodes === 'Col2Row' ? 'rows' : 'columns'} and reads the ${diodes === 'Col2Row' ? 'columns' : 'rows'}.`
-})
+/** One group of switches in a sentence. */
+function describe(part: MatrixConfig): string {
+  if (part === 'None') return ''
+  if ('Direct' in part) {
+    const { pins, active_high } = part.Direct
+    const to = active_high ? ' to supply voltage' : ''
+    return `${pins.length} ${pins.length === 1 ? 'key' : 'keys, each'} on its own pin${to} (${pins.map(name).join(', ')}).`
+  }
+  const { rows, cols, diodes } = part.Matrix
+  const lines = `rows ${rows.map(name).join(', ')}; columns ${cols.map(name).join(', ')}`
+  if (diodes === 'Both') return `Duplex matrix: ${lines}. Two keys per crossing; the chip switches the rows and reads the columns, then the other way round.`
+  return `Matrix: ${lines}. The chip switches the ${diodes === 'Col2Row' ? 'rows' : 'columns'} and reads the ${diodes === 'Col2Row' ? 'columns' : 'rows'}.`
+}
+const summary = computed(() => wiringParts(hardware.value).map(describe).filter(Boolean).join(' ') || 'No keys set up.')
 
 const change = (patch: Partial<HardwareConfig>) => attempt(() => setHardware(props.session, { ...hardware.value, ...patch }))
 
@@ -117,7 +127,7 @@ async function onAddProbe(contacts: Contact[]) {
   adding.value = 'idle'
   collector = undefined
   if (pos === undefined) return
-  toast(`Key added. It types ${describeAction(props.session.layers[0][pos])}; move it into place under Layout.`)
+  toast('Key added. Move it into place under Layout, and give it something to do under Keymap.')
 }
 onBeforeUnmount(stopAdding)
 
@@ -137,12 +147,15 @@ async function factoryReset() {
 
 // --- Firmware ------------------------------------------------------------------
 const version = info.firmware.join('.')
-const flashing = ref<'idle' | 'bootloader' | 'done'>('idle')
+const flashing = ref<'idle' | 'bootloader'>('idle')
 const isVirtual = props.session.transport.kind === 'virtual'
+
+const outdated = !isVirtual && isOlder(info.firmware, carriedVersion())
 
 async function updateFirmware() {
   await attempt(async () => {
-    props.session.restarting = !isVirtual && !!desktop
+    // The desktop app does all of it; the keyboard comes back by itself.
+    if (desktop && !isVirtual) return updateByItself(props.session, true)
     await props.session.client.reboot(true)
     flashing.value = 'bootloader'
     if (props.session.transport instanceof VirtualTransport) {
@@ -154,11 +167,6 @@ async function updateFirmware() {
       flashing.value = 'idle'
       toast('Firmware updated; your settings were kept')
       return
-    }
-    if (desktop) {
-      const drive = await desktop.flash(registryMcu(info.mcu))
-      toast(`Firmware copied to ${drive}. The keyboard restarts by itself.`)
-      flashing.value = 'done'
     }
   })
 }
@@ -178,7 +186,7 @@ async function updateFirmware() {
           this half's own wiring.
         </p>
         <label class="field">
-          Ignore switch chatter for {{ hardware.debounce_ms }} ms after each change
+          Ignore switch chatter shorter than {{ hardware.debounce_ms }} ms
           <input type="range" min="1" max="30" :value="hardware.debounce_ms" data-test="debounce" @change="change({ debounce_ms: Number(($event.target as HTMLInputElement).value) })" />
         </label>
         <p class="muted small">Raise this if one press sometimes types a letter twice.</p>
@@ -226,7 +234,10 @@ async function updateFirmware() {
 
       <div class="card col">
         <h2>Firmware</h2>
-        <p>Version <strong>{{ version }}</strong> on {{ info.mcu }}.</p>
+        <p>
+          Version <strong>{{ version }}</strong> on {{ info.mcu }}.
+          <span v-if="outdated" class="muted" data-test="firmware-outdated">This app carries {{ carriedVersion().join('.') }}.</span>
+        </p>
         <Transition name="rise" mode="out-in">
           <div v-if="flashing === 'bootloader'" key="boot" class="note">
             <strong>The keyboard is in update mode.</strong>
@@ -236,8 +247,9 @@ async function updateFirmware() {
               restarts by itself. Your settings are kept.
             </template>
           </div>
-          <div v-else-if="flashing === 'done'" key="done" class="note">Done. Connect the keyboard again from the home screen.</div>
-          <button v-else class="btn" data-test="update-firmware" @click="updateFirmware">Update firmware</button>
+          <button v-else class="btn" :class="{ primary: outdated }" title="The keyboard is away for a few seconds and comes back by itself. Your settings are kept." data-test="update-firmware" @click="updateFirmware">
+            {{ outdated || !desktop || isVirtual ? 'Update firmware' : 'Install the firmware again' }}
+          </button>
         </Transition>
       </div>
 

@@ -1,9 +1,11 @@
 use heapless::{String, Vec};
 use jmk_core::{Action, Combo, HoldTapFlavor, HoldTapProfile, Keymap, MacroStep};
 use jmk_proto::{
-    HardwareConfig, KeyGeometry, LightingConfig, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
-    MAX_LAYERS, MAX_MACROS, MAX_MACRO_STEPS,
+    HardwareConfig, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
+    MAX_LAYERS, MAX_MACROS, MAX_MACRO_NAME, MAX_MACRO_STEPS,
 };
+
+pub type MacroName = String<MAX_MACRO_NAME>;
 
 /// Everything the user can configure. Lives in RAM and is saved to flash on
 /// request.
@@ -22,6 +24,12 @@ pub struct Config {
     pub lighting: LightingConfig,
     /// A colour number per layer, kept for the configurator.
     pub layer_colors: [u8; MAX_LAYERS],
+    /// What the user calls each macro, kept for the configurator.
+    pub macro_names: [MacroName; MAX_MACROS],
+    /// Where the letters sit, kept for the configurator.
+    pub letter_rows: LetterRows,
+    /// Groups of switches besides `hardware.matrix`.
+    pub more_wiring: MoreWiring,
     /// How many times the shared part was saved with a change in it; see
     /// [`crate::sync`].
     pub revision: u32,
@@ -50,6 +58,16 @@ impl serde::Serialize for Shared<'_> {
         parts.serialize_element(&config.meta.name)?;
         for layer in layers {
             parts.serialize_element(&layer[..])?;
+        }
+        // Only when there are any, so that a keymap without named macros reads
+        // the same as on firmware from before macros had names.
+        let rows = config.letter_rows.iter().any(|row| !row.is_empty());
+        if rows || config.macro_names.iter().any(|name| !name.is_empty()) {
+            parts.serialize_element(&config.macro_names)?;
+        }
+        // Likewise the letter rows, which came after the names.
+        if rows {
+            parts.serialize_element(&config.letter_rows)?;
         }
         parts.end()
     }
@@ -88,6 +106,8 @@ impl Config {
     };
     const DEFAULT_PROFILE: HoldTapProfile =
         HoldTapProfile { flavor: HoldTapFlavor::Balanced, tapping_term_ms: 200, require_prior_idle_ms: 0 };
+    const NO_NAME: MacroName = String::new();
+    const NO_ROWS: LetterRows = [Vec::new(), Vec::new(), Vec::new()];
     const EMPTY_META: Meta = Meta { name: String::new(), controller: String::new() };
 
     /// An unconfigured keyboard: no pins in use, one empty layer.
@@ -104,6 +124,9 @@ impl Config {
             macro_ends: [0; MAX_MACROS],
             lighting: LightingConfig::NONE,
             layer_colors: [0; MAX_LAYERS],
+            macro_names: [Self::NO_NAME; MAX_MACROS],
+            letter_rows: Self::NO_ROWS,
+            more_wiring: Vec::new(),
             revision: 0,
             base: None,
         }
@@ -123,6 +146,9 @@ impl Config {
             macro_ends,
             lighting,
             layer_colors,
+            macro_names,
+            letter_rows,
+            more_wiring,
             revision,
             base,
         } = self;
@@ -137,6 +163,9 @@ impl Config {
         *macro_ends = [0; MAX_MACROS];
         *lighting = LightingConfig::NONE;
         *layer_colors = [0; MAX_LAYERS];
+        macro_names.iter_mut().for_each(|name| name.clear());
+        *letter_rows = Self::NO_ROWS;
+        more_wiring.clear();
         *revision = 0;
         *base = None;
     }
@@ -192,6 +221,12 @@ impl Config {
             }
             layer.copy_from_slice(&actions);
         }
+        if bytes.is_empty() {
+            self.macro_names.iter_mut().for_each(|name| name.clear());
+        } else {
+            self.macro_names = take(&mut bytes)?;
+        }
+        self.letter_rows = if bytes.is_empty() { Self::NO_ROWS } else { take(&mut bytes)? };
         bytes.is_empty().then_some(())
     }
 

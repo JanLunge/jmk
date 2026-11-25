@@ -18,7 +18,7 @@
     "prebuild": "npm run wasm",
     "pretest": "npm run wasm",
     "pree2e": "npm run build",
-    "firmware": "mkdir -p firmware && cp ../target/jmk-rp2040.uf2 firmware/"
+    "firmware": "mkdir -p firmware && cp ../target/jmk-*.uf2 firmware/"
   },
   "dependencies": {
     "pinia": "^4.1.0",

@@ -82,10 +82,17 @@ function bootDrives() {
   })
 }
 
+const firmwareDir = () => (app.isPackaged ? path.join(process.resourcesPath, 'firmware') : path.join(__dirname, '..', 'firmware'))
+
+/** The chips there is a firmware file for. */
+function bundled() {
+  if (!fs.existsSync(firmwareDir())) return []
+  return fs.readdirSync(firmwareDir()).flatMap((name) => /^jmk-([a-z0-9]+)\.uf2$/.exec(name)?.[1] ?? [])
+}
+
 async function flash(_event, mcu, onto) {
   if (!/^[a-z0-9]+$/.test(mcu)) throw new Error('Unknown chip.')
-  const bundled = app.isPackaged ? path.join(process.resourcesPath, 'firmware') : path.join(__dirname, '..', 'firmware')
-  const image = path.join(bundled, `jmk-${mcu}.uf2`)
+  const image = path.join(firmwareDir(), `jmk-${mcu}.uf2`)
   if (!fs.existsSync(image)) throw new Error(`This app does not include firmware for ${mcu}.`)
   const deadline = Date.now() + 20_000
   for (;;) {
@@ -123,6 +130,7 @@ app.whenReady().then(() => {
   allowKeyboards()
   ipcMain.handle('jmk:flash', flash)
   ipcMain.handle('jmk:drives', bootDrives)
+  ipcMain.handle('jmk:bundled', bundled)
   const window = new BrowserWindow({
     width: 1280,
     height: 880,

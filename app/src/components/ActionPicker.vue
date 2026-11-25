@@ -1,26 +1,37 @@
 <script setup lang="ts">
-// Chooses what one key does: an ordinary keyboard to pick from, with
-// everything a keyboard does not have grouped below it. Click to put
-// something on the selected key, or drag it onto any key.
+// Chooses what a key does. One bar says what the selected key is now; tabs
+// hold an ordinary keyboard to pick from and, each on its own page, everything
+// a keyboard does not have. Click to put something on the selected keys, or
+// drag it onto any key.
 import { computed, ref, watch } from 'vue'
 import { startDrag, type Dragged } from '../lib/drag'
 import { ANSI_BLOCKS, describeAction, describeBasic, EXTRA_KEYS, KEY_GROUPS, keyLabel, keyName, MEDIA_KEYS, MOD_BITS } from '../lib/keycodes'
 import { layerHex } from '../lib/layers'
 import type { Action, Basic } from '../lib/protocol'
+import { macroLabel, type Session } from '../lib/session'
+import MacroEditor from './MacroEditor.vue'
 
 const props = defineProps<{
   /** The selected key, if any. */
   action?: Action
   layerCount: number
   currentLayer: number
-  /** Which macros have steps, by index. */
-  macros: boolean[]
+  /** The keyboard, for its macros: they are named, recorded and edited right here. */
+  session: Session
   layerColors?: number[]
+  /** How many keys are selected; what is picked goes on all of them. */
+  count?: number
+  /** Whether the selected keys do different things. */
+  mixed?: boolean
+  /** Folded down to its top bar, so the keyboard has the room. */
+  minimized?: boolean
 }>()
 
-const emit = defineEmits<{ change: [action: Action] }>()
+const emit = defineEmits<{ change: [action: Action]; minimize: [on: boolean] }>()
 
 const search = ref('')
+// Looking for a key means wanting to see what is found.
+watch(search, (text) => text && props.minimized && emit('minimize', false))
 /** Modifiers to send together with the next key picked. */
 const withMods = ref(0)
 /** For a hold-tap: which of its two actions is being chosen. */
@@ -57,6 +68,15 @@ const isKey = (usage: number) => {
   if (!basic || basic === 'None') return false
   return ('Key' in basic && basic.Key === usage) || ('ModKey' in basic && basic.ModKey.key === usage)
 }
+/** The macro on the selected key, if it plays one. */
+const chosenMacro = computed(() => (typeof current.value === 'object' && 'Macro' in current.value ? current.value.Macro : undefined))
+/** The macro shown in the editor beside the list: the one on the key, or the one clicked last. */
+const openMacro = ref(chosenMacro.value ?? 0)
+watch(chosenMacro, (now) => now !== undefined && (openMacro.value = now))
+function pickMacro(index: number) {
+  openMacro.value = index
+  choose({ Macro: index })
+}
 const same = (basic: Basic) => JSON.stringify(current.value) === JSON.stringify(basic)
 const otherLayers = computed(() => [...Array(props.layerCount).keys()].filter((layer) => layer !== props.currentLayer))
 const layerStyle = (layer: number) => {
@@ -84,35 +104,53 @@ const found = computed(() => {
 })
 const foundBasic = (item: Found): Basic => (typeof item.basic === 'object' && 'Key' in item.basic ? keyBasic(item.basic.Key) : item.basic)
 
-// --- Jumping to a group --------------------------------------------------------
-const GROUPS = [
+// --- Pages --------------------------------------------------------------------
+const TABS = [
   { id: 'keys', name: 'Keyboard' },
   { id: 'layers', name: 'Layers' },
-  { id: 'mods', name: 'Modifiers' },
+  { id: 'mods', name: 'One-shot' },
   { id: 'media', name: 'Media' },
   { id: 'macros', name: 'Macros' },
   { id: 'more', name: 'More' },
 ] as const
-const pane = ref<HTMLElement>()
-function jump(id: string) {
-  search.value = ''
-  // After the search results have made way for the groups again.
-  requestAnimationFrame(() => pane.value?.querySelector(`[data-group=${id}]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
-}
+type TabId = (typeof TABS)[number]['id']
+const tab = ref<TabId>('keys')
+
+const ON_BOARD = new Set(ANSI_BLOCKS.flatMap((block) => block.rows.flat()).map(([usage]) => usage))
+/** The page that holds what the selected key does now, marked with a dot. */
+const home = computed<TabId | undefined>(() => {
+  const basic = current.value
+  if (props.action === 'Transparent' || basic === 'None') return 'more'
+  if (!basic || props.mixed) return undefined
+  if ('Key' in basic) return ON_BOARD.has(basic.Key) ? 'keys' : 'more'
+  if ('ModKey' in basic) return ON_BOARD.has(basic.ModKey.key) ? 'keys' : 'more'
+  if ('MomentaryLayer' in basic || 'ToggleLayer' in basic || 'ToLayer' in basic) return 'layers'
+  if ('OneShotMods' in basic) return 'mods'
+  if ('Consumer' in basic) return 'media'
+  if ('Macro' in basic) return 'macros'
+  return undefined
+})
+
+const summary = computed(() => {
+  if (props.action === undefined) return 'Click a key above'
+  if ((props.count ?? 1) > 1 && props.mixed) return 'different things'
+  if (chosenMacro.value !== undefined && !holdTap.value && props.session.macroNames[chosenMacro.value]) return `Macro: ${macroLabel(props.session, chosenMacro.value)}`
+  return describeAction(props.action)
+})
 </script>
 
 <template>
-  <div class="picker">
-    <div class="side col">
+  <div class="picker" :class="{ minimized }">
+    <div class="bar row">
       <div class="now">
-        <div class="muted small">{{ action === undefined ? 'No key selected' : 'This key' }}</div>
-        <strong data-test="action-description">{{ action === undefined ? 'Click a key above, or drag something onto one' : describeAction(action) }}</strong>
+        <span class="muted small" data-test="picker-target">{{ action === undefined ? 'No key selected' : (count ?? 1) > 1 ? `${count} keys` : 'This key' }}</span>
+        <strong data-test="action-description" :title="summary">{{ summary }}</strong>
       </div>
 
-      <template v-if="action !== undefined">
-        <label class="row toggle">
+      <template v-if="action !== undefined && !minimized">
+        <label class="row toggle" title="For example a letter when tapped and Shift when held">
           <input type="checkbox" :checked="!!holdTap" data-test="hold-tap" @change="toggleHoldTap" />
-          <span>Do something different when held</span>
+          <span>Different when held</span>
         </label>
         <div v-if="holdTap" class="slots row">
           <button class="slot" :class="{ on: slot === 'tap' }" data-test="slot-tap" @click="slot = 'tap'">
@@ -121,7 +159,7 @@ function jump(id: string) {
           <button class="slot" :class="{ on: slot === 'hold' }" data-test="slot-hold" @click="slot = 'hold'">
             <span class="muted small">held</span>{{ describeBasic(holdTap.hold) }}
           </button>
-          <label class="field profile">feel
+          <label class="row feel muted small" title="Which of the four hold-tap feels under Behaviours this key uses">feel
             <select class="input" :value="holdTap.profile" @change="emit('change', { HoldTap: { ...holdTap, profile: Number(($event.target as HTMLSelectElement).value) } })">
               <option v-for="n in 4" :key="n" :value="n - 1">{{ n }}</option>
             </select>
@@ -129,21 +167,29 @@ function jump(id: string) {
         </div>
       </template>
 
+      <span class="grow" />
       <input v-model="search" class="input search" placeholder="Search keys…" data-test="search" />
-      <div class="mods row">
-        <span class="muted small">with</span>
+      <button class="fold" :title="minimized ? 'Open the key picker' : 'Minimise, so the keyboard has the room'" :aria-label="minimized ? 'Open the key picker' : 'Minimise the key picker'" :aria-expanded="!minimized" data-test="picker-fold" @click="emit('minimize', !minimized)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="minimized ? 'm18 15-6-6-6 6' : 'm6 9 6 6 6-6'" /></svg>
+      </button>
+    </div>
+
+    <div v-show="!minimized" class="tabs row">
+      <button v-for="t in TABS" :key="t.id" class="tab" :class="{ on: !found && tab === t.id }" :data-test="'tab-' + t.id" @click="((tab = t.id), (search = ''))">
+        {{ t.name }}<span v-if="home === t.id" class="here" />
+      </button>
+      <span class="grow" />
+      <div v-if="found || tab === 'keys' || tab === 'more'" class="mods row" title="Send these together with the key you pick, e.g. Ctrl with C">
+        <span class="muted small">together with</span>
         <button v-for="mod in MOD_BITS.slice(0, 4)" :key="mod.bit" class="chip-btn" :class="{ on: withMods & mod.bit }" :data-test="'with-' + mod.label" @click="withMods ^= mod.bit">
           {{ mod.label }}
         </button>
       </div>
-      <div class="jumps row">
-        <button v-for="group in GROUPS" :key="group.id" class="jump" :data-test="'tab-' + group.id" @click="jump(group.id)">{{ group.name }}</button>
-      </div>
     </div>
 
-    <div ref="pane" class="pane scroll">
-      <section v-if="found" class="group">
-        <h3 class="muted">{{ found.length ? 'Found' : 'Nothing found' }}</h3>
+    <div v-show="!minimized" class="pane">
+      <section v-if="found" class="page scroll">
+        <p v-if="!found.length" class="muted">Nothing found.</p>
         <div class="grid">
           <button
             v-for="item in found"
@@ -160,118 +206,136 @@ function jump(id: string) {
         </div>
       </section>
 
-      <template v-else>
-        <div class="board" data-group="keys">
-          <div v-for="block in ANSI_BLOCKS" :key="block.id" class="block" :class="block.id">
-            <div v-for="(keys, index) in block.rows" :key="index" class="keys">
-              <template v-for="([usage, width], at) in keys" :key="at">
-                <span v-if="usage === undefined" class="gap" :style="{ '--w': width }" />
-                <button
-                  v-else
-                  class="key-btn cap"
-                  :class="{ on: isKey(usage), long: keyLabel(usage).length > 4 && width < 1.5 }"
-                  :style="{ '--w': width }"
-                  :title="keyName(usage)"
-                  :data-usage="usage"
-                  draggable="true"
-                  @dragstart="drag($event, { basic: keyBasic(usage) })"
-                  @click="choose(keyBasic(usage))"
-                >
-                  {{ keyLabel(usage) }}
-                </button>
-              </template>
-            </div>
+      <div v-else-if="tab === 'keys'" class="board">
+        <div v-for="block in ANSI_BLOCKS" :key="block.id" class="block" :class="block.id">
+          <div v-for="(keys, index) in block.rows" :key="index" class="keys">
+            <template v-for="([usage, width], at) in keys" :key="at">
+              <span v-if="usage === undefined" class="gap" :style="{ '--w': width }" />
+              <button
+                v-else
+                class="key-btn cap"
+                :class="{ on: isKey(usage), long: keyLabel(usage).length > 4 && width < 1.5 }"
+                :style="{ '--w': width }"
+                :title="keyName(usage)"
+                :data-usage="usage"
+                draggable="true"
+                @dragstart="drag($event, { basic: keyBasic(usage) })"
+                @click="choose(keyBasic(usage))"
+              >
+                {{ keyLabel(usage) }}
+              </button>
+            </template>
           </div>
         </div>
+      </div>
 
-        <div class="groups">
-          <section class="group" data-group="layers">
-            <h3 class="muted">Layers</h3>
-            <p v-if="!otherLayers.length" class="muted small">There is only one layer so far. Add another above the keyboard, then put a key here that takes you there.</p>
-            <div v-for="layer in otherLayers" :key="layer" class="layer-row" :style="layerStyle(layer)">
-              <span class="layer-name"><span class="dot" />Layer {{ layer }}</span>
-              <button class="key-btn tint" :class="{ on: same({ MomentaryLayer: layer }) }" :data-test="'layer-hold-' + layer" draggable="true" @dragstart="drag($event, { basic: { MomentaryLayer: layer } })" @click="choose({ MomentaryLayer: layer })">while held</button>
-              <button class="key-btn tint" :class="{ on: same({ ToggleLayer: layer }) }" :data-test="'layer-toggle-' + layer" draggable="true" @dragstart="drag($event, { basic: { ToggleLayer: layer } })" @click="choose({ ToggleLayer: layer })">on / off</button>
-              <button class="key-btn tint" :class="{ on: same({ ToLayer: layer }) }" :data-test="'layer-to-' + layer" draggable="true" @dragstart="drag($event, { basic: { ToLayer: layer } })" @click="choose({ ToLayer: layer })">switch to</button>
-            </div>
-          </section>
-
-          <section class="group" data-group="mods">
-            <h3 class="muted">Modifiers for the next key only</h3>
-            <div class="grid">
-              <button v-for="mod in MOD_BITS.slice(0, 4)" :key="mod.bit" class="key-btn" :class="{ on: same({ OneShotMods: mod.bit }) }" :data-test="'oneshot-' + mod.label" draggable="true" @dragstart="drag($event, { basic: { OneShotMods: mod.bit } })" @click="choose({ OneShotMods: mod.bit })">
-                {{ mod.label }}
-              </button>
-            </div>
-            <p class="muted small">Tap it, then the next key gets that modifier. Ordinary Shift, Ctrl and so on are on the keyboard above.</p>
-          </section>
-
-          <section class="group" data-group="media">
-            <h3 class="muted">Media</h3>
-            <div class="grid">
-              <button v-for="key in MEDIA_KEYS" :key="key.usage" class="key-btn" :class="{ on: same({ Consumer: key.usage }) }" :title="key.name" :data-test="'media-' + key.usage" draggable="true" @dragstart="drag($event, { basic: { Consumer: key.usage } })" @click="choose({ Consumer: key.usage })">
-                {{ key.label }}
-              </button>
-            </div>
-          </section>
-
-          <section class="group" data-group="macros">
-            <h3 class="muted">Macros</h3>
-            <div class="grid">
-              <button v-for="(filled, index) in macros" :key="index" class="key-btn" :class="{ on: same({ Macro: index }), faint: !filled }" :title="filled ? `Macro ${index + 1}` : `Macro ${index + 1} (empty)`" :data-test="'macro-' + index" draggable="true" @dragstart="drag($event, { basic: { Macro: index } })" @click="choose({ Macro: index })">
-                M{{ index + 1 }}
-              </button>
-            </div>
-            <p class="muted small">A macro types a whole sequence with one press. Write them under Behaviours.</p>
-          </section>
-
-          <section class="group" data-group="more">
-            <h3 class="muted">More keys</h3>
-            <div class="grid">
-              <button v-for="key in EXTRA_KEYS" :key="key.usage" class="key-btn" :class="{ on: isKey(key.usage) }" :title="key.name" :data-usage="key.usage" draggable="true" @dragstart="drag($event, { basic: keyBasic(key.usage) })" @click="choose(keyBasic(key.usage))">
-                {{ key.label }}
-              </button>
-            </div>
-          </section>
-
-          <section class="group" data-group="special">
-            <h3 class="muted">Special</h3>
-            <div class="grid">
-              <button class="key-btn wide" :class="{ on: same('None') }" data-test="none" draggable="true" @dragstart="drag($event, { basic: 'None' })" @click="choose('None')">Nothing</button>
-              <button class="key-btn wide" :class="{ on: action === 'Transparent' }" data-test="transparent" draggable="true" @dragstart="drag($event, { action: 'Transparent' })" @click="action !== undefined && emit('change', 'Transparent')">
-                See-through
-              </button>
-            </div>
-            <p class="muted small">See-through uses whatever this key does on the layer below.</p>
-          </section>
+      <section v-else-if="tab === 'layers'" class="page scroll">
+        <p class="muted small">A key that takes you to another layer: only while you hold it, switched on and off with a tap, or for good until you switch back.</p>
+        <p v-if="!otherLayers.length" class="muted">There is only one layer so far. Add another above the keyboard first.</p>
+        <div class="layer-rows">
+          <div v-for="layer in otherLayers" :key="layer" class="layer-row" :style="layerStyle(layer)">
+            <span class="layer-name"><span class="dot" />Layer {{ layer }}</span>
+            <button class="key-btn tint" :class="{ on: same({ MomentaryLayer: layer }) }" :data-test="'layer-hold-' + layer" draggable="true" @dragstart="drag($event, { basic: { MomentaryLayer: layer } })" @click="choose({ MomentaryLayer: layer })">while held</button>
+            <button class="key-btn tint" :class="{ on: same({ ToggleLayer: layer }) }" :data-test="'layer-toggle-' + layer" draggable="true" @dragstart="drag($event, { basic: { ToggleLayer: layer } })" @click="choose({ ToggleLayer: layer })">on / off</button>
+            <button class="key-btn tint" :class="{ on: same({ ToLayer: layer }) }" :data-test="'layer-to-' + layer" draggable="true" @dragstart="drag($event, { basic: { ToLayer: layer } })" @click="choose({ ToLayer: layer })">switch to</button>
+          </div>
         </div>
-      </template>
+      </section>
+
+      <section v-else-if="tab === 'mods'" class="page scroll">
+        <p class="muted small">Tap one of these and only the next key gets that modifier, so nothing has to be held. Ordinary Shift, Ctrl and so on are on the Keyboard page.</p>
+        <div class="grid big">
+          <button v-for="mod in MOD_BITS.slice(0, 4)" :key="mod.bit" class="key-btn" :class="{ on: same({ OneShotMods: mod.bit }) }" :data-test="'oneshot-' + mod.label" draggable="true" @dragstart="drag($event, { basic: { OneShotMods: mod.bit } })" @click="choose({ OneShotMods: mod.bit })">
+            {{ mod.label }} once
+          </button>
+        </div>
+      </section>
+
+      <section v-else-if="tab === 'media'" class="page scroll">
+        <div class="grid big">
+          <button v-for="key in MEDIA_KEYS" :key="key.usage" class="key-btn" :class="{ on: same({ Consumer: key.usage }) }" :title="key.name" :data-test="'media-' + key.usage" draggable="true" @dragstart="drag($event, { basic: { Consumer: key.usage } })" @click="choose({ Consumer: key.usage })">
+            {{ key.name }}
+          </button>
+        </div>
+      </section>
+
+      <section v-else-if="tab === 'macros'" class="macros">
+        <div class="macro-list scroll">
+          <button
+            v-for="(steps, index) in session.macros"
+            :key="index"
+            class="macro-item"
+            :class="{ on: same({ Macro: index }), open: openMacro === index, faint: !steps.length }"
+            :title="`Put ${macroLabel(session, index)} on the key`"
+            :data-test="'macro-' + index"
+            draggable="true"
+            @dragstart="drag($event, { basic: { Macro: index } })"
+            @click="pickMacro(index)"
+          >
+            <span class="num">M{{ index + 1 }}</span>
+            <span class="nm">{{ session.macroNames[index] || (steps.length ? 'unnamed' : 'empty') }}</span>
+          </button>
+        </div>
+        <div class="macro-edit scroll">
+          <MacroEditor :session="session" :index="openMacro" />
+        </div>
+      </section>
+
+      <section v-else class="page scroll">
+        <div class="grid big">
+          <button class="key-btn" :class="{ on: same('None') }" title="The key does nothing" data-test="none" draggable="true" @dragstart="drag($event, { basic: 'None' })" @click="choose('None')">Nothing</button>
+          <button class="key-btn" :class="{ on: action === 'Transparent' }" title="Uses whatever this key does on the layer below" data-test="transparent" draggable="true" @dragstart="drag($event, { action: 'Transparent' })" @click="action !== undefined && emit('change', 'Transparent')">
+            See-through
+          </button>
+        </div>
+        <p class="muted small">See-through uses whatever the key does on the layer below.</p>
+        <div class="grid">
+          <button v-for="key in EXTRA_KEYS" :key="key.usage" class="key-btn" :class="{ on: isKey(key.usage) }" :title="key.name" :data-usage="key.usage" draggable="true" @dragstart="drag($event, { basic: keyBasic(key.usage) })" @click="choose(keyBasic(key.usage))">
+            {{ key.label }}
+          </button>
+        </div>
+      </section>
     </div>
   </div>
 </template>
 
 <style scoped>
 .picker {
-  display: grid;
-  grid-template-columns: 250px minmax(0, 1fr);
-  gap: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   height: 100%;
   min-height: 0;
-}
-
-.side {
-  min-height: 0;
-  gap: 10px;
-  overflow-y: auto;
 }
 
 .small {
   font-size: 0.82rem;
 }
 
+.bar {
+  gap: 16px;
+  min-height: 40px;
+}
+
+.now {
+  display: flex;
+  flex-direction: column;
+  min-width: 110px;
+  max-width: 300px;
+  line-height: 1.25;
+}
+
+.now strong {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .toggle {
+  gap: 7px;
   cursor: pointer;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
 }
 
 .toggle input {
@@ -279,23 +343,19 @@ function jump(id: string) {
 }
 
 .slots {
-  align-items: stretch;
-  flex-wrap: wrap;
   gap: 6px;
 }
 
 .slot {
-  flex: 1;
-  min-width: 90px;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
-  padding: 6px 10px;
-  border-radius: 10px;
+  align-items: baseline;
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: 9px;
   border: 1px solid var(--line);
   background: var(--panel-2);
   cursor: pointer;
+  white-space: nowrap;
   transition: border-color 0.15s;
 }
 
@@ -304,22 +364,110 @@ function jump(id: string) {
   background: var(--accent-soft);
 }
 
-.profile {
-  width: 58px;
+.feel {
+  gap: 6px;
+}
+
+.feel .input {
+  width: 52px;
+  padding: 4px 6px;
 }
 
 .search {
-  width: 100%;
+  width: 200px;
+  flex: none;
 }
 
-.mods,
-.jumps {
+.fold {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  margin-left: -6px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.fold:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.fold svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.picker.minimized {
+  height: auto;
+}
+
+.picker.minimized .bar {
+  min-height: 0;
+}
+
+.picker.minimized .now {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 420px;
+}
+
+.tabs {
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  position: relative;
+  padding: 6px 12px 8px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.on {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.here {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+
+.mods {
   gap: 5px;
-  flex-wrap: wrap;
+  padding-bottom: 5px;
 }
 
-.chip-btn,
-.jump {
+.chip-btn {
   padding: 3px 9px;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -338,30 +486,103 @@ function jump(id: string) {
   font-weight: 600;
 }
 
-.jump {
-  color: var(--muted);
-  background: none;
-}
-
-.jump:hover {
-  color: var(--text);
-  border-color: var(--muted);
-}
-
+/* The page takes the room that is left; the keyboard is sized to fill it. */
 .pane {
+  flex: 1;
   min-height: 0;
+  container-type: size;
+}
+
+.page {
+  height: 100%;
   display: flex;
   flex-direction: column;
+  gap: 10px;
+  padding: 2px 4px 2px 0;
+}
+
+.page p {
+  margin: 0;
+  max-width: 640px;
+}
+
+.macros {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
   gap: 16px;
+}
+
+.macro-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
   padding-right: 4px;
+}
+
+.macro-edit {
+  min-height: 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+
+.macro-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  text-align: left;
+  cursor: grab;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.macro-item:hover {
+  background: var(--panel-2);
+}
+
+.macro-item.open {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+
+.macro-item.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.macro-item .num {
+  width: 28px;
+  flex: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.macro-item .nm {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.macro-item.faint .nm {
+  font-weight: 400;
+  color: var(--muted);
 }
 
 /* The ordinary keyboard. One key unit is --u wide. */
 .board {
-  --u: 36px;
+  --u: clamp(20px, min((100cqw - 34px) / 22, 100cqh / 6), 50px);
+  height: 100%;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
 }
 
 .block {
@@ -401,11 +622,11 @@ function jump(id: string) {
   height: calc(var(--u) - 3px);
   min-height: 0;
   padding: 0 2px;
-  font-size: 0.78rem;
+  font-size: calc(var(--u) * 0.33);
 }
 
 .key-btn.cap.long {
-  font-size: 0.62rem;
+  font-size: calc(var(--u) * 0.25);
   letter-spacing: -0.02em;
 }
 
@@ -429,41 +650,34 @@ function jump(id: string) {
   opacity: 0.5;
 }
 
-.groups {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-  gap: 16px 22px;
-  align-items: start;
-}
-
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  scroll-margin-top: 4px;
-}
-
-h3 {
-  font-size: 0.76rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 5px;
+}
+
+.grid.big {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+.grid .key-btn {
+  min-height: 38px;
 }
 
 .key-btn.wide {
   grid-column: span 3;
 }
 
+.layer-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 6px 26px;
+}
+
 .layer-row {
   display: grid;
   grid-template-columns: 78px repeat(3, 1fr);
-  gap: 4px;
+  gap: 5px;
   align-items: center;
 }
 
@@ -486,10 +700,4 @@ h3 {
   border-color: color-mix(in srgb, var(--tint, var(--line)) 50%, var(--line));
 }
 
-@media (max-width: 860px) {
-  .picker {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-}
 </style>

@@ -1,147 +1,112 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+<p align="center"><img src="assets/icon.svg" width="96" height="96" alt=""></p>
+<h1 align="center">JMK + POG v2</h1>
+<h4 align="center">
+Keyboard firmware you configure after flashing, and the app that does it
+</h4>
 
-# JMK
+> **Built with a lot of AI help.** I design this, decide what goes in and test
+> it on my own keyboards, but most of the code was written with AI coding
+> tools (Claude) and not typed by hand. If that is not for you, better to know
+> now.
 
-**JMK** is keyboard firmware in Rust that is configured after flashing, not
-before compiling. **POG** is the app that configures it.
+![The setup finding a macro pad's wiring from key presses](assets/wizard.png)
 
-- **JMK, the firmware.** One prebuilt image per microcontroller family.
-  Pins, matrix type, keymap and behaviours are not compiled in; they are
-  set from the app and stored on the keyboard.
-- **POG, the configurator.** This is POG version 2: the POG app, rebuilt
-  to run on JMK firmware. It lives in `app/`.
+**JMK** is keyboard firmware in Rust. You flash one prebuilt file, and pins,
+wiring, keymap and everything else are set from the app afterwards and kept
+on the keyboard. No config files, no compiling.
 
-The aim is that someone with a hand-wired board flashes a file, presses
-each key once so the app can work out the wiring, and is done.
+**POG v2** is that app (`app/`). It is the follow-up to
+[POG](https://github.com/JanLunge/pog), which did the same job for KMK.
 
-> **Early alpha.** Tested on Ubuntu and macOS. There are no releases or
-> installers yet, and the protocol and saved configuration format may still
-> change.
+The idea: flash a hand-wired board, press every key once so the app can work
+out how it is wired, and start typing.
 
-![The setup wizard finding a macro pad's wiring from key presses](assets/wizard.png)
+# Status
 
-## Try it
+Early alpha. No releases or installers yet, and the protocol and the saved
+format can still change. I use it on macOS and Ubuntu; Windows is untried.
 
-No keyboard is needed: the app includes virtual keyboards that run the real
-firmware logic on simulated wiring.
+What has actually run on hardware:
 
-You need [Rust](https://rustup.rs) with the `wasm32-unknown-unknown` target
-and Node.js.
+| | |
+| --- | --- |
+| RP2040 (Pi Pico and friends) | Runs on my own boards. This is the one to use. |
+| nRF52840 (nice!nano and friends) | Compiles. Has never run on a board. |
+| Split keyboards over a cable | Experimental. Mostly tried on the virtual keyboards. |
+| Duplex matrix, mixed wiring | New. Only tried on the virtual keyboards. |
+| RGB lights (WS2812) | RP2040 only. |
+
+# What it does
+
+- finds the wiring from key presses: one pin per key, a matrix with or
+  without diodes, a duplex matrix, or a mix of them on one board
+- rotary knobs, split keyboards over a serial cable, RGB underglow and
+  per-key lights
+- layers, hold-tap, combos, one-shot modifiers, macros you can record
+- keymap editor: click or drag keys, or just type on your normal keyboard to
+  fill in key after key
+- puts QWERTY, Colemak, Colemak-DH or Dvorak on the letter keys in one go
+- layout editor for where the keys sit, with keyboard-layout-editor import
+- every change is saved to the keyboard by itself, with undo and redo
+- one file holds the whole keyboard (wiring, layout, keymap, lights) to back
+  it up or set up the next one
+- firmware update from the app in one click, no reset button, both halves of a split
+- virtual keyboards that run the real firmware logic, so you can try all of
+  it without hardware
+
+# Try it
+
+You need [Rust](https://rustup.rs) and Node.js.
 
 ```sh
 rustup target add wasm32-unknown-unknown
 cd app
 npm install
-npm run start     # builds and opens the desktop app
+npm run start
 ```
 
-On the home screen pick a virtual keyboard at the bottom, or plug in a
-board. `npm run wasm && npm run dev` runs the same app in a Chromium browser
-instead.
+Pick a virtual keyboard on the first screen, or plug in a board.
 
-For a real Raspberry Pi Pico, build the firmware first (this needs the
-`thumbv6m-none-eabi` target), then hold BOOTSEL while plugging the board in.
-The desktop app offers to install onto it, or copy `target/jmk-rp2040.uf2`
-to the drive that appears yourself.
+For a real Pi Pico build the firmware first, then hold BOOTSEL while
+plugging it in. The app offers to install it.
 
 ```sh
 rustup target add thumbv6m-none-eabi
 (cd firmware/rp2040 && cargo build --release)
 cargo run -p jmk-uf2 -- rp2040 \
     firmware/rp2040/target/thumbv6m-none-eabi/release/jmk-rp2040 target/jmk-rp2040.uf2
-(cd app && npm run firmware)   # lets the desktop app install it
+(cd app && npm run firmware)
 ```
 
-## What works today
+`./scripts/check.sh` runs every test and builds both firmwares. There is no
+hosted CI yet, that script is it.
 
-- **Firmware for RP2040** (Raspberry Pi Pico and similar), run on a real
-  Pico: USB keyboard and media keys, configuration channel, saving to flash,
-  self-update from the app or command line.
-- **Firmware for nRF52840** (nice!nano and similar) with USB and Bluetooth.
-  Experimental; see
-  [firmware/nrf52840/README.md](firmware/nrf52840/README.md).
-- **Wiring**: diode matrix in either direction, one pin per key, rotary
-  knobs. Pins are assigned at run time.
-- **Keymap engine**: layers, hold-tap in three flavours, combos, one-shot
-  modifiers, macros.
-- **RGB lights** (WS2812 and compatible) on the RP2040: one chain on any
-  free pin, as underglow (spread around the keyboard to begin with), one
-  light per key, or both. The two groups have their own effect, colour and
-  brightness, and a power limit caps the whole chain.
-- **Split keyboards** over a serial cable. Plug both halves into the
-  computer and the app finds which pins the cable is on, then sets both up
-  from one page of key presses. Each half holds the whole keymap, so either
-  one can be the half that is plugged in, and each also works on its own;
-  with both plugged in, only one of them types. A saved change travels to
-  the other half through the cable, also when that half was away at the
-  time. If both halves were changed while apart, the app asks which keymap
-  to keep. Experimental: keyboards in one piece are the supported kind for
-  now.
-- **POG** (`app/`), the configurator, and the second version of POG: a
-  setup wizard that finds the wiring from key presses, layout editor, keymap
-  editor (pick from an ordinary keyboard or drag onto a key; a colour per
-  layer), a picture of all layers to save for printing, hold-tap, combos,
-  macros, lighting, a scratch pad for trying the keys, firmware update,
-  keyboard files and a registry browser. Includes virtual keyboards that
-  run the real firmware logic, for trying it without hardware.
-- **Registry server** (`server/`) for sharing keyboard definitions and keymaps.
+How the crates fit together, the pin safety rules and the protocol notes are
+in [docs/internals.md](docs/internals.md).
 
-## Layout
+# Tasks
 
-| Path | What it is |
-| --- | --- |
-| `crates/jmk-core` | Keymap engine. No hardware knowledge. |
-| `crates/jmk-proto` | Configuration data model and the wire protocol. |
-| `crates/jmk-device` | Scanning, wiring detection, split link, flash storage and request handling, written against small pin, flash and link traits. |
-| `crates/jmk-sim` | Simulated wiring, flash and cable; virtual keyboards. |
-| `crates/jmk-wasm` | The above compiled for the configurator. |
-| `crates/jmk-embassy` | What the ports share: USB interfaces, queues, main loop, split cable. |
-| `firmware/rp2040` | The RP2040 port (Embassy). |
-| `firmware/nrf52840` | The nRF52840 port with Bluetooth. Experimental. |
-| `app/` | POG, the configurator. See its README. |
-| `server/` | The registry server for shared keyboards, keymaps and firmware. See its README. |
-| `tools/cli` | `jmk`, a command-line client for the protocol (Linux). |
-| `tools/uf2` | Turns a firmware ELF file into a UF2 image. |
+## bugs and rough edges
+- [ ] the keymap picture cannot be zoomed, big boards get small
+- [ ] a duplex matrix can show a key that is not held with four or more keys down (true for the wiring itself, but untested on a real one)
+- [ ] setting up a split with only one half plugged in restores only that half from a keyboard file
+- [ ] the macro recorder cannot see shortcuts the system takes for itself
 
-A port for a new chip implements `jmk_device::Pins`, supplies a flash driver
-and connects the transports. Everything else is shared.
+## next
+- [ ] releases with installers for macOS, Windows and Linux
+- [ ] CI that runs the check script
+- [ ] run the nRF52840 port on a real board
+- [ ] test split, duplex and mixed wiring on real boards
+- [ ] Windows
 
-## Pin safety
+## wishlist
+- [ ] split halves over Bluetooth
+- [ ] more than one Bluetooth host, and a pairing mode
+- [ ] tap dance
+- [ ] key labels for German and other host layouts
+- [ ] a wiring preview while soldering
+- [ ] a registry for sharing keyboards and keymaps (was started, taken out until it works)
 
-The firmware starts with no pins in use and touches none until told to. It
-only ever drives a pin low, and only pins named in the hardware
-configuration or offered to the wiring detection. Pins marked as protected
-(display, LEDs, power) are refused for both. Detection uses the internal
-weak pull resistors, so two probed pins cannot drive against each other.
-The light chain's data pin is the one exception: the firmware drives it
-high and low, and only the pin the user names for it; that pin is refused
-for keys and for detection.
-Finding the cable between two halves works the same way: one half holds a
-pin low while the other half's detection watches, and the app first rules out
-pins tied to supply voltage.
+# License
 
-## Build and test
-
-```sh
-./scripts/check.sh    # all tests, firmware build, app tests
-```
-
-There is no hosted CI; this script is the gate. It needs the Rust targets
-`wasm32-unknown-unknown`, `thumbv6m-none-eabi` and `thumbv7em-none-eabihf`,
-Node.js, and libclang for the nRF52840 build. It leaves the firmware images
-in `target/` (`jmk-rp2040.uf2`, `jmk-nrf52840.uf2`). Hold BOOTSEL while
-plugging the board in and copy the file to the drive that appears. A board
-already running JMK is updated
-with `cargo run -p jmk-cli -- flash target/jmk-rp2040.uf2` or from the app.
-The image assumes 2 MB of flash and keeps the saved configuration in the
-last 32 KiB.
-
-## Protocol stability
-
-`Request::GetInfo` and `Request::Reboot` keep their wire positions for ever,
-so any configurator can identify and update any firmware. Everything else
-may still change until the first release; new requests go at the end.
-
-## License
-
-Licensed under the [Apache License 2.0](LICENSE).
+[Apache License 2.0](LICENSE).

@@ -19,6 +19,8 @@ export interface Desktop {
   flash(mcu: string, onto?: string): Promise<string>
   /** Boards attached in update mode right now. */
   drives(): Promise<BootDrive[]>
+  /** The chips the app carries a firmware file for, e.g. ['rp2040']. */
+  bundled(): Promise<string[]>
 }
 
-export const desktop: Desktop | undefined = (window as unknown as { jmkDesktop?: Desktop }).jmkDesktop
+export const desktop: Desktop | undefined = typeof window === 'undefined' ? undefined : (window as unknown as { jmkDesktop?: Desktop }).jmkDesktop

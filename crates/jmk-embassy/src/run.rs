@@ -10,6 +10,7 @@ use jmk_proto::frame::{self, Assembler};
 use jmk_proto::{DeviceMessage, Error, Request, Response};
 
 use crate::queue::ConfigQueues;
+use crate::wiring::Wiring;
 
 /// Run the keyboard forever.
 ///
@@ -19,11 +20,15 @@ use crate::queue::ConfigQueues;
 /// milliseconds; the timeout must allow for that. `reboot` gets true for the
 /// bootloader. `host` says whether a computer is listening right now; of two
 /// connected halves the one with a computer types.
+///
+/// The port's tasks for the cable and the lights must run next to this one
+/// in the same `join`, and follow `wiring` as described there.
 pub async fn run<P: Pins, F: NorFlash>(
     device: &mut Device<'_, P, F>,
     mut out: impl Output,
     mut link: impl Link,
     config: &ConfigQueues,
+    wiring: &Wiring,
     mut feed_watchdog: impl FnMut(),
     host: impl Fn() -> bool,
     reboot: fn(bool) -> !,
@@ -38,6 +43,9 @@ pub async fn run<P: Pins, F: NorFlash>(
     let mut ticker = Ticker::every(Duration::from_millis(1));
     let mut assembler = Assembler::new();
     let mut reboot_at: Option<(Instant, bool)> = None;
+    wiring.set_link(device.hardware().split.link());
+    wiring.set_light(device.lighting().pin);
+    let mut wired = (device.hardware().split.link(), device.lighting().pin);
     loop {
         feed_watchdog();
         // If a pass overruns its millisecond the ticker is ready again at
@@ -61,6 +69,20 @@ pub async fn run<P: Pins, F: NorFlash>(
                     Err(_) => Response::Error(Error::Malformed),
                 };
                 send(&DeviceMessage::Response(response));
+                let now = (device.hardware().split.link(), device.lighting().pin);
+                if now != wired {
+                    if now.0 != wired.0 {
+                        wiring.set_link(now.0);
+                    }
+                    if now.1 != wired.1 {
+                        wiring.set_light(now.1);
+                    }
+                    wired = now;
+                    // The drivers let go of their old pins during this
+                    // pause. One of them may be wired to a key now.
+                    yield_now().await;
+                    device.claim_pins();
+                }
                 if let Some(bootloader) = device.take_reboot() {
                     // Give the reply time to reach the host first.
                     reboot_at = Some((Instant::now() + Duration::from_millis(100), bootloader));

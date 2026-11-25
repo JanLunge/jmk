@@ -42,6 +42,10 @@ const _: () = assert!(MAX_BODY >= 3 + BITMAP);
 const RESEND_MS: Millis = 50;
 const ABOUT_MS: Millis = 500;
 const TIMEOUT_MS: Millis = 300;
+/// How long a half that has just started waits to hear the other one before
+/// it types on its own. Several resends long, and far shorter than anyone
+/// takes to press a key after plugging in or changing the setup.
+const SETTLE_MS: Millis = 200;
 
 const TYPE_STATE: u8 = 1;
 const TYPE_TAP: u8 = 2;
@@ -204,6 +208,10 @@ pub(crate) struct Split {
     remote: [u8; BITMAP],
     remote_positions: u8,
     peer_host: bool,
+    /// The other half has said whether a computer listens to it.
+    heard_state: bool,
+    /// When this half started exchanging messages.
+    since: Option<Millis>,
     peer_uid: [u8; 8],
     peer: Option<Side>,
     last_heard: Option<Millis>,
@@ -222,6 +230,8 @@ impl Split {
             remote: [0; BITMAP],
             remote_positions: 0,
             peer_host: false,
+            heard_state: false,
+            since: None,
             peer_uid: [0; 8],
             peer: None,
             last_heard: None,
@@ -271,8 +281,10 @@ impl Split {
     /// and the first half if that does not decide it, so that two halves
     /// plugged into the same computer never both type.
     pub fn leading(&self, now: Millis, host: bool, first: bool) -> bool {
-        if !self.connected(now) {
-            return true;
+        if !self.connected(now) || !self.heard_state {
+            // Fresh from a start the other half may be there and simply not
+            // heard yet: typing now could type its keys a second time.
+            return self.since.is_some_and(|at| now - at >= SETTLE_MS);
         }
         if host != self.peer_host {
             host
@@ -304,6 +316,7 @@ impl Split {
     /// `on_remote` gets what changed over there.
     pub fn tick(&mut self, now: Millis, link: &mut impl Link, own: Own, mut on_remote: impl FnMut(Remote)) -> Post {
         let was_connected = self.last_heard.is_some();
+        self.since.get_or_insert(now);
         let mut state = None;
         let mut taps: heapless::Vec<u8, 8> = heapless::Vec::new();
         let mut about = None;
@@ -323,12 +336,14 @@ impl Split {
         }
         if let Some((host, positions, _)) = state {
             self.peer_host = host;
+            self.heard_state = true;
             self.remote_positions = positions;
         }
         if was_connected && !self.connected(now) {
             // The other half went away: let go of everything it held.
             self.last_heard = None;
             self.peer_host = false;
+            self.heard_state = false;
             self.peer = None;
             self.apply([0; BITMAP], &mut on_remote);
         } else if self.leading(now, own.host, own.first) {
