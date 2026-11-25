@@ -6,34 +6,33 @@ Keyboard firmware you configure after flashing, and the app that does it
 
 > **Built with a lot of AI help.** I design this, decide what goes in and test
 > it on my own keyboards, but most of the code was written with AI coding
-> tools (Claude) and not typed by hand. If that is not for you, better to know
-> now.
+> tools and not typed by hand.
 
 ![The setup finding a macro pad's wiring from key presses](assets/wizard.png)
 
-**JMK** is keyboard firmware in Rust. You flash one prebuilt file, and pins,
+**JMK** is the keyboard firmware written in Rust. You flash one prebuilt file, and pins,
 wiring, keymap and everything else are set from the app afterwards and kept
-on the keyboard. No config files, no compiling.
+on the keyboard. No config files, no compiling. you can export this state but the goal is that it is so simple to setup from scratch that you arent worrying about them.
 
 **POG v2** is that app (`app/`). It is the follow-up to
 [POG](https://github.com/JanLunge/pog), which did the same job for KMK.
 
 The idea: flash a hand-wired board, press every key once so the app can work
-out how it is wired, and start typing.
+out how it is wired, and start typing. built for keyboard builders and designers so they can iterate without thinking about the firmware or KLE
 
 # Status
 
-Early alpha. No releases or installers yet, and the protocol and the saved
-format can still change. I use it on macOS and Ubuntu; Windows is untried.
+Early alpha. The protocol and the saved
+format can still change. I use it on macOS and Ubuntu. I dont test on windows myself unless absolutely needed. though we have community menbers usign it succesfully on windows
 
 What has actually run on hardware:
 
 | | |
 | --- | --- |
 | RP2040 (Pi Pico and friends) | Runs on my own boards. This is the one to use. |
-| nRF52840 (nice!nano and friends) | Compiles. Has never run on a board. |
-| Split keyboards over a cable | Experimental. Mostly tried on the virtual keyboards. |
-| Duplex matrix, mixed wiring | New. Only tried on the virtual keyboards. |
+| nRF52840 (nice!nano and friends) | Compiles. will wireup my first bluetooth board soon with it (wireless is not supported yet). |
+| Split keyboards over a cable | Works both with 2 pin and 1pin serial connections |
+| widirng types | Direct pin, matrix, duplex matrix and rotary encoders work |
 | RGB lights (WS2812) | RP2040 only. |
 
 # What it does

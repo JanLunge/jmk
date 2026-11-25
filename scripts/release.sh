@@ -69,7 +69,12 @@ fi
 npm ci --no-audit --no-fund --silent
 npx electron-builder --mac --publish never
 if [[ -n ${APPLE_API_KEY:-}${APPLE_ID:-}${APPLE_KEYCHAIN_PROFILE:-} ]]; then
-  for image in release/*.dmg; do xcrun stapler validate -q "$image"; done
+  # Apple notarises the app itself; the disk image and the zip only carry it.
+  for built in release/mac*/POG.app; do
+    xcrun stapler validate -q "$built"
+    spctl --assess --type execute "$built"
+  done
+  touch release/NOTARISED
 else
   echo "No notarising secrets on this Mac: the app is signed but macOS will warn about it."
 fi
@@ -81,13 +86,14 @@ build_mac() {
     cp "$out/stage.tgz" "$dir/"
     bash -c "$mac_steps" mac "$dir"
     cp "$dir"/release/*.{dmg,zip,blockmap,yml} "$out/"
+    [[ -f $dir/release/NOTARISED ]] && touch "$out/NOTARISED"
     rm -rf "$dir"
   else
     local dir=pog-build/$tag
     ssh "$MAC_HOST" "rm -rf $dir && mkdir -p $dir"
     scp -q "$out/stage.tgz" "$MAC_HOST:$dir/"
     ssh "$MAC_HOST" "zsh -lc 'bash -s $dir'" <<<"$mac_steps"
-    ssh "$MAC_HOST" "cd $dir/release && tar -cf - *.dmg *.zip *.blockmap *.yml" | tar -xf - -C "$out"
+    ssh "$MAC_HOST" "cd $dir/release && tar -cf - *.dmg *.zip *.blockmap *.yml \$(ls NOTARISED 2>/dev/null)" | tar -xf - -C "$out"
     ssh "$MAC_HOST" "rm -rf $dir"
   fi
 }
@@ -133,11 +139,11 @@ rm "$out/stage.tgz" "$out"/builder-*.yml 2>/dev/null || true
 for feed in latest-mac.yml latest.yml latest-linux.yml; do
   [[ -f $out/$feed ]] || { echo "Missing $feed" >&2; exit 1; }
 done
-for image in "$out"/*.dmg; do
-  spctl --assess --type open --context context:primary-signature "$image" && continue
-  echo "$image would be refused by macOS: it is not notarised." >&2
+if [[ ! -f $out/NOTARISED ]]; then
+  echo "The Mac app is not notarised: macOS would refuse it." >&2
   ((publish)) && exit 1
-done
+fi
+rm -f "$out/NOTARISED"
 ls -lh "$out" | grep -v logs
 
 if ((!publish)); then
