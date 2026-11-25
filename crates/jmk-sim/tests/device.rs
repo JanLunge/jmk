@@ -618,6 +618,16 @@ fn split_pair() -> (Rig, Rig) {
     (left, right)
 }
 
+#[test]
+fn a_cable_with_one_data_wire_is_a_link_of_its_own() {
+    let mut rig = Rig::new(Wiring::direct(&[2, 3, 4]));
+    let link = LinkConfig::Wire { pin: 5 };
+    rig.ok(Request::SetHardware(HardwareConfig { split: SplitConfig::Half { link, offset: 0 }, ..direct(&[2, 3, 4]) }));
+    // The wire's pin is taken like any other: no key can be on it.
+    let clash = HardwareConfig { split: SplitConfig::Half { link, offset: 0 }, ..direct(&[2, 3, 5]) };
+    assert!(matches!(rig.kb.request(Request::SetHardware(clash)), Response::Error(_)));
+}
+
 fn run_both(left: &mut Rig, right: &mut Rig, ms: u64) {
     for _ in 0..ms {
         right.run(1);

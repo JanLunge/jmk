@@ -6,4 +6,10 @@ contextBridge.exposeInMainWorld('jmkDesktop', {
   flash: (mcu, onto) => ipcRenderer.invoke('jmk:flash', mcu, onto),
   drives: () => ipcRenderer.invoke('jmk:drives'),
   bundled: () => ipcRenderer.invoke('jmk:bundled'),
+  update: {
+    state: () => ipcRenderer.invoke('jmk:update-state'),
+    check: () => ipcRenderer.invoke('jmk:update-check'),
+    install: () => ipcRenderer.invoke('jmk:update-install'),
+    watch: (listener) => ipcRenderer.on('jmk:update', (_event, state) => listener(state)),
+  },
 })

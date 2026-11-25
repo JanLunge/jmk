@@ -36,6 +36,13 @@ Finding the cable between two halves works the same way: one half holds a
 pin low while the other half's detection watches, and the app first rules out
 pins tied to supply voltage.
 
+A cable usually has a data wire for each direction, on pins a UART can use.
+One with a single data wire works too, on the RP2040 and on any pin: the
+halves take turns on it (`LinkConfig::Wire`, `wire` in
+`firmware/rp2040/src/link.rs`). Nobody drives that wire high, so two halves
+talking at once garble a message but cannot harm the pins; each waits for
+the wire to be quiet for a random while before it talks.
+
 ## Wiring the firmware can read
 
 All of this is set at run time; nothing is compiled in.

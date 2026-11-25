@@ -94,26 +94,35 @@ export function canLink(mcu: Mcu, tx: Pin, rx: Pin): boolean {
   return RP_PORTS.some((port) => port.tx.includes(tx) && port.rx.includes(rx))
 }
 
-export type LinkChoice = { ok: true; a: LinkPins; b: LinkPins } | { ok: false; problem: string }
+/** With `shared` both directions run over one wire: `tx` and `rx` are the same pin. */
+export type LinkChoice = { ok: true; a: LinkPins; b: LinkPins; shared?: true } | { ok: false; problem: string }
 
 /**
  * Pick which wire carries which direction. `name` turns a pin into the
- * label printed on the board, for the messages.
+ * label printed on the board, for the messages. `oneWire` says that both
+ * halves can take turns on a single wire.
  */
 export function chooseLink(
   wires: CableWire[],
   mcuA: Mcu,
   mcuB: Mcu,
   name: (half: 'a' | 'b', pin: Pin) => string = (_, pin) => `pin ${pin}`,
+  oneWire = false,
 ): LinkChoice {
+  const share = (wire: CableWire): LinkChoice => ({ ok: true, a: { tx: wire.a, rx: wire.a }, b: { tx: wire.b, rx: wire.b }, shared: true })
   if (wires.length === 0) {
     return { ok: false, problem: 'No wire was found between the two halves. Check that the cable is plugged in at both ends.' }
   }
   if (wires.length === 1) {
     const [wire] = wires
+    if (oneWire) return share(wire)
+    const found = `Only one data wire was found (${name('a', wire.a)} to ${name('b', wire.b)}).`
     return {
       ok: false,
-      problem: `Only one data wire was found (${name('a', wire.a)} to ${name('b', wire.b)}). JMK needs two: one for each direction.`,
+      problem:
+        mcuA === 'Rp2040' && mcuB === 'Rp2040'
+          ? `${found} Newer firmware can use a single wire: update the firmware of both halves, then try again.`
+          : `${found} On these chips JMK needs two: one for each direction.`,
     }
   }
   for (const out of wires) {
@@ -125,6 +134,8 @@ export function chooseLink(
       }
     }
   }
+  // No pair of them suits a serial port, but one wire alone can do both directions.
+  if (oneWire) return share(wires[0])
   const list = wires.map((wire) => `${name('a', wire.a)} to ${name('b', wire.b)}`).join(', ')
   return {
     ok: false,

@@ -163,7 +163,13 @@ describe('the cable between two halves', () => {
     const none = await halves([])
     expect(await during(findWires(none.left, none.right, pins, pins, wait))).toEqual([])
     expect(chooseLink([], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('No wire') })
-    expect(chooseLink([{ a: 0, b: 1 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('one data wire') })
+    expect(chooseLink([{ a: 0, b: 1 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('update the firmware') })
+    expect(chooseLink([{ a: 0, b: 1 }], 'Nrf52840', 'Nrf52840')).toMatchObject({ ok: false, problem: expect.stringContaining('needs two') })
+    // Firmware that can take turns on a wire needs only the one, on any pin.
+    expect(chooseLink([{ a: 3, b: 7 }], 'Rp2040', 'Rp2040', undefined, true)).toEqual({ ok: true, a: { tx: 3, rx: 3 }, b: { tx: 7, rx: 7 }, shared: true })
+    expect(chooseLink([{ a: 0, b: 1 }, { a: 12, b: 0 }], 'Rp2040', 'Rp2040', undefined, true)).toMatchObject({ ok: true, shared: true, a: { tx: 0, rx: 0 } })
+    // Two wires that suit a serial port are still used as two.
+    expect(chooseLink([{ a: 0, b: 1 }, { a: 1, b: 0 }], 'Rp2040', 'Rp2040', undefined, true)).toEqual({ ok: true, a: { tx: 0, rx: 1 }, b: { tx: 0, rx: 1 } })
     // Both wires on sending pins of this half: no serial port fits.
     expect(chooseLink([{ a: 0, b: 1 }, { a: 12, b: 0 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('cannot run a serial connection') })
     // The other chip takes any pins.

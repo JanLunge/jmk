@@ -152,7 +152,7 @@ impl Pins for SimPins {
     }
 
     fn supports_link(&self, link: &LinkConfig) -> bool {
-        matches!(link, LinkConfig::Uart { .. })
+        matches!(link, LinkConfig::Uart { .. } | LinkConfig::Wire { .. })
     }
 
     fn supports_lights(&self, _pin: Pin) -> bool {

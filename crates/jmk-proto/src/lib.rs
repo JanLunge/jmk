@@ -11,12 +11,12 @@ use jmk_core::{Action, Combo, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours.
-pub const PROTOCOL_VERSION: u16 = 9;
+pub const PROTOCOL_VERSION: u16 = 10;
 
 /// What runs on the keyboard, as the app compares it with the firmware it
 /// carries to offer an update. Count it up with every change to the firmware
 /// that a keyboard should get, also one that leaves the protocol alone.
-pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 2, 0);
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 3, 0);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -126,6 +126,10 @@ pub enum LinkConfig {
     Uart { tx: Pin, rx: Pin },
     /// Bluetooth between the halves (chips with a radio only).
     Ble,
+    /// Serial over a single wire that joins the same kind of pin on both
+    /// halves. The halves take turns: nobody holds the wire high, so two
+    /// talking at once cannot harm each other.
+    Wire { pin: Pin },
 }
 
 /// Whether this board is one half of a split keyboard.
@@ -196,6 +200,7 @@ impl HardwareConfig {
     pub fn used_pins<'a>(&'a self, more: &'a [MatrixConfig]) -> impl Iterator<Item = Pin> + 'a {
         let link = match self.split.link() {
             Some(LinkConfig::Uart { tx, rx }) => [Some(tx), Some(rx)],
+            Some(LinkConfig::Wire { pin }) => [Some(pin), None],
             _ => [None, None],
         };
         self.wiring(more)

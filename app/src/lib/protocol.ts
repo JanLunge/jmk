@@ -48,7 +48,8 @@ export interface EncoderConfig {
   steps_per_detent: number
 }
 
-export type LinkConfig = { Uart: { tx: Pin; rx: Pin } } | 'Ble'
+/** `Wire` is a cable with one data wire, on which the halves take turns. */
+export type LinkConfig = { Uart: { tx: Pin; rx: Pin } } | 'Ble' | { Wire: { pin: Pin } }
 /** `offset` is where this half's positions start in the keymap: 0 for the first half. */
 export type SplitConfig = 'None' | { Half: { link: LinkConfig; offset: number } }
 
