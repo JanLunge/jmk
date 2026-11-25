@@ -94,7 +94,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "build/icon-full.png"
     },
     "nsis": {
       "oneClick": true,
@@ -109,7 +110,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "build/icon-full.png"
     }
   }
 }
