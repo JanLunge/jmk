@@ -45,6 +45,8 @@ enum Command {
     Advance { ids: Vec<u32>, ms: u64 },
     /// Finish a simulated firmware update: leave the bootloader.
     Flash { id: u32 },
+    /// The firmware version this app was built with, and so carries.
+    Version,
 }
 
 #[derive(Default)]
@@ -146,6 +148,10 @@ fn execute(state: &mut State, command: Command) -> Result<Value, String> {
                 );
             }
             Ok(Value::Object(out))
+        }
+        Command::Version => {
+            let (major, minor, patch) = jmk_proto::FIRMWARE_VERSION;
+            Ok(json!({ "firmware": [major, minor, patch] }))
         }
         Command::Flash { id } => {
             keyboard(state, id)?.reboot();

@@ -11,7 +11,12 @@ use jmk_core::{Action, Combo, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours.
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 9;
+
+/// What runs on the keyboard, as the app compares it with the firmware it
+/// carries to offer an update. Count it up with every change to the firmware
+/// that a keyboard should get, also one that leaves the protocol alone.
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 2, 0);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -20,6 +25,8 @@ pub const MAX_HOLD_TAP_PROFILES: usize = 4;
 pub const MAX_MATRIX_ROWS: usize = 16;
 pub const MAX_MATRIX_COLS: usize = 24;
 pub const MAX_DIRECT_PINS: usize = 64;
+/// Groups of switches a board can have besides its first one.
+pub const MAX_MORE_WIRING: usize = 3;
 pub const MAX_RESERVED_PINS: usize = 32;
 pub const MAX_PROBE_PINS: usize = 48;
 pub const MAX_CONTACTS: usize = 16;
@@ -28,6 +35,13 @@ pub const MAX_MACROS: usize = 16;
 /// Steps shared by all macros.
 pub const MAX_MACRO_STEPS: usize = 512;
 pub const MACRO_STEPS_PER_CHUNK: usize = 32;
+/// Bytes of UTF-8 in the name of a macro.
+pub const MAX_MACRO_NAME: usize = 16;
+/// Keys in one row of letters.
+pub const LETTER_ROW_KEYS: usize = 10;
+/// The key positions of the top, home and bottom row of letters, left to
+/// right. Empty rows when the user never said where the letters are.
+pub type LetterRows = [Vec<u8, LETTER_ROW_KEYS>; 3];
 pub const LAYOUT_KEYS_PER_CHUNK: usize = 16;
 pub const MAX_NAME: usize = 32;
 /// Lights on one chain.
@@ -47,6 +61,9 @@ pub enum DiodeDirection {
     Col2Row,
     /// Columns are driven low one at a time, rows are read.
     Row2Col,
+    /// Two switches per crossing, their diodes pointing opposite ways (a
+    /// "duplex" matrix). Scanned once in each direction.
+    Both,
 }
 
 /// How the switches are wired. Key positions are numbered in the order given
@@ -61,7 +78,9 @@ pub enum MatrixConfig {
         /// Switches connect the pin to supply instead of ground.
         active_high: bool,
     },
-    /// Row/column matrix. Position = row * cols.len() + col.
+    /// Row/column matrix. Position = row * cols.len() + col. With diodes
+    /// both ways the switches found by driving the rows come first, then
+    /// as many again for those found by driving the columns.
     Matrix {
         rows: Vec<Pin, MAX_MATRIX_ROWS>,
         cols: Vec<Pin, MAX_MATRIX_COLS>,
@@ -74,7 +93,9 @@ impl MatrixConfig {
         match self {
             MatrixConfig::None => 0,
             MatrixConfig::Direct { pins, .. } => pins.len(),
-            MatrixConfig::Matrix { rows, cols, .. } => rows.len() * cols.len(),
+            MatrixConfig::Matrix { rows, cols, diodes } => {
+                rows.len() * cols.len() * if *diodes == DiodeDirection::Both { 2 } else { 1 }
+            }
         }
     }
 
@@ -148,20 +169,37 @@ pub struct HardwareConfig {
     pub split: SplitConfig,
 }
 
+/// Further groups of switches on the same board, for one that mixes wiring
+/// styles: a matrix with a few keys on pins of their own, say. Their
+/// positions follow those of [`HardwareConfig::matrix`], group after group.
+/// Kept apart from [`HardwareConfig`] so that older firmware and saves still
+/// read.
+pub type MoreWiring = Vec<MatrixConfig, MAX_MORE_WIRING>;
+
 impl HardwareConfig {
+    /// Every group of switches on the board, in the order of their positions.
+    pub fn wiring<'a>(&'a self, more: &'a [MatrixConfig]) -> impl Iterator<Item = &'a MatrixConfig> + Clone {
+        core::iter::once(&self.matrix).chain(more)
+    }
+
+    /// Switches on the board, over all groups.
+    pub fn switch_count(&self, more: &[MatrixConfig]) -> usize {
+        self.wiring(more).map(MatrixConfig::key_count).sum()
+    }
+
     /// Positions this board produces itself: switches, then two per encoder.
-    pub fn local_positions(&self) -> usize {
-        self.matrix.key_count() + 2 * self.encoders.len()
+    pub fn local_positions(&self, more: &[MatrixConfig]) -> usize {
+        self.switch_count(more) + 2 * self.encoders.len()
     }
 
     /// Every pin the configuration puts to use.
-    pub fn used_pins(&self) -> impl Iterator<Item = Pin> + '_ {
+    pub fn used_pins<'a>(&'a self, more: &'a [MatrixConfig]) -> impl Iterator<Item = Pin> + 'a {
         let link = match self.split.link() {
             Some(LinkConfig::Uart { tx, rx }) => [Some(tx), Some(rx)],
             _ => [None, None],
         };
-        self.matrix
-            .pins()
+        self.wiring(more)
+            .flat_map(MatrixConfig::pins)
             .chain(self.encoders.iter().flat_map(|e| [e.a, e.b]))
             .chain(link.into_iter().flatten())
     }
@@ -404,6 +442,13 @@ pub enum Request {
     /// One colour number per layer, for whoever draws the keymap. The
     /// keyboard only stores them; 0 means none was chosen.
     SetLayerColors(Vec<u8, MAX_LAYERS>),
+    GetMacroName { index: u8 },
+    /// What the user calls a macro. The keyboard only stores it.
+    SetMacroName { index: u8, name: String<MAX_MACRO_NAME> },
+    GetLetterRows,
+    /// Where the letters sit. The keyboard only stores it, so the configurator
+    /// can place another arrangement of letters later.
+    SetLetterRows(LetterRows),
     /// Settle a [`SplitSync::Conflict`]: keep this half's keymap on both
     /// halves, or the other half's.
     ResolveSplit { keep_this: bool },
@@ -411,6 +456,10 @@ pub enum Request {
     /// digest, at this revision: the two agree. Refused with `OutOfRange` if
     /// this half holds another keymap by now.
     SplitAgreed { digest: u32, revision: u32 },
+    GetMoreWiring,
+    /// The groups of switches after the first. Checked together with the
+    /// rest of the hardware configuration: no pin may appear twice.
+    SetMoreWiring(MoreWiring),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -432,6 +481,9 @@ pub enum Response {
     SplitStatus(SplitStatus),
     Lighting(LightingConfig),
     LayerColors(Vec<u8, MAX_LAYERS>),
+    MacroName(String<MAX_MACRO_NAME>),
+    LetterRows(LetterRows),
+    MoreWiring(MoreWiring),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

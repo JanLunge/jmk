@@ -84,6 +84,25 @@ export const DEMOS: Demo[] = [
     })()],
   },
   {
+    id: 'duplex',
+    name: 'Duplex pad',
+    blurb: 'Twelve keys on five pins in a duplex matrix, two per crossing, plus three keys on pins of their own.',
+    halves: [(() => {
+      const wires: Wire[] = []
+      const keys: KeyGeometry[] = []
+      ;[2, 3].forEach((row, r) =>
+        [4, 5, 6].forEach((col, c) => {
+          // The two switches of a crossing sit side by side, their diodes pointing opposite ways.
+          wires.push({ Diode: { anode: col, cathode: row } }, { Diode: { anode: row, cathode: col } })
+          keys.push(unit(2 * c, r), unit(2 * c + 1, r))
+        }),
+      )
+      wires.push({ Ground: 10 }, { Ground: 11 }, { Supply: 12 })
+      keys.push(unit(1.5, 2.25), unit(2.5, 2.25), unit(3.5, 2.25))
+      return { label: 'Duplex pad', wiring: { switches: wires, encoders: [] }, keys }
+    })()],
+  },
+  {
     id: 'split',
     name: 'Split keyboard',
     blurb: 'Two halves of seventeen keys joined by a cable. Each half has its own controller. Split support is experimental.',

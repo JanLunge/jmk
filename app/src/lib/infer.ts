@@ -49,6 +49,8 @@ export function sameKey(a: KeySignature, b: KeySignature): boolean {
 
 export interface Wiring {
   matrix: MatrixConfig
+  /** Further groups of switches, for a board that mixes wiring styles. */
+  more: MatrixConfig[]
   /** For each pressed key, in press order, its position in the keymap. */
   positions: number[]
   /** Things the user should know, in plain words. */
@@ -57,79 +59,96 @@ export interface Wiring {
 
 export type InferResult = { ok: true; wiring: Wiring } | { ok: false; problem: string }
 
-export function inferWiring(keys: KeySignature[]): InferResult {
-  if (keys.length === 0) return { ok: false, problem: 'No keys were pressed yet.' }
-  const direct = keys.filter((key) => key.kind !== 'link')
-  const links = keys.filter((key) => key.kind === 'link')
-  if (direct.length && links.length) {
-    return {
-      ok: false,
-      problem:
-        'Some keys go straight to ground and others are in a matrix. JMK needs one wiring style per board for now.',
-    }
-  }
-  if (direct.length) {
-    const activeHigh = direct[0].kind === 'supply'
-    if (direct.some((key) => (key.kind === 'supply') !== activeHigh)) {
-      return { ok: false, problem: 'Some keys connect to ground and others to supply voltage. They must all be the same.' }
-    }
-    return {
-      ok: true,
-      wiring: {
-        matrix: { Direct: { pins: direct.map((key) => (key as { pin: Pin }).pin), active_high: activeHigh } },
-        positions: direct.map((_, i) => i),
-        notes: [
-          activeHigh
-            ? 'Each key connects its own pin to supply voltage.'
-            : 'Each key connects its own pin to ground. Simple and reliable; it uses one pin per key.',
-        ],
-      },
-    }
-  }
-  return inferMatrix(links)
+/** One group of switches and, for each of its keys in press order, the position within the group. */
+interface Part {
+  config: MatrixConfig
+  /** Index into the pressed keys, and where that key sits in this group. */
+  keys: { key: number; local: number }[]
+  size: number
+  notes: string[]
 }
 
-function inferMatrix(keys: Extract<KeySignature, { kind: 'link' }>[]): InferResult {
+/** The most switch positions one board can have (the firmware's limit). */
+const MAX_POSITIONS = 128
+
+/**
+ * A board may mix styles: a matrix, keys that each connect a pin of their
+ * own to ground, and keys that connect one to supply voltage. Each style is
+ * a group, and the groups take their positions one after the other, the
+ * matrix first.
+ */
+export function inferWiring(keys: KeySignature[]): InferResult {
+  if (keys.length === 0) return { ok: false, problem: 'No keys were pressed yet.' }
+  const indexed = keys.map((key, index) => ({ key, index }))
+  const parts: Part[] = []
+
+  const links = indexed.filter(({ key }) => key.kind === 'link')
+  if (links.length) {
+    const matrix = inferMatrix(links.map(({ key }) => key as Extract<KeySignature, { kind: 'link' }>))
+    if ('problem' in matrix) return { ok: false, problem: matrix.problem }
+    parts.push({ ...matrix, keys: links.map(({ index }, i) => ({ key: index, local: matrix.positions[i] })) })
+  }
+  for (const kind of ['ground', 'supply'] as const) {
+    const group = indexed.filter(({ key }) => key.kind === kind)
+    if (!group.length) continue
+    const activeHigh = kind === 'supply'
+    parts.push({
+      config: { Direct: { pins: group.map(({ key }) => (key as { pin: Pin }).pin), active_high: activeHigh } },
+      keys: group.map(({ index }, local) => ({ key: index, local })),
+      size: group.length,
+      notes: [
+        activeHigh
+          ? `${count(group.length)} its own pin to supply voltage.`
+          : `${count(group.length)} its own pin to ground. Simple and reliable; it uses one pin per key.`,
+      ],
+    })
+  }
+
+  const positions: number[] = Array(keys.length).fill(0)
+  let base = 0
+  for (const part of parts) {
+    for (const { key, local } of part.keys) positions[key] = base + local
+    base += part.size
+  }
+  if (base > MAX_POSITIONS) return { ok: false, problem: `This wiring has room for ${base} keys, but a board can have ${MAX_POSITIONS}.` }
+  const notes = parts.flatMap((part) => part.notes)
+  if (parts.length > 1) notes.push('The keyboard mixes these wiring styles; each group is read in its own way.')
+  return { ok: true, wiring: { matrix: parts[0].config, more: parts.slice(1).map((part) => part.config), positions, notes } }
+}
+
+const count = (keys: number) => (keys === 1 ? 'One key connects' : `${keys} keys each connect`)
+
+function inferMatrix(
+  keys: Extract<KeySignature, { kind: 'link' }>[],
+): { config: MatrixConfig; positions: number[]; size: number; notes: string[] } | { problem: string } {
   const withDiodes = keys.filter((key) => key.diode)
   if (withDiodes.length && withDiodes.length !== keys.length) {
-    return { ok: false, problem: 'Some keys have a diode and others do not. Check the diodes on the keys without one.' }
+    return { problem: 'Some keys have a diode and others do not. Check the diodes on the keys without one.' }
   }
-  // Split the pins into two groups so that every key joins one pin of each.
+  // Split the pins into two groups so that every key joins one pin of each:
+  // give neighbouring pins opposite sides until every key is placed or two
+  // pins clash. A part of the matrix not yet joined to the rest starts with
+  // the pin that was pulled low on side 0, which is where every such pin
+  // ends up when all diodes point the same way.
   const side = new Map<Pin, 0 | 1>()
-  if (withDiodes.length) {
-    for (const key of keys) {
-      if (side.get(key.driven) === 1 || side.get(key.sensed) === 0) {
-        return { ok: false, problem: 'The diodes do not all point the same way. One of them is probably soldered backwards.' }
+  const pending = new Set(keys)
+  while (pending.size) {
+    let progressed = false
+    for (const key of pending) {
+      const a = side.get(key.driven)
+      const b = side.get(key.sensed)
+      if (a === undefined && b === undefined) continue
+      if (a !== undefined && b !== undefined && a === b) {
+        return { problem: 'The wiring does not form rows and columns. Check for a wire joining two rows or two columns.' }
       }
-      side.set(key.driven, 0)
-      side.set(key.sensed, 1)
+      if (a === undefined) side.set(key.driven, (1 - b!) as 0 | 1)
+      if (b === undefined) side.set(key.sensed, (1 - a!) as 0 | 1)
+      pending.delete(key)
+      progressed = true
     }
-  } else {
-    // Without diodes the direction is unknown: give neighbouring pins
-    // opposite sides until every key is placed or two pins clash.
-    const pending = new Set(keys)
-    while (pending.size) {
-      let progressed = false
-      for (const key of pending) {
-        const a = side.get(key.driven)
-        const b = side.get(key.sensed)
-        if (a === undefined && b === undefined) continue
-        if (a !== undefined && b !== undefined && a === b) {
-          return {
-            ok: false,
-            problem: 'The wiring does not form rows and columns. Check for a wire joining two rows or two columns.',
-          }
-        }
-        if (a === undefined) side.set(key.driven, (1 - b!) as 0 | 1)
-        if (b === undefined) side.set(key.sensed, (1 - a!) as 0 | 1)
-        pending.delete(key)
-        progressed = true
-      }
-      if (!progressed) {
-        // A part of the matrix not yet connected to the rest: start it off.
-        const [key] = pending
-        side.set(key.driven, 0)
-      }
+    if (!progressed) {
+      const [key] = pending
+      side.set(key.driven, 0)
     }
   }
   const group = (which: 0 | 1) => [...side].filter(([, s]) => s === which).map(([pin]) => pin)
@@ -139,16 +158,32 @@ function inferMatrix(keys: Extract<KeySignature, { kind: 'link' }>[]): InferResu
   const drivenAreRows = drivenPins.length <= sensedPins.length
   const rows = drivenAreRows ? drivenPins : sensedPins
   const cols = drivenAreRows ? sensedPins : drivenPins
+  // With diodes, a key whose low pin is on side 1 conducts the other way.
+  const backwards = (key: (typeof keys)[number]) => key.diode && side.get(key.driven) === 1
+  const duplex = keys.some(backwards)
   // The firmware drives rows for Col2Row and columns for Row2Col.
-  const diodes: DiodeDirection = drivenAreRows ? 'Col2Row' : 'Row2Col'
+  const diodes: DiodeDirection = duplex ? 'Both' : drivenAreRows ? 'Col2Row' : 'Row2Col'
+  const crossings = rows.length * cols.length
   const positions = keys.map((key) => {
     const pinOnSide = (which: 0 | 1) => (side.get(key.driven) === which ? key.driven : key.sensed)
     const row = rows.indexOf(pinOnSide(drivenAreRows ? 0 : 1))
     const col = cols.indexOf(pinOnSide(drivenAreRows ? 1 : 0))
-    return row * cols.length + col
+    // In a duplex matrix the keys found by pulling a row low come first.
+    const second = duplex && !rows.includes(key.driven)
+    return (second ? crossings : 0) + row * cols.length + col
   })
+  if (new Set(positions).size !== positions.length) {
+    return { problem: 'Two keys join the same two pins the same way round. Check for keys wired in parallel.' }
+  }
   const notes = [`A matrix of ${rows.length} row${rows.length === 1 ? '' : 's'} and ${cols.length} column${cols.length === 1 ? '' : 's'}.`]
-  if (withDiodes.length) notes.push('Every key has a diode, so any combination of keys can be held at once.')
+  if (duplex) {
+    const few = keys.filter((key) => rows.includes(key.driven) !== drivenAreRows).length
+    notes.push(
+      `The diodes point both ways (${few} of ${keys.length} keys the other way round), so the matrix is read in both directions. ` +
+        'That is right for a duplex matrix with two keys per crossing; if yours is not one, those diodes are soldered backwards. ' +
+        'Holding four or more keys at once can then make another appear pressed.',
+    )
+  } else if (withDiodes.length) notes.push('Every key has a diode, so any combination of keys can be held at once.')
   else notes.push('The keys have no diodes. Holding three keys that form a corner can make a fourth appear pressed.')
-  return { ok: true, wiring: { matrix: { Matrix: { rows, cols, diodes } }, positions, notes } }
+  return { config: { Matrix: { rows, cols, diodes } }, positions, size: crossings * (duplex ? 2 : 1), notes }
 }

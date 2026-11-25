@@ -271,6 +271,6 @@ fn boot(pins: &SimPins, flash: &MemFlash, uid: [u8; 8]) -> Device<'static, SimPi
     // it per boot, which is a few kilobytes.
     let buf = Box::leak(Box::new([0u8; 16 * 1024]));
     let config = Box::leak(Box::new(Config::new()));
-    let board = Board { mcu: Mcu::Simulated, firmware: (0, 1, 0), uid };
+    let board = Board { mcu: Mcu::Simulated, firmware: jmk_proto::FIRMWARE_VERSION, uid };
     Device::new(board, pins.clone(), Storage::new(flash.clone(), 0, buf), config)
 }

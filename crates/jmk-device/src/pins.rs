@@ -30,6 +30,10 @@ pub trait Pins {
     /// chain's own colour order. The port sets the chain up at start from
     /// the saved configuration and ignores this if there is none.
     fn show_lights(&mut self, _colors: &[[u8; 3]]) {}
+    /// The pin for the lights or the pins for the cable changed, and the
+    /// port's drivers have let go of the old ones: make them usable for
+    /// wiring again. They are set up as inputs right after.
+    fn reclaim(&mut self) {}
     /// Wait for levels to settle after a pin changed (a few microseconds).
     fn settle(&mut self);
 }

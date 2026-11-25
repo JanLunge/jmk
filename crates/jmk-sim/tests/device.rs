@@ -162,6 +162,128 @@ fn bounce_is_ignored() {
     assert_eq!(rig.out(), ["00:04"]);
 }
 
+/// One held key with a 5 ms debounce time.
+fn one_key() -> Rig {
+    let mut rig = Rig::new(Wiring::direct(&[7]));
+    rig.ok(Request::SetHardware(direct(&[7])));
+    rig.set_keys(0, &[kc::A]);
+    rig
+}
+
+#[test]
+fn a_contact_that_lets_go_for_a_moment_does_not_type_twice() {
+    let mut rig = one_key();
+    rig.kb.set_key(0, true);
+    rig.run(20);
+    assert_eq!(rig.out(), ["00:04"]);
+    // Open for less than the debounce time, well after the press settled.
+    rig.kb.set_key(0, false);
+    rig.run(4);
+    rig.kb.set_key(0, true);
+    rig.run(20);
+    assert!(rig.out().is_empty());
+}
+
+#[test]
+fn a_release_that_bounces_for_longer_than_the_debounce_time_is_one_release() {
+    let mut rig = one_key();
+    rig.kb.set_key(0, true);
+    rig.run(20);
+    assert_eq!(rig.out(), ["00:04"]);
+    // Letting go: the contact flickers for 12 ms before it stays open.
+    for closed in [false, true, false, false, true, false, false, false, true, false, false, true] {
+        rig.kb.set_key(0, closed);
+        rig.run(1);
+    }
+    rig.kb.set_key(0, false);
+    assert!(rig.out().is_empty());
+    rig.run(20);
+    assert_eq!(rig.out(), ["00:"]);
+}
+
+#[test]
+fn a_release_counts_after_the_debounce_time_and_a_press_at_once() {
+    let mut rig = one_key();
+    rig.kb.set_key(0, true);
+    rig.run(1);
+    assert_eq!(rig.out(), ["00:04"]);
+    rig.run(20);
+    rig.kb.set_key(0, false);
+    rig.run(5);
+    assert!(rig.out().is_empty());
+    rig.run(2);
+    assert_eq!(rig.out(), ["00:"]);
+    rig.kb.set_key(0, true);
+    rig.run(1);
+    assert_eq!(rig.out(), ["00:04"]);
+}
+
+/// A 2x2 duplex matrix (rows 2 and 3, columns 4 and 5): four switches with
+/// their diodes from column to row, then four with them from row to column.
+fn duplex_wires() -> Vec<Wire> {
+    let crossings = [(2, 4), (2, 5), (3, 4), (3, 5)];
+    let first = crossings.iter().map(|(row, col)| Wire::Diode { anode: *col, cathode: *row });
+    let second = crossings.iter().map(|(row, col)| Wire::Diode { anode: *row, cathode: *col });
+    first.chain(second).collect()
+}
+
+#[test]
+fn a_duplex_matrix_has_two_keys_per_crossing() {
+    let mut rig = Rig::wires(&duplex_wires());
+    rig.ok(Request::SetHardware(matrix_2x2(DiodeDirection::Both)));
+    rig.set_keys(0, &[kc::A, kc::B, kc::C, kc::D, kc::E, kc::F, 0x0a, 0x0b]);
+    // Both switches of the first crossing, then both of the last.
+    for (key, report) in [(0, "00:04"), (4, "00:04,08"), (3, "00:04,08,07"), (7, "00:04,08,07,0b")] {
+        rig.kb.set_key(key, true);
+        rig.run(3);
+        assert_eq!(rig.out(), [report]);
+    }
+    // Scanned one way only, half of the switches are not seen.
+    rig.ok(Request::SetHardware(matrix_2x2(DiodeDirection::Col2Row)));
+    rig.out();
+    rig.run(3);
+    assert_eq!(rig.out(), ["00:04", "00:04,07"]);
+}
+
+#[test]
+fn one_board_mixes_a_matrix_with_keys_on_their_own_pins() {
+    let mut wires = duplex_wires();
+    wires.extend([Wire::Ground(7), Wire::Ground(8), Wire::Supply(9)]);
+    let mut rig = Rig::wires(&wires);
+    rig.ok(Request::SetHardware(matrix_2x2(DiodeDirection::Both)));
+    let to_ground = MatrixConfig::Direct { pins: pins(&[7, 8]), active_high: false };
+    let to_supply = MatrixConfig::Direct { pins: pins(&[9]), active_high: true };
+    // A pin cannot be in two groups.
+    let clash = MatrixConfig::Direct { pins: pins(&[4]), active_high: false };
+    rig.refused(Request::SetMoreWiring([clash].into_iter().collect()), Error::DuplicatePin(4));
+    rig.ok(Request::SetMoreWiring([to_ground.clone(), to_supply.clone()].into_iter().collect()));
+    for layer_pos in 0..11u16 {
+        rig.ok(Request::SetActions { layer: 0, pos: layer_pos, actions: [Action::key(kc::A + layer_pos as u8)].into_iter().collect() });
+    }
+    // The groups take their positions one after the other: 8 in the matrix, 2 to ground, 1 to supply.
+    for (key, report) in [(5, "00:09"), (8, "00:09,0c"), (9, "00:09,0c,0d"), (10, "00:09,0c,0d,0e")] {
+        rig.kb.set_key(key, true);
+        rig.run(3);
+        assert_eq!(rig.out(), [report]);
+    }
+    for key in [5, 8, 9, 10] {
+        rig.kb.set_key(key, false);
+    }
+    rig.run(20);
+    rig.out();
+
+    // It is kept through a restart.
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetMoreWiring), Response::MoreWiring([to_ground, to_supply].into_iter().collect()));
+    rig.kb.set_key(10, true);
+    rig.run(3);
+    assert_eq!(rig.out(), ["00:0e"]);
+
+    // The first group may not take a pin of another either.
+    rig.refused(Request::SetHardware(direct(&[9])), Error::DuplicatePin(9));
+}
+
 #[test]
 fn watch_keys_reports_positions() {
     let mut rig = Rig::new(wired_2x2());
@@ -441,6 +563,27 @@ fn macro_key_types_text() {
 }
 
 #[test]
+fn macro_holds_a_modifier_waits_and_goes_on() {
+    let mut rig = Rig::new(Wiring::direct(&[7]));
+    rig.ok(Request::SetHardware(direct(&[7])));
+    rig.ok(Request::SetActions { layer: 0, pos: 0, actions: [Action::Basic(Basic::Macro(2))].into_iter().collect() });
+    let steps = [
+        MacroStep::Press(0xe1),
+        MacroStep::DelayMs(30),
+        MacroStep::Tap(0x0b),
+        MacroStep::Release(0xe1),
+        MacroStep::DelayMs(30),
+        MacroStep::Tap(0x0c),
+    ];
+    rig.ok(Request::SetMacro { index: 2, start: 0, steps: steps.into_iter().collect() });
+    rig.kb.set_key(0, true);
+    rig.run(110);
+    rig.kb.set_key(0, false);
+    rig.run(100);
+    assert_eq!(rig.out(), ["02:", "02:0b", "02:", "00:", "00:0c", "00:"]);
+}
+
+#[test]
 fn encoder_clicks_tap_their_positions() {
     let mut rig = Rig::new(Wiring { encoders: vec![(10, 11)], ..Wiring::direct(&[7]) });
     let mut hw = direct(&[7]);
@@ -513,6 +656,26 @@ fn with_both_halves_on_usb_only_the_first_one_types() {
     run_both(&mut left, &mut right, 5);
     assert_eq!(left.out(), ["00:04,0e", "00:04"]);
     assert!(right.out().is_empty());
+}
+
+#[test]
+fn a_half_whose_setup_was_just_changed_does_not_type_a_key_twice() {
+    let (mut left, mut right) = split_pair();
+    run_both(&mut left, &mut right, 600);
+    // Setting the right half up again makes it start afresh. A key pressed
+    // on it straight away is typed by the left half only, as before.
+    let link = LinkConfig::Uart { tx: 0, rx: 1 };
+    right.ok(Request::SetHardware(HardwareConfig {
+        split: SplitConfig::Half { link, offset: 3 },
+        encoders: [EncoderConfig { a: 10, b: 11, steps_per_detent: 4 }].into_iter().collect(),
+        ..direct(&[2, 3, 4])
+    }));
+    left.out();
+    right.out();
+    right.kb.set_key(0, true);
+    run_both(&mut left, &mut right, 400);
+    assert_eq!(left.out(), ["00:07"]);
+    assert!(right.out().is_empty(), "nothing is typed twice");
 }
 
 #[test]
@@ -631,7 +794,8 @@ fn a_half_without_a_computer_keeps_what_it_fetched_through_a_power_cut() {
     left.kb.set_cable(false);
     left.kb.reboot();
     left.kb.set_usb(true);
-    left.run(50);
+    // A half listens for the other one for a moment before it types alone.
+    left.run(250);
     left.kb.set_key(1, true);
     left.run(10);
     assert_eq!(left.out(), ["00:1d"]);
@@ -930,6 +1094,55 @@ fn lighting_is_saved_and_a_save_from_before_lighting_still_loads() {
     // The chain is driven again after the restart without being asked.
     rig.run(30);
     assert_eq!(rig.kb.pins().lights().len(), 3);
+}
+
+#[test]
+fn macro_names_are_saved_and_follow_to_the_other_half() {
+    let mut rig = Rig::wires(&[Wire::Ground(2)]);
+    rig.ok(Request::SetHardware(direct(&[2])));
+    let name = |text: &str| -> jmk_proto::String<16> { text.try_into().unwrap() };
+    assert_eq!(rig.kb.request(Request::GetMacroName { index: 3 }), Response::MacroName(name("")));
+    // A keymap without names reads the same as before macros had any.
+    let unnamed = split_status(&mut rig).digest;
+    rig.ok(Request::SetMacroName { index: 3, name: name("Copy all") });
+    assert_ne!(split_status(&mut rig).digest, unnamed);
+    rig.ok(Request::SetMacroName { index: 3, name: name("") });
+    assert_eq!(split_status(&mut rig).digest, unnamed);
+    rig.ok(Request::SetMacroName { index: 3, name: name("Copy all") });
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetMacroName { index: 3 }), Response::MacroName(name("Copy all")));
+    assert_eq!(rig.kb.request(Request::GetMacroName { index: 16 }), Response::Error(Error::OutOfRange));
+
+    let (mut left, mut right) = saved_pair();
+    left.ok(Request::SetMacroName { index: 0, name: name("Hello") });
+    left.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(right.kb.request(Request::GetMacroName { index: 0 }), Response::MacroName(name("Hello")));
+}
+
+#[test]
+fn letter_rows_are_saved_and_follow_to_the_other_half() {
+    let mut rig = Rig::wires(&[Wire::Ground(2)]);
+    rig.ok(Request::SetHardware(direct(&[2])));
+    let rows = |top: &[u8]| -> jmk_proto::LetterRows { [top.iter().copied().collect(), [7, 8].into_iter().collect(), Default::default()] };
+    assert_eq!(rig.kb.request(Request::GetLetterRows), Response::LetterRows(Default::default()));
+    // A keyboard that was never told reads the same as before the rows existed.
+    let untold = split_status(&mut rig).digest;
+    rig.ok(Request::SetLetterRows(rows(&[0, 1, 2])));
+    assert_ne!(split_status(&mut rig).digest, untold);
+    rig.ok(Request::SetLetterRows(Default::default()));
+    assert_eq!(split_status(&mut rig).digest, untold);
+    rig.ok(Request::SetLetterRows(rows(&[0, 1, 2])));
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetLetterRows), Response::LetterRows(rows(&[0, 1, 2])));
+
+    let (mut left, mut right) = saved_pair();
+    left.ok(Request::SetLetterRows(rows(&[4, 5])));
+    left.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(right.kb.request(Request::GetLetterRows), Response::LetterRows(rows(&[4, 5])));
 }
 
 #[test]

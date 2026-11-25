@@ -3,11 +3,12 @@
 import { computed, ref } from 'vue'
 import ActionPicker from '../components/ActionPicker.vue'
 import KeyboardView from '../components/KeyboardView.vue'
+import MacroEditor from '../components/MacroEditor.vue'
 import { attempt } from '../lib/app'
-import { describeAction, describeStep, KEY_GROUPS, legend, textToSteps } from '../lib/keycodes'
-import type { Action, Combo, HoldTapFlavor, HoldTapProfile, MacroStep } from '../lib/protocol'
+import { describeAction, legend } from '../lib/keycodes'
+import type { Action, Combo, HoldTapFlavor, HoldTapProfile } from '../lib/protocol'
 import { LIMITS } from '../lib/protocol'
-import { knobPositions, setCombos, setMacro, setProfile, type Session } from '../lib/session'
+import { knobPositions, setCombos, setProfile, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 type Section = 'hold-tap' | 'combos' | 'macros'
@@ -52,17 +53,6 @@ const baseLegend = (pos: number) => (props.session.layers[0]?.[pos] ? legend(pro
 
 // --- Macros ------------------------------------------------------------------
 const macroIndex = ref(0)
-const steps = computed(() => props.session.macros[macroIndex.value] ?? [])
-const text = ref('')
-const stepsUsed = computed(() => props.session.macros.reduce((sum, m) => sum + m.length, 0))
-const newKey = ref(0x28)
-const newDelay = ref(100)
-const saveSteps = (next: MacroStep[]) => attempt(() => setMacro(props.session, macroIndex.value, next))
-
-async function typeText() {
-  await saveSteps([...steps.value, ...textToSteps(text.value)])
-  text.value = ''
-}
 </script>
 
 <template>
@@ -131,51 +121,25 @@ async function typeText() {
           </template>
         </div>
         <aside v-if="combo" class="card">
-          <ActionPicker :action="combo.action" :layer-count="session.layers.length" :current-layer="-1" :macros="session.macros.map((m) => m.length > 0)" :layer-colors="session.layerColors" @change="(action: Action) => patchCombo({ action })" />
+          <ActionPicker :action="combo.action" :layer-count="session.layers.length" :current-layer="-1" :session="session" :layer-colors="session.layerColors" @change="(action: Action) => patchCombo({ action })" />
         </aside>
       </div>
 
       <!-- Macros --------------------------------------------------------------->
-      <div v-else key="macros" class="pane scroll col">
-        <div class="intro">
-          <h2>Macros</h2>
-          <p class="muted">
-            A macro presses a series of keys for you. Put it on a key in the keymap under "macros".
-            <span class="mono">{{ stepsUsed }} / {{ LIMITS.macroSteps }}</span> steps used.
-          </p>
-        </div>
-        <div class="row wrap">
-          <button v-for="(m, index) in session.macros" :key="index" class="btn small" :class="{ primary: macroIndex === index, faint: !m.length }" :data-test="'macro-slot-' + index" @click="macroIndex = index">
-            M{{ index + 1 }}
+      <div v-else key="macros" class="pane macros">
+        <div class="col scroll macro-list">
+          <div class="intro">
+            <h2>Macros</h2>
+            <p class="muted">One key that presses a whole series of keys for you. Make one here, then put it on a key in the keymap.</p>
+          </div>
+          <button v-for="(m, index) in session.macros" :key="index" class="macro-item" :class="{ on: macroIndex === index, faint: !m.length }" :data-test="'macro-slot-' + index" @click="macroIndex = index">
+            <span class="num">M{{ index + 1 }}</span>
+            <span class="grow nm">{{ session.macroNames[index] || (m.length ? 'unnamed' : 'empty') }}</span>
+            <span v-if="m.length" class="muted small">{{ m.length }}</span>
           </button>
         </div>
-        <div class="card col">
-          <h3>Macro {{ macroIndex + 1 }}</h3>
-          <div class="row">
-            <input v-model="text" class="input grow" placeholder="Type text to add, e.g. an email address" data-test="macro-text" @keydown.enter="typeText" />
-            <button class="btn" :disabled="!text" data-test="macro-add-text" @click="typeText">Add text</button>
-          </div>
-          <p class="muted small">Text is typed as on a US keyboard layout. Other layouts may produce different symbols.</p>
-          <div class="row wrap">
-            <select v-model="newKey" class="input">
-              <optgroup v-for="group in KEY_GROUPS" :key="group.title" :label="group.title">
-                <option v-for="k in group.keys" :key="k.usage" :value="k.usage">{{ k.name }}</option>
-              </optgroup>
-            </select>
-            <button class="btn small" @click="saveSteps([...steps, { Tap: newKey }])">+ tap</button>
-            <button class="btn small" @click="saveSteps([...steps, { Press: newKey }])">+ hold</button>
-            <button class="btn small" @click="saveSteps([...steps, { Release: newKey }])">+ release</button>
-            <input v-model.number="newDelay" class="input delay" type="number" min="1" max="10000" />
-            <button class="btn small" @click="saveSteps([...steps, { DelayMs: Math.min(60000, Math.max(1, newDelay)) }])">+ wait (ms)</button>
-          </div>
-          <TransitionGroup name="pop" tag="ol" class="steps" data-test="macro-steps">
-            <li v-for="(step, index) in steps" :key="index + JSON.stringify(step)">
-              <span>{{ describeStep(step) }}</span>
-              <button class="btn small ghost" title="Remove step" @click="saveSteps(steps.filter((_, i) => i !== index))">×</button>
-            </li>
-          </TransitionGroup>
-          <p v-if="!steps.length" class="muted">This macro is empty.</p>
-          <button v-else class="btn small danger" data-test="macro-clear" @click="saveSteps([])">Clear macro</button>
+        <div class="card scroll">
+          <MacroEditor :session="session" :index="macroIndex" guide />
         </div>
       </div>
     </Transition>
@@ -291,23 +255,64 @@ input[type='range'] {
   opacity: 0.55;
 }
 
-.delay {
-  width: 90px;
-}
-
-.steps {
-  margin: 0;
-  padding-left: 26px;
+.macros {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 2px 28px;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 18px;
 }
 
-.steps li {
-  padding-right: 4px;
+.macros > * {
+  min-height: 0;
 }
 
-.steps li > * {
-  vertical-align: middle;
+.macro-list {
+  gap: 3px;
+}
+
+.macro-list .intro {
+  margin-bottom: 8px;
+}
+
+.macro-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.macro-item:hover {
+  background: var(--panel);
+}
+
+.macro-item.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.macro-item .num {
+  width: 30px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.macro-item .nm {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.macro-item.faint .nm {
+  font-weight: 400;
+  color: var(--muted);
 }
 </style>

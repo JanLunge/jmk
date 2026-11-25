@@ -2,6 +2,7 @@
 // RGB lights: where the chain is wired, where each light sits, what it shows.
 import { computed, onBeforeUnmount, ref } from 'vue'
 import KeyboardView from '../components/KeyboardView.vue'
+import { partPins, wiringParts } from '../lib/definition'
 import { attempt, toast } from '../lib/app'
 import { findBoard, pinLabel, wirablePins } from '../lib/boards'
 import { legend } from '../lib/keycodes'
@@ -9,7 +10,7 @@ import { bounds } from '../lib/layout'
 import { drawnAt, fromWire, hexToHueSat, lightMode, placeAtKey, ring, shown, underKeys, zoneHex, zonePreview, type LightMode } from '../lib/lighting'
 import type { Effect, Led, LightingConfig, LightZone, Pin } from '../lib/protocol'
 import { LIMITS, UNDERGLOW } from '../lib/protocol'
-import { linkPins, canLight, knobPositions, needsRestart, restart, save, setLighting, type Session } from '../lib/session'
+import { linkPins, canLight, followsPins, knobPositions, needsRestart, restart, save, setLighting, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 
@@ -20,10 +21,8 @@ const change = (patch: Partial<LightingConfig>) => attempt(() => setLighting(pro
 // --- The chain ---------------------------------------------------------------
 /** Pins nothing else uses. */
 const freePins = computed(() => {
-  const { matrix, reserved_pins, encoders } = props.session.hardware
-  const taken = new Set<Pin>([...reserved_pins, ...encoders.flatMap((e) => [e.a, e.b])])
-  if (matrix !== 'None' && 'Direct' in matrix) matrix.Direct.pins.forEach((pin) => taken.add(pin))
-  if (matrix !== 'None' && 'Matrix' in matrix) [...matrix.Matrix.rows, ...matrix.Matrix.cols].forEach((pin) => taken.add(pin))
+  const { reserved_pins, encoders } = props.session.hardware
+  const taken = new Set<Pin>([...reserved_pins, ...encoders.flatMap((e) => [e.a, e.b]), ...wiringParts(props.session.hardware).flatMap(partPins)])
   const link = linkPins(props.session.hardware)
   if (link) [link.tx, link.rx].forEach((pin) => taken.add(pin))
   return wirablePins(board.value, props.session.info.usable_pins).filter((pin) => !taken.has(pin))
@@ -168,11 +167,11 @@ const keyLegend = (pos: number) => {
 
 // --- What they show ----------------------------------------------------------------
 const EFFECTS: { id: Effect; name: string; hint: string }[] = [
-  { id: 'Off', name: 'Off', hint: '' },
-  { id: 'Solid', name: 'One colour', hint: '' },
-  { id: 'Breathing', name: 'Breathing', hint: 'Fades in and out.' },
+  { id: 'Off', name: 'Off', hint: 'Dark.' },
+  { id: 'Solid', name: 'Colour', hint: 'One steady colour.' },
+  { id: 'Breathing', name: 'Breathe', hint: 'One colour, fading in and out.' },
   { id: 'Rainbow', name: 'Rainbow', hint: 'All colours, moving across the keyboard.' },
-  { id: 'Reactive', name: 'On key press', hint: 'Dark until you type; the pressed key flashes and fades.' },
+  { id: 'Reactive', name: 'On press', hint: 'Dark until you type; the pressed key flashes and fades.' },
 ]
 const zones = computed(() =>
   [
@@ -190,7 +189,17 @@ const number = (event: Event) => Number((event.target as HTMLInputElement).value
 
 /** Rough current at full white, to explain the power limit: 60 mA per light. */
 const peakMa = computed(() => Math.round((lighting.value.leds.length * 60 * lighting.value.limit) / 255))
-const pinChanged = computed(() => lighting.value.pin !== props.session.bootLightPin)
+/** Older firmware only looks at the pin when it starts. */
+const pinChanged = computed(() => !followsPins(props.session) && lighting.value.pin !== props.session.bootLightPin)
+
+/** The wiring is set once and then left alone: it stays folded away unless it is being worked on. */
+const chainOpen = ref(false)
+const showChain = computed(() => chainOpen.value || finding.value !== undefined)
+const chainSummary = computed(() => {
+  const count = lighting.value.leds.length
+  const pin = lighting.value.pin === null ? '' : ` on ${pinLabel(board.value, lighting.value.pin)}`
+  return `${count} ${count === 1 ? 'light' : 'lights'}${pin} · ${MODES.find((option) => option.id === mode.value)?.name.toLowerCase()}`
+})
 </script>
 
 <template>
@@ -208,15 +217,7 @@ const pinChanged = computed(() => lighting.value.pin !== props.session.bootLight
           @down="placeAt"
         />
       </div>
-      <p class="muted small hint">
-        <template v-if="finding !== undefined">
-          One light is lit on the keyboard now. Click the key it sits under, or nearest to.
-        </template>
-        <template v-else-if="lighting.leds.length">
-          Round dots are lights under keys; dashed ones shine out of the bottom. Changes show on the keyboard at once
-          and stay after unplugging once you save.
-        </template>
-      </p>
+      <p v-if="finding !== undefined" class="muted small hint">One light is lit on the keyboard now. Click the key it sits under, or nearest to.</p>
     </div>
 
     <aside class="side card col scroll">
@@ -227,110 +228,126 @@ const pinChanged = computed(() => lighting.value.pin !== props.session.bootLight
       <template v-else-if="lighting.pin === null">
         <div>
           <h2>Lights</h2>
-          <p class="muted small">
-            For addressable RGB lights (WS2812, SK6812 and the like): a chain of lights on one data wire, whether
-            they sit under the keys, under the case, or both.
-          </p>
+          <p class="muted small">For a chain of addressable RGB lights (WS2812, SK6812) on one data wire.</p>
         </div>
-        <label class="field">Pin the chain's data wire is soldered to
-          <select v-model="pinDraft" class="input" data-test="light-pin">
-            <option :value="null" disabled>Choose a pin</option>
-            <option v-for="pin in freePins" :key="pin" :value="pin">{{ pinLabel(board, pin) }}</option>
-          </select>
-        </label>
-        <label class="field">Number of lights on the chain
-          <input v-model.number="countDraft" class="input" type="number" min="1" :max="LIMITS.leds" data-test="light-count" />
-        </label>
-        <p class="muted small">
-          Unsure about the count? Start too high: extra ones do no harm, and you can lower it once you see which
-          lights exist. Brightness starts limited so the lights cannot overload the USB port.
-        </p>
-        <button class="btn primary" :disabled="pinDraft === null || restarting" data-test="light-on" @click="turnOn">
+        <div class="fields">
+          <label class="field">Data pin
+            <select v-model="pinDraft" class="input" data-test="light-pin" title="The pin the chain's data wire is soldered to">
+              <option :value="null" disabled>Choose</option>
+              <option v-for="pin in freePins" :key="pin" :value="pin">{{ pinLabel(board, pin) }}</option>
+            </select>
+          </label>
+          <label class="field">Lights
+            <input v-model.number="countDraft" class="input" type="number" min="1" :max="LIMITS.leds" data-test="light-count" title="Unsure? Start too high: extra ones do no harm, and the count can be lowered later." />
+          </label>
+        </div>
+        <button
+          class="btn primary"
+          :disabled="pinDraft === null || restarting"
+          title="Brightness starts limited, so the lights cannot overload the USB port."
+          data-test="light-on"
+          @click="turnOn"
+        >
           {{ restarting ? 'Restarting the keyboard…' : 'Switch the lights on' }}
         </button>
-        <p class="muted small">The keyboard saves and restarts once, because the data pin is set up when it starts.</p>
       </template>
 
       <template v-else>
-        <div class="col">
-          <h2>Where the lights are</h2>
-          <div class="modes row" data-test="light-mode">
-            <button v-for="option in MODES" :key="option.id" class="mode" :class="{ on: mode === option.id }" :data-test="'mode-' + option.id" @click="setMode(option.id)">
-              {{ option.name }}
-            </button>
-          </div>
-          <p class="muted small">{{ MODES.find((option) => option.id === mode)?.hint }}</p>
-          <template v-if="finding === undefined">
-            <button class="btn small" data-test="place-lights" @click="placeByHand">
-              {{ mode === 'underglow' ? 'Lights in another order? Place them by hand' : 'Place the lights one by one' }}
-            </button>
-          </template>
-          <div v-else class="note col" data-test="placing">
-            <strong>Light {{ finding + 1 }} of {{ lighting.leds.length }} is lit</strong>
-            <template v-if="mode === 'both'">
-              <label class="row check"><input v-model="asUnderglow" type="radio" :value="false" data-test="place-key" /> It shines up through a key</label>
-              <label class="row check"><input v-model="asUnderglow" type="radio" :value="true" data-test="place-under" /> It shines out of the bottom (underglow)</label>
-            </template>
-            <span class="muted small">Click the key it sits under or nearest to. No light lit? The chain is shorter than {{ finding + 1 }}: lower the count below.</span>
-            <div class="row wrap">
-              <button class="btn small" :disabled="finding === 0" @click="find(finding - 1)">Back</button>
-              <button class="btn small" data-test="place-skip" @click="find(finding + 1)">Skip</button>
-              <button class="btn small ghost" data-test="place-done" @click="find(undefined)">Done</button>
-            </div>
-          </div>
-        </div>
+        <p v-if="pinChanged" class="note warn" data-test="light-restart">
+          The lights start working after a save and restart.
+          <button class="btn small primary" :disabled="restarting" @click="saveAndRestart">Save and restart</button>
+        </p>
 
-        <div class="col">
-          <h2>What they show</h2>
-          <p v-if="pinChanged" class="note warn" data-test="light-restart">
-            The lights start working after a save and restart.
-            <button class="btn small primary" :disabled="restarting" @click="saveAndRestart">Save and restart</button>
-          </p>
-          <div v-for="zone in zones" :key="zone.id" class="zone col" :data-test="'zone-' + zone.id">
-            <h3>{{ zone.name }} <span class="muted">· {{ zone.count }}</span></h3>
-            <select class="input" :value="lighting[zone.id].effect" :data-test="'effect-' + zone.id" @change="patchZone(zone.id, { effect: ($event.target as HTMLSelectElement).value as Effect })">
-              <option v-for="effect in EFFECTS" :key="effect.id" :value="effect.id">{{ effect.name }}</option>
-            </select>
-            <span v-if="EFFECTS.find((e) => e.id === lighting[zone.id].effect)?.hint" class="muted small">
-              {{ EFFECTS.find((e) => e.id === lighting[zone.id].effect)?.hint }}
+        <!-- What they show: the part that is used day to day -->
+        <section v-for="zone in zones" :key="zone.id" class="zone col" :data-test="'zone-' + zone.id">
+          <header class="row">
+            <span class="swatch" :style="{ background: lighting[zone.id].effect === 'Off' ? 'transparent' : lighting[zone.id].effect === 'Rainbow' ? 'conic-gradient(#f55, #fd5, #5d7, #5cf, #a6f, #f55)' : zoneHex(lighting[zone.id]) }" />
+            <h3 class="grow">{{ zone.name }}</h3>
+            <span class="muted small">{{ zone.count }}</span>
+          </header>
+          <div class="effects row" :data-test="'effect-' + zone.id">
+            <button
+              v-for="effect in EFFECTS"
+              :key="effect.id"
+              class="effect"
+              :class="{ on: lighting[zone.id].effect === effect.id }"
+              :title="effect.hint"
+              :data-test="'effect-' + zone.id + '-' + effect.id"
+              @click="patchZone(zone.id, { effect: effect.id })"
+            >
+              {{ effect.name }}
+            </button>
+          </div>
+          <div v-if="lighting[zone.id].effect !== 'Off'" class="dials">
+            <template v-if="lighting[zone.id].effect !== 'Rainbow'">
+              <span class="label">Colour</span>
+              <input type="color" :value="zoneHex(lighting[zone.id])" :data-test="'colour-' + zone.id" @input="patchZone(zone.id, hexToHueSat(($event.target as HTMLInputElement).value))" />
+            </template>
+            <span class="label">Brightness</span>
+            <input type="range" min="0" max="255" :value="lighting[zone.id].val" :data-test="'brightness-' + zone.id" @input="patchZone(zone.id, { val: number($event) })" />
+            <template v-if="lighting[zone.id].effect === 'Breathing' || lighting[zone.id].effect === 'Rainbow'">
+              <span class="label">Speed</span>
+              <input type="range" min="0" max="255" :value="lighting[zone.id].speed" @input="patchZone(zone.id, { speed: number($event) })" />
+            </template>
+          </div>
+        </section>
+
+        <!-- The wiring: set once, then folded away -->
+        <section class="chain col" :class="{ open: showChain }">
+          <button class="chain-head row" data-test="chain-toggle" @click="chainOpen = !showChain">
+            <span class="col grow">
+              <strong>Setup</strong>
+              <span class="muted small" data-test="chain-summary">{{ chainSummary }}</span>
             </span>
-            <template v-if="lighting[zone.id].effect !== 'Off'">
-              <label v-if="lighting[zone.id].effect !== 'Rainbow'" class="row between">Colour
-                <input type="color" :value="zoneHex(lighting[zone.id])" :data-test="'colour-' + zone.id" @input="patchZone(zone.id, hexToHueSat(($event.target as HTMLInputElement).value))" />
+            <span class="muted">{{ showChain ? '▾' : '▸' }}</span>
+          </button>
+          <div v-if="showChain" class="col chain-body">
+            <div class="modes row" data-test="light-mode">
+              <button v-for="option in MODES" :key="option.id" class="mode" :class="{ on: mode === option.id }" :title="option.hint" :data-test="'mode-' + option.id" @click="setMode(option.id)">
+                {{ option.name }}
+              </button>
+            </div>
+            <button v-if="finding === undefined" class="btn small" :title="mode === 'underglow' ? 'For lights wired in another order than around the edge' : 'JMK lights them one at a time and you click where each sits'" data-test="place-lights" @click="placeByHand">
+              Place the lights one by one
+            </button>
+            <div v-else class="note col" data-test="placing">
+              <strong>Light {{ finding + 1 }} of {{ lighting.leds.length }} is lit</strong>
+              <template v-if="mode === 'both'">
+                <label class="row check"><input v-model="asUnderglow" type="radio" :value="false" data-test="place-key" /> Shines up through a key</label>
+                <label class="row check"><input v-model="asUnderglow" type="radio" :value="true" data-test="place-under" /> Shines out of the bottom</label>
+              </template>
+              <span class="muted small">Click the key it sits under. None lit? The chain is shorter: lower the count.</span>
+              <div class="row wrap">
+                <button class="btn small" :disabled="finding === 0" @click="find(finding - 1)">Back</button>
+                <button class="btn small" data-test="place-skip" @click="find(finding + 1)">Skip</button>
+                <button class="btn small ghost" data-test="place-done" @click="find(undefined)">Done</button>
+              </div>
+            </div>
+            <div class="fields">
+              <label class="field">Lights
+                <input class="input" type="number" min="1" :max="LIMITS.leds" :value="lighting.leds.length" data-test="light-count" @change="setCount" />
               </label>
-              <label class="field">Brightness
-                <input type="range" min="0" max="255" :value="lighting[zone.id].val" :data-test="'brightness-' + zone.id" @input="patchZone(zone.id, { val: number($event) })" />
+              <label class="field">Data pin
+                <select class="input" :value="lighting.pin" data-test="light-pin" @change="change({ pin: number($event) })">
+                  <option :value="lighting.pin">{{ pinLabel(board, lighting.pin) }}</option>
+                  <option v-for="pin in freePins.filter((p) => p !== lighting.pin)" :key="pin" :value="pin">{{ pinLabel(board, pin) }}</option>
+                </select>
               </label>
-              <label v-if="lighting[zone.id].effect === 'Breathing' || lighting[zone.id].effect === 'Rainbow'" class="field">Speed
-                <input type="range" min="0" max="255" :value="lighting[zone.id].speed" @input="patchZone(zone.id, { speed: number($event) })" />
-              </label>
-            </template>
-          </div>
-        </div>
-
-        <div class="col">
-          <h2>The chain</h2>
-          <div class="fields">
-            <label class="field">Lights
-              <input class="input" type="number" min="1" :max="LIMITS.leds" :value="lighting.leds.length" data-test="light-count" @change="setCount" />
+            </div>
+            <div class="dials" title="A USB port gives about 500 mA for the whole keyboard. Stay well under that.">
+              <span class="label">Power limit</span>
+              <input type="range" min="10" max="255" :value="lighting.limit" data-test="light-limit" @input="change({ limit: number($event) })" />
+            </div>
+            <span class="small" :class="peakMa > 450 ? 'over' : 'muted'" data-test="light-power">
+              {{ Math.round((lighting.limit / 255) * 100) }}% · about {{ peakMa }} mA at full white<template v-if="peakMa > 450">: more than a USB port gives</template>
+            </span>
+            <label class="row check">
+              <input type="checkbox" :checked="lighting.order === 'Rgb'" data-test="light-order" @change="change({ order: lighting.order === 'Rgb' ? 'Grb' : 'Rgb' })" />
+              Red and green are swapped
             </label>
-            <label class="field">Data pin
-              <select class="input" :value="lighting.pin" data-test="light-pin" @change="change({ pin: number($event) })">
-                <option :value="lighting.pin">{{ pinLabel(board, lighting.pin) }}</option>
-                <option v-for="pin in freePins.filter((p) => p !== lighting.pin)" :key="pin" :value="pin">{{ pinLabel(board, pin) }}</option>
-              </select>
-            </label>
+            <button class="btn small ghost remove" data-test="light-remove" @click="removeLights">Remove the lights</button>
           </div>
-          <label class="field">Power limit: {{ Math.round((lighting.limit / 255) * 100) }}% (about {{ peakMa }} mA with everything white)
-            <input type="range" min="10" max="255" :value="lighting.limit" data-test="light-limit" @input="change({ limit: number($event) })" />
-          </label>
-          <p class="muted small">A USB port gives about 500 mA for the whole keyboard. Stay well under that.</p>
-          <label class="row check">
-            <input type="checkbox" :checked="lighting.order === 'Rgb'" data-test="light-order" @change="change({ order: lighting.order === 'Rgb' ? 'Grb' : 'Rgb' })" />
-            Red and green are swapped on my lights
-          </label>
-          <button class="btn small ghost" data-test="light-remove" @click="removeLights">This keyboard has no lights</button>
-        </div>
+        </section>
       </template>
     </aside>
   </div>
@@ -339,7 +356,7 @@ const pinChanged = computed(() => lighting.value.pin !== props.session.bootLight
 <style scoped>
 .lighting {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) 360px;
   gap: 18px;
   height: 100%;
   min-height: 0;
@@ -371,55 +388,120 @@ const pinChanged = computed(() => lighting.value.pin !== props.session.bootLight
 
 .side {
   min-height: 0;
-  padding: 16px;
-  gap: 22px;
+  padding: 14px;
+  gap: 12px;
+  align-self: start;
+  max-height: 100%;
 }
 
 .small {
   font-size: 0.82rem;
 }
 
+.zone,
+.chain {
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.zone header {
+  gap: 9px;
+  align-items: center;
+}
+
+.zone h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+}
+
+.effects,
 .modes {
   gap: 0;
+  padding: 2px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  overflow: hidden;
+  background: var(--panel-2);
 }
 
+.effect,
 .mode {
   flex: 1;
-  padding: 8px 6px;
+  padding: 6px 4px;
   border: none;
-  background: var(--panel-2);
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
-.mode + .mode {
-  border-left: 1px solid var(--line);
-}
-
+.effect.on,
 .mode.on {
   background: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
 }
 
-.zone {
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
+/* A label and its control per line. */
+.dials {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.dials .label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.chain {
+  padding: 0;
+  gap: 0;
+}
+
+.chain-head {
+  gap: 10px;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  align-items: center;
+  cursor: pointer;
+}
+
+.chain-body {
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.over {
+  color: var(--danger);
+}
+
+.remove {
+  align-self: flex-start;
+  color: var(--muted);
 }
 
 .fields {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
-}
-
-.between {
-  justify-content: space-between;
 }
 
 .check {

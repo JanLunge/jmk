@@ -127,9 +127,9 @@ async fn main(_spawner: Spawner) {
     let link_queues = jmk_embassy::link::Queues::new();
 
     let storage = Storage::new(flash, flash::CONFIG_OFFSET, STORAGE_BUF.take());
-    let board = Board { mcu: Mcu::Nrf52840, firmware: jmk_embassy::firmware_version!(), uid: device_id() };
+    let board = Board { mcu: Mcu::Nrf52840, firmware: jmk_proto::FIRMWARE_VERSION, uid: device_id() };
     let mut device = Device::new(board, pins::NrfPins::new(), storage, CONFIG.take());
-    let serial = device.hardware().split.link().and_then(|config| link::SerialLink::open(&config));
+    let wiring = jmk_embassy::wiring::Wiring::new();
 
     // Saving erases flash in 10 ms time slots between radio events, 36 of
     // them for a save and 72 for a factory reset. With a connection that
@@ -142,6 +142,7 @@ async fn main(_spawner: Spawner) {
         RoutedOutput { usb: &usb_reports, ble: &ble_reports, over_usb: false },
         &link_queues,
         &config_queues,
+        &wiring,
         || watchdog.iter_mut().for_each(WatchdogHandle::pet),
         || jmk_embassy::usb::listening() || ble::connected(),
         reboot,
@@ -168,12 +169,7 @@ async fn main(_spawner: Spawner) {
         // Without Bluetooth the keyboard still works over USB.
         core::future::pending::<()>().await;
     };
-    let cable = async {
-        match serial {
-            Some(serial) => serial.run(&link_queues).await,
-            None => core::future::pending().await,
-        }
-    };
+    let cable = link::run(&wiring, &link_queues);
     join5(run, usb, bluetooth, cable, mpsl.run()).await;
 }
 

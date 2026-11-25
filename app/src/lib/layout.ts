@@ -1,5 +1,6 @@
 // Key shapes for drawing the keyboard, and ways to produce them.
 
+import { keyCount } from './definition'
 import type { KeyGeometry, MatrixConfig } from './protocol'
 
 export const UNIT = 100
@@ -7,16 +8,32 @@ export const NO_KEY: KeyGeometry = { x: 0, y: 0, w: 0, h: 0, r: 0 }
 
 export const hasKey = (key: KeyGeometry | undefined): key is KeyGeometry => !!key && key.w > 0
 
-/** A plain grid, used until the user arranges the keys. `populated` lists the positions that have a switch. */
-export function gridLayout(matrix: MatrixConfig, populated?: number[]): KeyGeometry[] {
-  const count = matrix === 'None' ? 0 : 'Direct' in matrix ? matrix.Direct.pins.length : matrix.Matrix.rows.length * matrix.Matrix.cols.length
-  const perRow = matrix !== 'None' && 'Matrix' in matrix ? matrix.Matrix.cols.length : Math.min(count, Math.max(1, Math.ceil(Math.sqrt(count * 2))))
+/**
+ * A plain grid, used until the user arranges the keys. `populated` lists the
+ * positions that have a switch. A board with several groups of switches gets
+ * one grid under the other.
+ */
+export function gridLayout(wiring: MatrixConfig | MatrixConfig[], populated?: number[]): KeyGeometry[] {
   const present = populated ? new Set(populated) : undefined
-  return Array.from({ length: count }, (_, pos) =>
-    present && !present.has(pos)
-      ? { ...NO_KEY }
-      : { x: (pos % perRow) * UNIT, y: Math.floor(pos / perRow) * UNIT, w: UNIT, h: UNIT, r: 0 },
-  )
+  const layout: KeyGeometry[] = []
+  let top = 0
+  for (const part of Array.isArray(wiring) ? wiring : [wiring]) {
+    const count = keyCount(part)
+    const perRow = part !== 'None' && 'Matrix' in part ? part.Matrix.cols.length : Math.min(count, Math.max(1, Math.ceil(Math.sqrt(count * 2))))
+    const base = layout.length
+    let rows = 0
+    for (let index = 0; index < count; index++) {
+      if (present && !present.has(base + index)) {
+        layout.push({ ...NO_KEY })
+        continue
+      }
+      const row = Math.floor(index / perRow)
+      rows = Math.max(rows, row + 1)
+      layout.push({ x: (index % perRow) * UNIT, y: (top + row) * UNIT, w: UNIT, h: UNIT, r: 0 })
+    }
+    top += rows
+  }
+  return layout
 }
 
 export interface Bounds {
@@ -125,4 +142,27 @@ function rotated(key: { x: number; y: number; w: number; h: number }, degrees: n
 export function normalised(keys: KeyGeometry[]): KeyGeometry[] {
   const box = bounds(keys)
   return keys.map((key) => (hasKey(key) ? { ...key, x: Math.round(key.x - box.x), y: Math.round(key.y - box.y) } : key))
+}
+
+/**
+ * The key after `pos` the way text is read: the nearest one to its right in
+ * the same row, else the leftmost key of the row below. `undefined` after the
+ * last key. A key counts as in the same row while its middle is within half a
+ * key's height, so staggered columns still read as one row.
+ */
+export function nextInRow(layout: KeyGeometry[], pos: number): number | undefined {
+  const here = layout[pos]
+  if (!hasKey(here)) return undefined
+  const middle = (key: KeyGeometry) => ({ x: key.x + key.w / 2, y: key.y + key.h / 2 })
+  const keys = layout.flatMap((key, index) => (hasKey(key) && index !== pos ? [{ index, ...middle(key), h: key.h }] : []))
+  const at = middle(here)
+  const sameRow = (y: number, row: number, h: number) => Math.abs(y - row) < h / 2
+  const leftmost = (list: typeof keys) => list.reduce<(typeof keys)[number] | undefined>((best, key) => (!best || key.x < best.x ? key : best), undefined)
+  const right = keys.filter((key) => sameRow(key.y, at.y, here.h) && key.x > at.x)
+  const nearest = leftmost(right)
+  if (nearest) return nearest.index
+  const below = keys.filter((key) => key.y > at.y && !sameRow(key.y, at.y, here.h))
+  if (!below.length) return undefined
+  const top = below.reduce((best, key) => (key.y < best.y ? key : best))
+  return leftmost(below.filter((key) => sameRow(key.y, top.y, top.h)))!.index
 }

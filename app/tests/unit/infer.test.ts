@@ -54,10 +54,34 @@ describe('inferWiring', () => {
     }
   })
 
-  it('explains a backwards diode and mixed wiring', () => {
-    expect(inferWiring([link(2, 5), link(5, 3)])).toMatchObject({ ok: false })
-    expect(inferWiring([link(2, 5), { kind: 'ground', pin: 7 }])).toMatchObject({ ok: false })
+  it('explains wiring that forms no rows and columns', () => {
     expect(inferWiring([link(2, 5, false), link(5, 6, false), link(2, 6, false)])).toMatchObject({ ok: false })
+    expect(inferWiring([link(2, 5), link(2, 6, false)])).toMatchObject({ ok: false })
+  })
+
+  it('reads diodes pointing both ways as a duplex matrix', () => {
+    // Rows 2 and 3, columns 4, 5 and 6; pressed crossing by crossing, both keys of each.
+    const keys = [2, 3].flatMap((row) => [4, 5, 6].flatMap((col) => [link(row, col), link(col, row)]))
+    const result = inferWiring(keys)
+    if (!result.ok) throw new Error(result.problem)
+    expect(result.wiring.matrix).toEqual({ Matrix: { rows: [2, 3], cols: [4, 5, 6], diodes: 'Both' } })
+    // The keys found by pulling a row low take the first six positions, the others the next six.
+    expect(result.wiring.positions).toEqual([0, 6, 1, 7, 2, 8, 3, 9, 4, 10, 5, 11])
+  })
+
+  it('lets one board mix a matrix with keys on pins of their own', () => {
+    const result = inferWiring([
+      { kind: 'ground', pin: 10 },
+      link(2, 4),
+      { kind: 'supply', pin: 12 },
+      link(2, 5),
+      { kind: 'ground', pin: 11 },
+    ])
+    if (!result.ok) throw new Error(result.problem)
+    expect(result.wiring.matrix).toEqual({ Matrix: { rows: [2], cols: [4, 5], diodes: 'Col2Row' } })
+    expect(result.wiring.more).toEqual([{ Direct: { pins: [10, 11], active_high: false } }, { Direct: { pins: [12], active_high: true } }])
+    // The matrix comes first, then the keys to ground, then the one to supply.
+    expect(result.wiring.positions).toEqual([2, 0, 4, 1, 3])
   })
 })
 
@@ -155,7 +179,8 @@ describe('adding one key to existing wiring', () => {
     expect(planAddedKey(matrix, { kind: 'link', driven: 2, sensed: 11, diode: false })).toMatchObject({ ok: true, pos: 3 })
     expect(planAddedKey(matrix, { kind: 'link', driven: 2, sensed: 11, diode: true }).ok).toBe(false)
     expect(planAddedKey(matrix, { kind: 'link', driven: 1, sensed: 2, diode: false }).ok).toBe(false)
-    expect(planAddedKey(matrix, { kind: 'ground', pin: 5 }).ok).toBe(false)
+    // A key on a pin of its own joins as a group after the matrix.
+    expect(planAddedKey(matrix, { kind: 'ground', pin: 5 })).toMatchObject({ ok: true, hardware: { more: [{ Direct: { pins: [5], active_high: false } }] } })
   })
 
   it('appends a pin to one-pin-per-key wiring', () => {
@@ -165,6 +190,40 @@ describe('adding one key to existing wiring', () => {
     expect(plan.hardware.matrix).toEqual({ Direct: { pins: [4, 5, 7], active_high: false } })
     expect([plan.pos, plan.move(1), plan.move(2)]).toEqual([2, 1, 3])
     expect(planAddedKey(direct, { kind: 'ground', pin: 5 })).toMatchObject({ ok: true, rewired: false, pos: 1 })
-    expect(planAddedKey(direct, { kind: 'supply', pin: 7 }).ok).toBe(false)
+    expect(planAddedKey(direct, { kind: 'supply', pin: 7 })).toMatchObject({ ok: true, pos: 2, hardware: { more: [{ Direct: { pins: [7], active_high: true } }] } })
+  })
+})
+
+describe('a missed key on a board that mixes wiring styles', () => {
+  const hardware = {
+    matrix: { Matrix: { rows: [2, 3], cols: [4, 5], diodes: 'Both' as const } },
+    more: [{ Direct: { pins: [10], active_high: false } }],
+    reserved_pins: [], debounce_ms: 5, encoders: [], split: 'None' as const,
+  }
+
+  it('finds the second key of a crossing and a key on a pin of its own', () => {
+    const second = planAddedKey(hardware, link(5, 3))
+    if (!second.ok) throw new Error(second.problem)
+    // Row 3, column 5 is crossing 3; its second key comes after the four first ones.
+    expect([second.pos, second.rewired]).toEqual([7, false])
+
+    const direct = planAddedKey(hardware, { kind: 'ground', pin: 11 })
+    if (!direct.ok) throw new Error(direct.problem)
+    expect(direct.hardware.more).toEqual([{ Direct: { pins: [10, 11], active_high: false } }])
+    expect([direct.pos, direct.move(8), direct.move(9)]).toEqual([9, 8, 10])
+
+    const supply = planAddedKey(hardware, { kind: 'supply', pin: 12 })
+    if (!supply.ok) throw new Error(supply.problem)
+    expect(supply.hardware.more).toEqual([{ Direct: { pins: [10], active_high: false } }, { Direct: { pins: [12], active_high: true } }])
+    expect(supply.pos).toBe(9)
+  })
+
+  it('renumbers both halves of a duplex matrix when it grows a column', () => {
+    const plan = planAddedKey(hardware, link(6, 2))
+    if (!plan.ok) throw new Error(plan.problem)
+    expect(plan.hardware.matrix).toEqual({ Matrix: { rows: [2, 3], cols: [4, 5, 6], diodes: 'Both' } })
+    // Second key of row 2, column 6.
+    expect(plan.pos).toBe(8)
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 8].map(plan.move)).toEqual([0, 1, 3, 4, 6, 7, 9, 10, 12])
   })
 })

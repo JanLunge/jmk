@@ -11,7 +11,7 @@ jmk-device = { path = "../../crates/jmk-device" }
 jmk-embassy = { path = "../../crates/jmk-embassy" }
 
 embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
-embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl"] }
+embassy-rp = { version = "0.10", features = ["rp2040", "time-driver", "critical-section-impl", "unstable-pac"] }
 embassy-time = "0.5"
 embassy-futures = "0.1"
 embassy-sync = "0.8"

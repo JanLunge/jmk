@@ -61,6 +61,24 @@ export async function openShape(page: Page) {
 
 interface SetupOptions {
   knob?: boolean
+  /** Leave the keys empty, as the setup does. Otherwise they get letters, so a test can see them type. */
+  empty?: boolean
+}
+
+/** Every change is saved by itself; wait until the last one is on the keyboard. */
+export async function saved(page: Page) {
+  // A change counts from the keyboard's answer, a moment after the click.
+  await page.waitForTimeout(200)
+  await expect(page.locator('[data-test=save]')).toHaveText('Saved', { timeout: 10_000 })
+}
+
+/** A new keyboard's keys do nothing. Give them A, B, C… then digits, in the order of their positions. */
+export async function giveLetters(page: Page) {
+  await expect(page.locator('[data-test=keymap-board] .key[data-pos]').first()).toBeVisible()
+  const found = await page.locator('[data-test=keymap-board] .key[data-pos]:not(.knob)').evaluateAll((keys) => keys.map((key) => Number(key.getAttribute('data-pos'))))
+  const positions = [...new Set(found)].sort((a, b) => a - b).slice(0, 36)
+  for (const [index, pos] of positions.entries()) await assign(page, pos, index < 26 ? 0x04 + index : 0x1e + index - 26)
+  await saved(page)
 }
 
 /** Click through the setup wizard for the keyboard in front, pressing every key. */
@@ -78,16 +96,25 @@ export async function runWizard(page: Page, options: SetupOptions = {}) {
     }
     await expect(page.locator('.knobs .chip')).toContainText('knob 1')
   }
-  // The last key press saves the keyboard and opens the editor.
   await page.click('[data-test=next]')
+  await skipArranging(page)
   await expect(page.locator('[data-test=rename]')).toBeVisible()
+  if (!options.empty) await giveLetters(page)
+}
+
+/** After the keys: the row ends and the letter rows, both left out. Saves the keyboard and opens the editor. */
+export async function skipArranging(page: Page) {
+  await expect(page.locator('[data-test=next]')).toHaveText('Skip')
+  await page.click('[data-test=next]')
+  await expect(page.locator('[data-test=letters-board]')).toBeVisible()
+  await page.click('[data-test=next]')
 }
 
 /**
  * Set up the split demo: the app finds the cable between the two boards by
  * itself, then the keys of both halves are pressed on one page.
  */
-export async function runSplitWizard(page: Page) {
+export async function runSplitWizard(page: Page, options: SetupOptions = {}) {
   await expect(page.locator('[data-test=found-other]')).toBeVisible({ timeout: 20_000 })
   await page.waitForTimeout(750)
   // Both halves lie on the bench; the left one's keys come first.
@@ -95,7 +122,9 @@ export async function runSplitWizard(page: Page) {
   for (let key = 0; key < count; key++) await tap(page, key)
   await expect(page.locator('[data-test=count]')).toContainText(`${count} keys`)
   await page.click('[data-test=next]')
+  await skipArranging(page)
   await expect(page.locator('[data-test=split-status]')).toHaveAttribute('title', /types for both/, { timeout: 10_000 })
+  if (!options.empty) await giveLetters(page)
 }
 
 /** In the keymap tab: select a key and give it a plain key from the picker. */

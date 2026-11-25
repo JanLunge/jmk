@@ -21,7 +21,7 @@ usage: jmk <command>
 
   info                          firmware, chip and usable pins
   show                          current hardware configuration and layer 0
-  matrix <rows> <cols> <col2row|row2col>
+  matrix <rows> <cols> <col2row|row2col|both>
                                 use a diode matrix, pins as 2,3,4
   direct <pins> [active-high]   one pin per switch
   reserve <pins|none>           pins the firmware must never touch
@@ -80,6 +80,7 @@ fn run(args: &[&str]) -> Result<()> {
             let diodes = match *diodes {
                 "col2row" => DiodeDirection::Col2Row,
                 "row2col" => DiodeDirection::Row2Col,
+                "both" => DiodeDirection::Both,
                 other => return Err(format!("unknown diode direction {other}")),
             };
             let matrix = MatrixConfig::Matrix { rows: pin_list(rows)?, cols: pin_list(cols)?, diodes };

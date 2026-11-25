@@ -35,7 +35,8 @@ export interface Combo {
 
 export type MacroStep = { Tap: number } | { Press: number } | { Release: number } | { DelayMs: number }
 
-export type DiodeDirection = 'Col2Row' | 'Row2Col'
+/** `Both`: two switches per crossing, their diodes pointing opposite ways (a duplex matrix). */
+export type DiodeDirection = 'Col2Row' | 'Row2Col' | 'Both'
 export type MatrixConfig =
   | 'None'
   | { Direct: { pins: Pin[]; active_high: boolean } }
@@ -53,6 +54,12 @@ export type SplitConfig = 'None' | { Half: { link: LinkConfig; offset: number } 
 
 export interface HardwareConfig {
   matrix: MatrixConfig
+  /**
+   * Further groups of switches on a board that mixes wiring styles; their
+   * positions follow the first group's. The keyboard keeps them apart from
+   * the rest (see client.ts), so firmware from before them still reads.
+   */
+  more?: MatrixConfig[]
   reserved_pins: Pin[]
   debounce_ms: number
   encoders: EncoderConfig[]
@@ -175,6 +182,12 @@ export type Request =
   | 'GetLayerColors'
   /** A colour number per layer (see layers.ts); 0 for none chosen. */
   | { SetLayerColors: number[] }
+  | { GetMacroName: { index: number } }
+  | { SetMacroName: { index: number; name: string } }
+  | 'GetLetterRows'
+  | { SetLetterRows: number[][] }
+  | 'GetMoreWiring'
+  | { SetMoreWiring: MatrixConfig[] }
   | { ResolveSplit: { keep_this: boolean } }
   | { SplitAgreed: { digest: number; revision: number } }
 
@@ -204,6 +217,9 @@ export type Response =
   | { SplitStatus: SplitStatus }
   | { Lighting: LightingConfig }
   | { LayerColors: number[] }
+  | { MacroName: string }
+  | { LetterRows: number[][] }
+  | { MoreWiring: MatrixConfig[] }
 
 export type DeviceEvent =
   | { Key: { pos: number; pressed: boolean } }
@@ -234,6 +250,7 @@ export const LIMITS = {
   holdTapProfiles: 4,
   encoders: 4,
   nameLength: 32,
+  macroNameLength: 16,
   leds: 120,
 }
 

@@ -39,23 +39,25 @@ import MatrixExplainer from '../components/MatrixExplainer.vue'
 import { app, attempt, benchOf, pairUp, partnerOf, relink, toast } from '../lib/app'
 import { boardsFor, findBoard, genericBoard, pinLabel, pinsOfAnyShape, shapeFromPins, wirablePins } from '../lib/boards'
 import { desktop, type BootDrive } from '../lib/desktop'
-import { localPositions } from '../lib/definition'
+import { localPositions, parseDefinition, positionCount as definitionPositions, type Definition } from '../lib/definition'
 import { arrivals as allArrivals, bootDrives, installArrival, installOnBoard, updateFirmware } from '../lib/firmware'
 import SplitPicture, { type PictureBoard } from '../components/SplitPicture.vue'
 import { chooseLink, findWires } from '../lib/cable'
 import { KeyCollector, KnobFinder } from '../lib/collector'
 import { inferWiring, type KeySignature } from '../lib/infer'
-import { bounds, hasKey, UNIT } from '../lib/layout'
+import { bounds, hasKey, NO_KEY, UNIT } from '../lib/layout'
+import { ALPHAS, letterActions, rowLayout, splitRows } from '../lib/starter'
+import LetterRows from '../components/LetterRows.vue'
 import type { Action, Contact, EncoderConfig, HardwareConfig, KeyGeometry, Pin } from '../lib/protocol'
 import { LIMITS } from '../lib/protocol'
-import { isConfigured, linkPins, needsRestart, restart, save, setHardware, setLayout, setMeta, SPLIT_PROTOCOL, starterAction, starterLayout, type Session } from '../lib/session'
+import { applyDefinition, canKeepLetterRows, isConfigured, knobSpot, linkPins, splitOffset, needsRestart, restart, save, setHardware, setLayout, setMeta, SPLIT_PROTOCOL, starterLayout, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 
 // Pressing the keys is the setup. The controller and the split pages are
 // side trips for boards that need them; 'result' only shows when the
 // wiring could not be read.
-const STEPS = ['board', 'shape', 'keys', 'result'] as const
+const STEPS = ['board', 'shape', 'keys', 'rows', 'letters', 'result'] as const
 type Step = (typeof STEPS)[number]
 const resumed = resume.get(props.session.id)
 const mine: Kept = kept.get(props.session.id) ?? { setups: reactive(new Map()), probed: '', cables: new Map(), history: [] }
@@ -353,6 +355,7 @@ function onProbe(half: Session, contacts: Contact[]) {
     return
   }
   if (findingKnob.value) return
+  if (step.value === 'rows') return onRowPress(half, contacts)
   const encoderPins = new Set(setup.encoders.flatMap((e) => [e.a, e.b]))
   const relevant = contacts.filter((c) => !('Ground' in c && encoderPins.has(c.Ground)))
   const before = setup.collector.last
@@ -365,6 +368,42 @@ function onProbe(half: Session, contacts: Contact[]) {
   if (setup.collector.keys.length > count) mine.history.push(half.id)
   bump.value++
 }
+
+// --- Rows ----------------------------------------------------------------------
+// The keys were pressed row by row. Pressing the last key of each row once
+// more tells where the rows end, and the picture can be drawn from that.
+/** Per half, the keys (by their place in press order) that end a row. */
+const rowEnds = ref<Record<string, number[]>>({})
+const endsOf = (half: Session) => rowEnds.value[half.id] ?? []
+const rowsOf = (half: Session) => splitRows(setupOf(half).collector.keys.length, endsOf(half))
+const rowsMarked = computed(() => halves.value.some((half) => endsOf(half).length > 0))
+/** A key pressed here that was not pressed before. */
+const strayKey = ref(false)
+function toggleRowEnd(half: Session, n: number) {
+  const ends = endsOf(half)
+  rowEnds.value = { ...rowEnds.value, [half.id]: ends.includes(n) ? ends.filter((end) => end !== n) : [...ends, n] }
+  shownId.value = half.id
+}
+function onRowPress(half: Session, contacts: Contact[]) {
+  const collector = setupOf(half).collector
+  const encoderPins = new Set(setupOf(half).encoders.flatMap((e) => [e.a, e.b]))
+  const [count, presses] = [collector.keys.length, collector.presses]
+  collector.update(contacts.filter((c) => !('Ground' in c && encoderPins.has(c.Ground))))
+  if (collector.keys.length > count) {
+    // Not one of the keys found before: it has no place in the order yet.
+    collector.remove(collector.keys.length - 1)
+    strayKey.value = true
+  } else if (collector.presses > presses && collector.last !== undefined) {
+    strayKey.value = false
+    toggleRowEnd(half, collector.last)
+  }
+  bump.value++
+}
+// Other keys, other rows.
+watch(keyTotal, () => {
+  rowEnds.value = {}
+  strayKey.value = false
+})
 
 let probing = false
 const allCandidates = () => halves.value.map((half) => half.id + ':' + candidatesOf(half).join(',')).join(';')
@@ -413,9 +452,11 @@ function findKnob() {
 }
 const cancelKnob = () => halves.value.forEach((half) => (setupOf(half).finder = undefined))
 
-watch(step, async (now, before) => {
-  if (now === 'keys' && before !== 'result') await startProbing()
-  if (before === 'keys' && now !== 'result') await stopProbing()
+// The keyboard reports its contacts while keys are found and while the row ends are pressed.
+const listens = (at: Step) => at === 'keys' || at === 'rows'
+watch(step, async (now) => {
+  if (listens(now) && !probing) await startProbing()
+  else if (!listens(now) && now !== 'result') await stopProbing()
 })
 watch(searchUnasked, (now) => now && findCable(true))
 aboutToSearch.value = searchUnasked.value && !led.has(props.session.id)
@@ -479,6 +520,7 @@ const plans = computed(() => {
     const link = cableOf(half)
     const hardware: HardwareConfig = {
       matrix: result.wiring.matrix,
+      more: result.wiring.more.length ? result.wiring.more : undefined,
       reserved_pins: [...reserved],
       debounce_ms: 5,
       encoders: [...setupOf(half).encoders],
@@ -499,50 +541,93 @@ const roles = computed(() => {
   if (link) [link.tx, link.rx].forEach((pin) => map.set(pin, 'link'))
   setupOf(half).encoders.forEach((e) => [e.a, e.b].forEach((pin) => map.set(pin, 'encoder')))
   if (step.value === 'result' && result.value.ok) {
-    const matrix = result.value.wiring.matrix
-    if (matrix !== 'None' && 'Direct' in matrix) matrix.Direct.pins.forEach((pin) => map.set(pin, 'direct'))
-    if (matrix !== 'None' && 'Matrix' in matrix) {
-      matrix.Matrix.rows.forEach((pin) => map.set(pin, 'row'))
-      matrix.Matrix.cols.forEach((pin) => map.set(pin, 'col'))
+    for (const part of [result.value.wiring.matrix, ...result.value.wiring.more]) {
+      if (part === 'None') continue
+      if ('Direct' in part) part.Direct.pins.forEach((pin) => map.set(pin, 'direct'))
+      else {
+        part.Matrix.rows.forEach((pin) => map.set(pin, 'row'))
+        part.Matrix.cols.forEach((pin) => map.set(pin, 'col'))
+      }
     }
   }
   return map
 })
 
+/**
+ * One picture and one keymap for the whole keyboard: the first half's keys,
+ * then the second half's to the right of them.
+ */
+const drafted = computed(() => {
+  const all = plans.value
+  if (all.some((plan) => !plan)) return undefined
+  const layout: KeyGeometry[] = []
+  const actions: Action[] = []
+  /** Positions that are a switch, not a knob. */
+  const keys: number[] = []
+  for (const [index, plan] of all.entries()) {
+    const { half, hardware, positions, offset } = plan!
+    const shift = layout.length ? Math.round(bounds(layout.filter(hasKey)).w + 2 * UNIT) : 0
+    let own: KeyGeometry[]
+    if (endsOf(half).length) {
+      // Rows as they were pressed. The left half of a split keeps its short rows at the inner edge.
+      const rows = rowsOf(half).map((row) => row.map((n) => positions[n]))
+      own = rowLayout(rows, localPositions(hardware) - 2 * hardware.encoders.length, isSplit.value && index === 0 ? 'right' : 'left')
+      hardware.encoders.forEach(() => own.push(knobSpot(own), { ...NO_KEY }))
+    } else {
+      own = starterLayout(hardware, positions)
+    }
+    layout.push(...own.map((key) => (hasKey(key) ? { ...key, x: key.x + shift } : key)))
+    // Keys start empty; the letters step, or the keymap editor later, fills them.
+    const mine: Action[] = Array(own.length).fill('Transparent')
+    for (const pos of positions) mine[pos] = { Basic: 'None' }
+    const firstKnob = own.length - 2 * hardware.encoders.length
+    for (const knob of hardware.encoders.keys()) {
+      mine[firstKnob + 2 * knob] = { Basic: { Consumer: 0xea } }
+      mine[firstKnob + 2 * knob + 1] = { Basic: { Consumer: 0xe9 } }
+    }
+    while (actions.length < offset) actions.push('Transparent')
+    keys.push(...positions.map((pos) => offset + pos))
+    actions.push(...mine)
+  }
+  return { layout, actions, keys }
+})
+
+// --- Letters -------------------------------------------------------------------
+// The user shows where the three letter rows are; the letters of a known
+// arrangement go there, and the other keys stay empty for them to fill.
+const alphasId = ref(ALPHAS[0].id)
+const alphas = computed(() => ALPHAS.find((a) => a.id === alphasId.value) ?? ALPHAS[0])
+/** The key positions of the top, home and bottom letter row. */
+const letterRows = ref<number[][]>([[], [], []])
+const lettersPlaced = computed(() => letterRows.value.some((row) => row.length > 0))
+watch(rowEnds, () => (letterRows.value = [[], [], []]))
+const letters = computed(() => letterActions(letterRows.value, alphas.value))
+/** The keymap the keyboard starts with. */
+const startActions = computed(() => {
+  const draft = drafted.value
+  if (!draft) return []
+  const actions = [...draft.actions]
+  for (const pos of draft.keys) actions[pos] = letters.value.get(pos) ?? { Basic: 'None' }
+  return actions
+})
+
 const applying = ref(false)
 async function apply() {
   const all = plans.value
-  if (all.some((plan) => !plan)) return
+  const draft = drafted.value
+  if (!draft) return
   applying.value = true
+  const actions = startActions.value
   const done = await attempt(async () => {
     await stopProbing()
-    // One picture and one keymap for the whole keyboard: the first half's
-    // keys, then the second half's to the right of them.
-    const layout: KeyGeometry[] = []
-    const actions: Action[] = []
-    let letter = 0
-    for (const plan of all) {
-      const { hardware, positions, offset } = plan!
-      const shift = layout.length ? Math.round(bounds(layout.filter(hasKey)).w + 2 * UNIT) : 0
-      const own = starterLayout(hardware, positions)
-      layout.push(...own.map((key) => (hasKey(key) ? { ...key, x: key.x + shift } : key)))
-      // Letters in the order the keys sit in the grid, so the tester shows life at once.
-      const sorted = [...positions].sort((a, b) => a - b)
-      const mine: Action[] = Array(own.length).fill('Transparent')
-      for (const pos of sorted) mine[pos] = starterAction(letter++)
-      const firstKnob = own.length - 2 * hardware.encoders.length
-      for (const index of hardware.encoders.keys()) {
-        mine[firstKnob + 2 * index] = { Basic: { Consumer: 0xea } }
-        mine[firstKnob + 2 * index + 1] = { Basic: { Consumer: 0xe9 } }
-      }
-      while (actions.length < offset) actions.push('Transparent')
-      actions.push(...mine)
-    }
     for (const plan of all) {
       const { half, hardware } = plan!
       await setHardware(half, hardware)
-      await setLayout(half, layout)
+      await setLayout(half, draft.layout)
       await half.client.setActions(0, 0, actions)
+      // Kept on the keyboard, so another arrangement can be put on the same keys later.
+      if (canKeepLetterRows(half)) await half.client.setLetterRows(letterRows.value)
+      half.letterRows = letterRows.value
       half.layers[0].splice(0, actions.length, ...actions)
       await setMeta(half, { name: name.value.trim().slice(0, LIMITS.nameLength), controller: board.value.id })
     }
@@ -553,10 +638,9 @@ async function apply() {
   applying.value = false
 }
 
-/** Every key is pressed: a wiring that makes sense is put to work at once. */
+/** Every key is pressed: with a wiring that makes sense, on to how the keys are arranged. */
 function allPressed() {
-  if (!problem.value) apply()
-  else go('result')
+  go(problem.value ? 'result' : 'rows')
 }
 
 // --- Finish ------------------------------------------------------------------
@@ -571,19 +655,66 @@ async function finish() {
     return true
   })
   if (!done) return
+  await leaveSetup(all)
+}
+
+/** The halves are set up: the editor takes over. */
+async function leaveSetup(all: Session[]) {
   for (const half of all) {
     resume.delete(half.id)
     led.delete(half.id)
     kept.delete(half.id)
     half.setup = false
-    if (!app.fresh.includes(half.id)) app.fresh.push(half.id)
   }
   relink()
   app.currentId = all[0].id
-  // The cable only starts working with the firmware's next start.
+  // Older firmware only starts using the cable with its next start.
   for (const half of all) {
     if (needsRestart(half)) await attempt(() => restart(half))
   }
+}
+
+// --- Restore from a file ---------------------------------------------------------
+// A keyboard file saved before (Share → Save as file) puts wiring, layout and
+// keymap back at once, for a board that was wiped or flashed anew.
+const backup = ref<Definition>()
+const backupInput = ref<HTMLInputElement>()
+async function pickBackup(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    const chosen = parseDefinition(await file.text())
+    if (chosen.mcu !== info.mcu) throw new Error(`This file is for a ${chosen.mcu === 'Nrf52840' ? 'nRF52840' : 'RP2040'} controller.`)
+    if (chosen.halves.length < halves.value.length) throw new Error('This file is for a keyboard in one piece, but two halves are being set up.')
+    backup.value = chosen
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error), 'error')
+  }
+}
+/** The file's halves, first half first, the way the halves here are ordered. */
+const backupHalves = computed(() =>
+  backup.value ? [...backup.value.halves.keys()].sort((a, b) => splitOffset(backup.value!.halves[a].hardware) - splitOffset(backup.value!.halves[b].hardware)) : [],
+)
+async function restoreBackup() {
+  const chosen = backup.value
+  if (!chosen) return
+  backup.value = undefined
+  applying.value = true
+  await stopProbing()
+  const all = [...ordered.value]
+  const done = await attempt(async () => {
+    for (const [index, half] of all.entries()) await applyDefinition(half, chosen, backupHalves.value[index] ?? index)
+    return true
+  })
+  applying.value = false
+  if (!done) {
+    if (step.value === 'keys') await startProbing()
+    return
+  }
+  toast(`Restored ${chosen.name}`)
+  await leaveSetup(all)
 }
 
 // --- What is on the screen -----------------------------------------------------
@@ -592,28 +723,12 @@ const view = computed(() => (step.value === 'keys' && (cable.state === 'searchin
 const splitFlow = computed(
   () => intended.value || view.value === 'cable' || arrivals.value.length > 0 || (!alone.value && !!other.value && !other.value.closed && isFresh(other.value)),
 )
-const guideSteps = computed(() => (splitFlow.value ? ['Plug in', 'Firmware', 'Find the cable', 'Find the keys'] : ['Plug in', 'Firmware', 'Find the keys']))
-const guideAt = computed(() => (view.value === 'cable' ? 2 : guideSteps.value.length - 1))
-const tip = computed(() => {
-  if (view.value === 'cable') {
-    return { title: 'Good to know', text: 'The app tries every pin on both boards to find the two wires of the cable. You never need to know which pins they are on.' }
-  }
-  if (view.value === 'board') {
-    return { title: 'Good to know', text: 'Mark pins that have something other than a key soldered to them. JMK never sends anything to a marked pin.' }
-  }
-  if (view.value === 'shape') {
-    return {
-      title: 'From experience',
-      text: 'Join the halves with their cable before the USB cables, and do not plug or pull that cable while a half has power: the plug shorts its contacts on the way in.',
-    }
-  }
-  if (view.value === 'result') return undefined
-  return {
-    title: 'From experience',
-    text: 'Go row by row from the top left. A key that does not show up is nearly always a cold solder joint, or a diode the wrong way round.',
-  }
+const guideSteps = computed(() => [...(splitFlow.value ? ['Plug in', 'Firmware', 'Find the cable'] : ['Plug in', 'Firmware']), 'Find the keys', 'Rows', 'Letters'])
+const guideAt = computed(() => {
+  if (view.value === 'cable') return 2
+  const keysAt = guideSteps.value.indexOf('Find the keys')
+  return keysAt + (view.value === 'rows' ? 1 : view.value === 'letters' ? 2 : 0)
 })
-
 /** The menu of things most keyboards do not have. */
 const menu = ref(false)
 /** The whole controller is shown, or the explanation of how keys are found. */
@@ -655,13 +770,24 @@ const explaining = ref(false)
 
 function next() {
   if (step.value === 'keys') allPressed()
+  else if (step.value === 'rows') go('letters')
+  else if (step.value === 'letters') apply()
   else go('keys')
 }
+const back = () => go(step.value === 'letters' ? 'rows' : 'keys')
+const nextLabel = computed(() => {
+  if (applying.value) return 'Saving…'
+  if (view.value === 'keys' || view.value === 'cable') return "That's all of them"
+  if (view.value === 'rows') return rowsMarked.value ? 'Continue' : 'Skip'
+  if (view.value === 'letters') return lettersPlaced.value ? 'Finish' : 'Skip'
+  if (view.value === 'result') return 'Press the keys again'
+  return isSplit.value ? 'Press the keys' : 'Continue'
+})
 </script>
 
 <template>
   <div class="wizard">
-    <SetupGuide :steps="guideSteps" :current="guideAt" :tip="tip" />
+    <SetupGuide :steps="guideSteps" :current="guideAt" />
     <div class="stage col">
     <Transition :name="direction === 'forward' ? 'slide' : 'slide-back'" mode="out-in">
       <!-- 2 ------------------------------------------------------------------>
@@ -751,7 +877,8 @@ function next() {
                 <template v-else>
                   <strong>Plug in the other half too</strong>
                   <span class="muted small">
-                    It appears here by itself; there is nothing to click.
+                    It appears here by itself; there is nothing to click. Join the halves with their cable
+                    before either has power: plugging that cable in shorts its contacts on the way.
                   </span>
                   <span class="waiting small" data-test="other-waiting">Waiting for the other half…</span>
                   <div v-for="drive in bootDrives" :key="drive.path" class="note col" data-test="boot-drive">
@@ -962,6 +1089,50 @@ function next() {
         </div>
       </section>
 
+      <!-- Rows: where each one ends ------------------------------------------>
+      <section v-else-if="view === 'rows'" key="rows" class="page centre">
+        <h1>Press the last key of each row.</h1>
+        <p class="muted lead">
+          You pressed the keys row by row. The key at the right end of each row tells the app where the next row
+          starts, so the picture comes out like your keyboard. Press one again to take it back.
+        </p>
+        <div class="halves" :class="{ single: !isSplit }">
+          <div v-for="(half, index) in ordered" :key="half.id" class="half col" :class="{ live: isSplit && shown === half }">
+            <div v-if="isSplit" class="row half-name">
+              <span class="chip" :class="{ accent: shown === half }">{{ sideName(half) }}</span>
+              <span class="muted small">{{ rowsOf(half).length }} {{ rowsOf(half).length === 1 ? 'row' : 'rows' }}</span>
+            </div>
+            <div class="lines col" :class="{ inner: isSplit && index === 0 }" :data-test="'rows-' + (index + 1)">
+              <div v-for="(line, at) in rowsOf(half)" :key="at" class="line row">
+                <button
+                  v-for="n in line"
+                  :key="n"
+                  class="row-key"
+                  :class="{ end: endsOf(half).includes(n), last: shown === half && setupOf(half).collector.last === n }"
+                  :title="endsOf(half).includes(n) ? 'Ends its row. Click to take that back.' : 'Click if this is the last key of its row'"
+                  :data-test="'row-key-' + (index + 1) + '-' + n"
+                  @click="toggleRowEnd(half, n)"
+                >
+                  {{ n + 1 }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <Transition name="rise">
+          <div v-if="strayKey" class="note warn" data-test="stray-key">
+            That key was not pressed before. <button class="link" @click="go('keys')">Go back</button> to add it.
+          </div>
+        </Transition>
+      </section>
+
+      <!-- Letters: where the three letter rows are --------------------------->
+      <section v-else-if="view === 'letters'" key="letters" class="page centre">
+        <h1>Where do the letters go?</h1>
+        <p class="muted lead">Show where the three rows of letters are, and pick the arrangement that goes on them.</p>
+        <LetterRows v-if="drafted" v-model:rows="letterRows" v-model:alphas="alphasId" :layout="drafted.layout" :keys="drafted.keys" />
+      </section>
+
       <!-- Only when the presses did not add up to a wiring ------------------->
       <section v-else key="result" class="page two">
         <div class="col text">
@@ -977,11 +1148,31 @@ function next() {
 
     </Transition>
 
+    <Transition name="fade">
+      <div v-if="backup" class="overlay" @click.self="backup = undefined">
+        <div class="card col dialog" data-test="restore-dialog">
+          <h2>Restore “{{ backup.name }}”?</h2>
+          <p class="muted">
+            {{ definitionPositions(backup.halves) }} key positions{{ backup.halves.length > 1 ? ' across two halves' : '' }},
+            {{ backup.keymap.layers.length }} layer{{ backup.keymap.layers.length === 1 ? '' : 's' }}. The wiring, layout and keymap
+            come from the file, so the keys need not be pressed.
+          </p>
+          <p v-if="backup.halves.length > halves.length" class="note warn">Only one half is here. Connect the other half first, or restore it on its own later.</p>
+          <div class="row">
+            <span class="grow" />
+            <button class="btn ghost" @click="backup = undefined">Cancel</button>
+            <button class="btn primary" data-test="restore-apply" @click="restoreBackup">Restore</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <footer class="setup-bar row">
       <template v-if="view === 'keys'">
         <button class="btn ghost" :disabled="!keyTotal" data-test="undo-key" @click="undoLast">Undo</button>
         <button v-if="isSplit" class="btn ghost" :disabled="!firstId" data-test="swap-sides" @click="swapSides">Swap sides</button>
         <div class="menu-wrap">
+          <input ref="backupInput" type="file" accept=".json,application/json" hidden data-test="restore-file" @change="pickBackup" />
           <button class="btn ghost" :class="{ on: menu }" data-test="special" @click="menu = !menu">Something special ▾</button>
           <Transition name="rise">
             <div v-if="menu" class="menu card col" @click="menu = false">
@@ -994,6 +1185,9 @@ function next() {
               <button class="aside" data-test="open-shape" @click="go('shape')">
                 <span class="plus">›</span> {{ isSplit ? 'The two halves and their cable' : 'It is one half of a split keyboard' }}
               </button>
+              <button class="aside" data-test="restore" @click="backupInput?.click()">
+                <span class="plus">↺</span> Restore from a keyboard file
+              </button>
               <button class="aside" data-test="explain" @click="showPins(true)">
                 <span class="plus">?</span> How pressing keys tells it the wiring
               </button>
@@ -1001,11 +1195,11 @@ function next() {
           </Transition>
         </div>
       </template>
-      <button v-else-if="view !== 'cable'" class="btn ghost" data-test="back" @click="go('keys')">Back</button>
+      <button v-else-if="view !== 'cable'" class="btn ghost" data-test="back" @click="back">Back</button>
       <span v-else class="muted small">continues by itself</span>
       <span class="grow" />
       <button v-show="view !== 'cable'" class="btn primary" :disabled="!canContinue || applying || view === 'cable'" data-test="next" @click="next">
-        {{ applying ? 'Saving…' : view === 'keys' || view === 'cable' ? "That's all of them" : view === 'result' ? 'Press the keys again' : isSplit ? 'Press the keys' : 'Continue' }}
+        {{ nextLabel }}
       </button>
     </footer>
     </div>
@@ -1041,8 +1235,7 @@ function next() {
 <style scoped>
 .stage {
   flex: 1;
-  min-width: 0;
-  height: 100%;
+  min-height: 0;
 }
 
 .centre {
@@ -1178,6 +1371,7 @@ function next() {
 
 .wizard {
   display: flex;
+  flex-direction: column;
   height: 100%;
   position: relative;
 }
@@ -1618,4 +1812,76 @@ progress {
     opacity: 0.45;
   }
 }
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 40;
+}
+
+.dialog {
+  width: min(480px, 90vw);
+  box-shadow: var(--shadow);
+}
+
+/* Rows and letters */
+.lines {
+  gap: 6px;
+  align-self: stretch;
+}
+
+.lines.inner {
+  align-items: flex-end;
+}
+
+.line {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.row-key {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 9px;
+  background: var(--cap-top);
+  border-bottom: 4px solid var(--cap);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s;
+}
+
+.row-key:hover {
+  box-shadow: 0 0 0 2px var(--muted);
+}
+
+.row-key.end {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.row-key.end::after {
+  content: '↵';
+  position: absolute;
+  right: -5px;
+  top: -7px;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 0.65rem;
+}
+
 </style>

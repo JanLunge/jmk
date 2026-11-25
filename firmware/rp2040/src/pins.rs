@@ -1,4 +1,5 @@
 use embassy_rp::gpio::{AnyPin, Flex, Pull as RpPull};
+use embassy_rp::pac;
 use embassy_time::{block_for, Duration};
 use jmk_device::{Pins, Pull};
 use jmk_proto::{LinkConfig, Pin};
@@ -58,6 +59,20 @@ impl Pins for RpPins {
 
     fn supports_lights(&self, pin: Pin) -> bool {
         (pin as usize) < GPIO_COUNT
+    }
+
+    fn reclaim(&mut self) {
+        // A pin that was claimed here once and then lent to the UART or the
+        // PIO comes back connected to nothing; a pin never claimed is
+        // connected when it is first asked for.
+        const NOTHING: u8 = pac::io::vals::Gpio0ctrlFuncsel::NULL as u8;
+        const GPIO: u8 = pac::io::vals::Gpio0ctrlFuncsel::SIO_0 as u8;
+        for (number, _) in self.pins.iter().enumerate().filter(|(_, pin)| pin.is_some()) {
+            let ctrl = pac::IO_BANK0.gpio(number).ctrl();
+            if ctrl.read().funcsel() == NOTHING {
+                ctrl.write(|w| w.set_funcsel(GPIO));
+            }
+        }
     }
 
     fn show_lights(&mut self, colors: &[[u8; 3]]) {

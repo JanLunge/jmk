@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { app, installVirtual, openDemo, plugCable, plugUsb, reconcile, RESTART_MS } from '../../src/lib/app'
 import { DEMOS } from '../../src/lib/demos'
-import { save, setAction, setHardware, setLayout, starterAction, starterLayout, type Session } from '../../src/lib/session'
+import { save, setAction, setHardware, setLayout, starterLayout, type Session } from '../../src/lib/session'
+import { starterAction } from './keys'
 import { loadBridge } from '../../src/lib/wasm'
 
 beforeAll(async () => {
@@ -25,8 +26,10 @@ describe('virtual workbench', () => {
     await Promise.all([installVirtual(bench, 0), installVirtual(bench, 1)])
     // Flashed, they restart before they are keyboards.
     expect(app.sessions).toHaveLength(0)
-    await wait(RESTART_MS + 400)
-    expect(app.sessions).toHaveLength(2)
+    await wait(RESTART_MS - 200)
+    expect(app.sessions).toHaveLength(0)
+    // Then each is opened and read, which takes a moment.
+    await expect.poll(() => app.sessions.length, { timeout: 5000 }).toBe(2)
 
     const matrix = { Matrix: { rows: [2, 3, 4, 5], cols: [6, 7, 8, 9, 10], diodes: 'Col2Row' as const } }
     const base = { matrix, reserved_pins: [], debounce_ms: 5, encoders: [] }
@@ -40,7 +43,7 @@ describe('virtual workbench', () => {
       await save(half)
       half.setup = false
     }
-    // The cable setting takes effect with a restart: pull both off power.
+    // Both come back from a power cut still set up as halves.
     await plugUsb(bench, 0, false)
     await plugUsb(bench, 1, false)
     await plugUsb(bench, 0, true)

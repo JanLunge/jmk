@@ -1,8 +1,8 @@
 //! The chain of RGB lights (WS2812 and compatible).
 //!
 //! A PIO program shapes the bits and DMA feeds it, so a picture goes out
-//! with exact timing whatever the keyboard is busy with. The chain is set
-//! up once at start; a changed data pin takes effect after a restart.
+//! with exact timing whatever the keyboard is busy with. A changed data pin
+//! is followed while the keyboard runs.
 
 use core::cell::RefCell;
 
@@ -11,11 +11,13 @@ use embassy_rp::clocks::clk_sys_freq;
 use embassy_rp::peripherals::{self, DMA_CH0, PIO0};
 use embassy_rp::pio::program::{Assembler, JmpCondition, OutDestination, SetDestination, SideSet};
 use embassy_rp::pio::{self, Config, FifoJoin, Pio, ShiftConfig, ShiftDirection};
+use embassy_futures::select::{select, Either};
 use embassy_rp::{bind_interrupts, dma, Peri};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::Timer;
 use fixed::types::U24F8;
+use jmk_embassy::wiring::Wiring;
 use jmk_proto::{Pin, MAX_LEDS};
 
 bind_interrupts!(struct Irqs {
@@ -51,9 +53,22 @@ pub fn show(colors: &[[u8; 3]]) {
     FRESH.signal(());
 }
 
-/// Send every picture handed to [`show`] down the chain on `pin`, forever.
-/// Nothing else may use that pin.
-pub async fn run(pio: Peri<'static, PIO0>, dma: Peri<'static, DMA_CH0>, pin: Option<Pin>) {
+/// Send every picture handed to [`show`] down the chain, forever, on
+/// whichever pin is configured at the time. Nothing else may use that pin.
+pub async fn run(mut pio: Peri<'static, PIO0>, dma: Peri<'static, DMA_CH0>, wiring: &Wiring) -> ! {
+    let mut channel = dma::Channel::new(dma, Irqs);
+    let mut pin = wiring.light().await;
+    loop {
+        // Ends with a new pin. The PIO is dropped with it, and that takes
+        // the old pin off the PIO at once.
+        pin = match select(send(pio.reborrow(), &mut channel, pin), wiring.light()).await {
+            Either::First(never) => match never {},
+            Either::Second(pin) => pin,
+        };
+    }
+}
+
+async fn send(pio: Peri<'_, PIO0>, channel: &mut dma::Channel<'_>, pin: Option<Pin>) -> core::convert::Infallible {
     let Some(pin) = pin else { return core::future::pending().await };
     let Pio { mut common, mut sm0, .. } = Pio::new(pio, Irqs);
 
@@ -99,10 +114,15 @@ pub async fn run(pio: Peri<'static, PIO0>, dma: Peri<'static, DMA_CH0>, pin: Opt
     config.fifo_join = FifoJoin::TxOnly;
     config.shift_out = ShiftConfig { auto_fill: true, threshold: 24, direction: ShiftDirection::Left };
     sm0.set_config(&config);
+    // Nothing half sent is left over from the pin before.
+    sm0.clear_fifos();
+    sm0.restart();
     sm0.set_enable(true);
 
-    let mut channel = dma::Channel::new(dma, Irqs);
     let mut words = [0u32; MAX_LEDS];
+    // The picture of the moment goes out first: after a change of pin
+    // nobody hands it over again.
+    FRESH.signal(());
     loop {
         FRESH.wait().await;
         let len = critical_section::with(|cs| {
@@ -110,7 +130,7 @@ pub async fn run(pio: Peri<'static, PIO0>, dma: Peri<'static, DMA_CH0>, pin: Opt
             words = picture.words;
             picture.len
         });
-        sm0.tx().dma_push(&mut channel, &words[..len], false).await;
+        sm0.tx().dma_push(channel, &words[..len], false).await;
         // The lights take the colours over once the line has been quiet.
         Timer::after_micros(300).await;
     }

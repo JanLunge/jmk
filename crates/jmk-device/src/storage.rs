@@ -127,6 +127,9 @@ fn encode(config: &Config, buf: &mut [u8]) -> Option<usize> {
     put(buf, &mut used, &config.layer_colors)?;
     put(buf, &mut used, &config.revision)?;
     put(buf, &mut used, &config.base)?;
+    put(buf, &mut used, &config.macro_names)?;
+    put(buf, &mut used, &config.letter_rows)?;
+    put(buf, &mut used, &config.more_wiring)?;
     Some(used)
 }
 
@@ -156,6 +159,13 @@ fn decode(mut bytes: &[u8], config: &mut Config) -> Option<()> {
     config.layer_colors = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
     config.revision = if bytes.is_empty() { 0 } else { take(&mut bytes)? };
     config.base = if bytes.is_empty() { None } else { take(&mut bytes)? };
+    if bytes.is_empty() {
+        config.macro_names.iter_mut().for_each(|name| name.clear());
+    } else {
+        config.macro_names = take(&mut bytes)?;
+    }
+    config.letter_rows = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
+    config.more_wiring = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
     config.hardware = hardware;
     config.layer_count = layer_count;
     config.profiles = profiles;

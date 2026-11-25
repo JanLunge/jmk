@@ -72,15 +72,6 @@ const helping = ref(false)
 /** The list of virtual keyboards is open. */
 const trying = ref(false)
 const steps = computed(() => (seen.size > 1 ? ['Plug in', 'Firmware', 'Find the cable', 'Find the keys'] : ['Plug in', 'Firmware', 'Find the keys']))
-const tip = computed(() =>
-  stage.value === 'waiting'
-    ? {
-        title: 'From experience',
-        text: 'For a split, join the halves with their cable before the USB cables, and do not plug or pull that cable while a half has power: the plug shorts its contacts on the way in.',
-      }
-    : { title: 'Good to know', text: 'This is needed once. Later updates are one click in the Hardware tab and keep your keymap.' },
-)
-
 /** One line on what an open keyboard is, so it is clear the app has seen it. */
 function describe(session: (typeof app.sessions)[number]): string {
   if (session.closed) return session.restarting ? 'restarting…' : 'unplugged'
@@ -101,7 +92,7 @@ const previews = computed(() =>
 
 <template>
   <div class="home">
-    <SetupGuide :steps="steps" :current="stage === 'waiting' ? 0 : 1" :tip="tip" />
+    <SetupGuide :steps="steps" :current="stage === 'waiting' ? 0 : 1" />
     <div class="side col">
       <div class="setup-fill" :class="{ listed: app.sessions.length }">
         <!-- Keyboards that are open already come first: they are what you came back for. -->
@@ -143,7 +134,8 @@ const previews = computed(() =>
                 <p class="muted lead">
                   <template v-if="desktop">It shows up here by itself.</template>
                   <template v-else>Then connect it below.</template>
-                  One board or two: for a split, give each half its own USB cable, just for the setup.
+                  One board or two: for a split, give each half its own USB cable, just for the setup, and join
+                  the halves with their cable first. Plugging that cable in under power shorts its contacts.
                 </p>
               </template>
             </div>
@@ -218,8 +210,7 @@ const previews = computed(() =>
 <style scoped>
 .side {
   flex: 1;
-  min-width: 0;
-  height: 100%;
+  min-height: 0;
 }
 
 .listed {
@@ -248,6 +239,7 @@ const previews = computed(() =>
 .home {
   height: 100%;
   display: flex;
+  flex-direction: column;
 }
 
 .open {

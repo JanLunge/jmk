@@ -49,10 +49,9 @@ async fn main(_spawner: Spawner) {
     // Left at zero if the flash chip does not report an ID.
     let _ = flash.blocking_unique_id(&mut uid);
     let storage = Storage::new(flash, STORAGE_OFFSET, STORAGE_BUF.take());
-    let board = Board { mcu: Mcu::Rp2040, firmware: jmk_embassy::firmware_version!(), uid };
+    let board = Board { mcu: Mcu::Rp2040, firmware: jmk_proto::FIRMWARE_VERSION, uid };
     let mut device = Device::new(board, pins::RpPins::new(), storage, CONFIG.take());
-    let light_pin = device.lighting().pin;
-    let serial = device.hardware().split.link().and_then(|config| link::SerialLink::open(&config));
+    let wiring = jmk_embassy::wiring::Wiring::new();
 
     // Saving to flash blocks for a few hundred milliseconds.
     const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(3);
@@ -64,18 +63,14 @@ async fn main(_spawner: Spawner) {
         &hid_queues,
         &link_queues,
         &config_queues,
+        &wiring,
         || watchdog.feed(WATCHDOG_TIMEOUT),
         jmk_embassy::usb::listening,
         reboot,
     );
     let usb = Usb::new(Driver::new(p.USB, Irqs));
-    let cable = async {
-        match serial {
-            Some(serial) => serial.run(&link_queues).await,
-            None => core::future::pending().await,
-        }
-    };
-    let lights = lights::run(p.PIO0, p.DMA_CH0, light_pin);
+    let cable = link::run(&wiring, &link_queues);
+    let lights = lights::run(p.PIO0, p.DMA_CH0, &wiring);
     join4(run, usb.run(&hid_queues, &config_queues), cable, lights).await;
 }
 
