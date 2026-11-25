@@ -8,7 +8,7 @@ Keyboard firmware you configure after flashing, and the app that does it
 > it on my own keyboards, but most of the code was written with AI coding
 > tools and not typed by hand.
 
-![The setup finding a macro pad's wiring from key presses](assets/wizard.png)
+![The keymap of a split keyboard in POG](assets/editor.png)
 
 **JMK** is the keyboard firmware written in Rust. You flash one prebuilt file, and pins,
 wiring, keymap and everything else are set from the app afterwards and kept
