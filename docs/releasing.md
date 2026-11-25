@@ -33,7 +33,7 @@ without tagging or uploading. `--skip-checks` leaves out `scripts/check.sh`.
      Windows installer is cross-built there with Wine; it is not signed.
    - `scripts/check.sh`, at the same time. A failure stops the release.
 3. **Checked:** every system's update feed (`latest*.yml`) is there, and macOS
-   accepts the disk images.
+   accepts the notarised app.
 4. **Published:** uploaded to a draft release, which is made public only once
    every file is up. An installed app never sees half a release.
 
