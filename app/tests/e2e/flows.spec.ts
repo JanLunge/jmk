@@ -580,6 +580,11 @@ test('typing on the computer keyboard fills the keymap key by key', async ({ pag
   await openDemo(page, 'macropad')
   await runWizard(page)
   await page.locator('[data-test=keymap-board] [data-pos="0"]').dispatchEvent('pointerdown')
+  // Off until asked for: a stray key press does not change the keymap.
+  await expect(page.locator('[data-test=typing]')).not.toBeChecked()
+  await page.keyboard.press('z')
+  await expect(page.locator('[data-test=keymap-board] [data-pos="0"]')).toHaveClass(/selected/)
+  await page.check('[data-test=typing]')
   await page.keyboard.press('q')
   await page.keyboard.press('Shift+1')
   await page.keyboard.press('Escape')

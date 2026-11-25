@@ -8,7 +8,7 @@ Keyboard firmware you configure after flashing, and the app that does it
 > it on my own keyboards, but most of the code was written with AI coding
 > tools and not typed by hand.
 
-![The setup finding a macro pad's wiring from key presses](assets/wizard.png)
+![The keymap of a split keyboard in POG](assets/editor.png)
 
 **JMK** is the keyboard firmware written in Rust. You flash one prebuilt file, and pins,
 wiring, keymap and everything else are set from the app afterwards and kept
@@ -90,13 +90,13 @@ in [docs/internals.md](docs/internals.md).
 - [ ] a duplex matrix can show a key that is not held with four or more keys down (true for the wiring itself, but untested on a real one)
 - [ ] setting up a split with only one half plugged in restores only that half from a keyboard file
 - [ ] the macro recorder cannot see shortcuts the system takes for itself
+- [ ] the setups key presses need a bit of time because we check all variants so type slowly (i want to speed this up)
 
 ## next
 - [ ] releases with installers for macOS, Windows and Linux
 - [ ] CI that runs the check script
 - [ ] run the nRF52840 port on a real board
-- [ ] test split, duplex and mixed wiring on real boards
-- [ ] Windows
+- [ ] test duplex and mixed wiring on real boards
 
 ## wishlist
 - [ ] split halves over Bluetooth
@@ -109,3 +109,4 @@ in [docs/internals.md](docs/internals.md).
 # License
 
 [Apache License 2.0](LICENSE).
+

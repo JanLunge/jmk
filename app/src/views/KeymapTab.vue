@@ -172,7 +172,8 @@ const PICKER_KEY = 'jmk.keymap.picker'
 const minimized = ref(localStorage.getItem(PICKER_KEY) === 'min')
 watch(minimized, (on) => localStorage.setItem(PICKER_KEY, on ? 'min' : 'open'))
 const TYPING_KEY = 'jmk.keymap.typing'
-const typing = ref(localStorage.getItem(TYPING_KEY) !== 'off')
+// Off unless asked for: a key press meant for something else must not change the keymap.
+const typing = ref(localStorage.getItem(TYPING_KEY) === 'on')
 watch(typing, (on) => localStorage.setItem(TYPING_KEY, on ? 'on' : 'off'))
 
 /** A JMK keyboard reported a key change this recently, so what was typed came from it. */
@@ -391,7 +392,8 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
         <span class="grow" />
         <button v-if="view === 'edit'" class="btn small ghost" title="Put QWERTY, Colemak or Dvorak on this layer in one go" data-test="letters-open" @click="openLetters">Letters</button>
         <label v-if="view === 'edit'" class="row typing small" title="Press a key on your computer's keyboard to put it on the selected key, and move on to the next">
-          <input v-model="typing" type="checkbox" data-test="typing" />
+          <!-- Let go of the box once ticked: the next key press is meant for the keymap, not for the box. -->
+          <input v-model="typing" type="checkbox" data-test="typing" @change="($event.target as HTMLElement).blur()" />
           Type to assign
         </label>
         <button class="btn small ghost" :class="{ primary: view === 'all' }" data-test="all-layers" @click="view = view === 'all' ? 'edit' : 'all'">
