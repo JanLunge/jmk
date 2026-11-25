@@ -49,12 +49,13 @@ test('a keyboard file restores a board that is set up again', async ({ page }) =
   await expect(typed(page)).toHaveText('qb')
 })
 
-test('setup: row ends give the picture, painted rows give the letters', async ({ page }) => {
+test('setup: row ends give the picture; a macro pad is not asked for letter rows', async ({ page }) => {
   await openDemo(page, 'macropad')
   await expect(page.locator('[data-test=found]')).toBeVisible()
   await page.waitForTimeout(750)
   // The bottom row of the bench first: the order pressed is the order drawn.
   for (const key of [3, 4, 5, 0, 1, 2]) await tap(page, key)
+  await expect(page.locator('[data-test=setup-guide]')).not.toContainText('Letters')
   await page.click('[data-test=next]')
 
   // The last key of the first row, pressed on the keyboard; a key not pressed before does not count.
@@ -66,6 +67,32 @@ test('setup: row ends give the picture, painted rows give the letters', async ({
   await page.click('[data-test=row-key-1-2]')
   await expect(page.locator('[data-test=rows-1] .line')).toHaveCount(1)
   await page.click('[data-test=row-key-1-2]')
+
+  // Six keys cannot hold the alphabet: the rows are the last step.
+  await expect(page.locator('[data-test=next]')).toHaveText('Finish')
+  await page.click('[data-test=next]')
+  await expect(page.locator('[data-test=rename]')).toBeVisible()
+  await expect(page.locator('[data-test=letters-board]')).toHaveCount(0)
+
+  // The first key pressed is top left; the row pressed second sits below it.
+  const places = await page.locator('[data-test=keymap-board] [data-pos]').evaluateAll((keys) =>
+    keys
+      .map((key) => ({ pos: Number(key.getAttribute('data-pos')), box: key.getBoundingClientRect() }))
+      .sort((a, b) => Math.round(a.box.y - b.box.y) || a.box.x - b.box.x)
+      .map((key) => key.pos),
+  )
+  expect(places).toEqual([0, 1, 2, 3, 4, 5])
+})
+
+test('setup: painted rows give the letters on a keyboard that can hold them', async ({ page }) => {
+  await openDemo(page, 'forty')
+  await expect(page.locator('[data-test=found]')).toBeVisible()
+  await page.waitForTimeout(750)
+  for (let key = 0; key < 40; key++) await tap(page, key)
+  await expect(page.locator('[data-test=setup-guide]')).toContainText('Letters')
+  await page.click('[data-test=next]')
+  for (const end of [9, 19, 29]) await tap(page, end)
+  await expect(page.locator('[data-test=rows-1] .line')).toHaveCount(4)
   await expect(page.locator('[data-test=next]')).toHaveText('Continue')
   await page.click('[data-test=next]')
 
@@ -75,26 +102,18 @@ test('setup: row ends give the picture, painted rows give the letters', async ({
   // Positions are numbered in the order the keys were pressed.
   await board(0).dispatchEvent('pointerdown')
   await page.dispatchEvent('body', 'pointerup')
-  await expect(page.locator('[data-test=letter-row-0]')).toContainText('3 keys')
+  await expect(page.locator('[data-test=letter-row-0]')).toContainText('10 keys')
   await expect(page.locator('[data-test=letter-row-1]')).toHaveClass(/on/)
-  await board(3).dispatchEvent('pointerdown')
+  await board(10).dispatchEvent('pointerdown')
   await page.dispatchEvent('body', 'pointerup')
   await expect(board(2)).toHaveText('F')
   await expect(page.locator('[data-test=next]')).toHaveText('Finish')
   await page.click('[data-test=next]')
   await expect(page.locator('[data-test=rename]')).toBeVisible()
 
-  // The first key pressed is top left and types Q; the row pressed second sits below and starts with A.
-  const legends = await page.locator('[data-test=keymap-board] [data-pos]').evaluateAll((keys) =>
-    keys
-      .map((key) => ({ text: key.textContent!.trim(), box: key.getBoundingClientRect() }))
-      .sort((a, b) => Math.round(a.box.y - b.box.y) || a.box.x - b.box.x)
-      .map((key) => key.text),
-  )
-  expect(legends).toEqual(['Q', 'W', 'F', 'A', 'R', 'S'])
-  await tap(page, 3)
-  await tap(page, 5)
   await tap(page, 0)
+  await tap(page, 2)
+  await tap(page, 10)
   await expect(typed(page)).toHaveText('qfa')
 })
 
@@ -962,4 +981,38 @@ test('two virtual keyboards stay apart and can be switched between', async ({ pa
   await runSplitWizard(page)
   await keyboards.first().click()
   await expect(page.locator('[data-test=rename]')).toHaveValue('Macro pad')
+})
+
+test('setup: a key press is acknowledged with a tone, which can be turned off', async ({ page }) => {
+  // Count the tones instead of listening to them.
+  await page.addInitScript(() => {
+    const tones: number[] = ((window as unknown as { tones: number[] }).tones = [])
+    // A pitch is set in hertz, a volume well below one.
+    const set = AudioParam.prototype.setValueAtTime
+    AudioParam.prototype.setValueAtTime = function (value: number, when: number) {
+      if (value > 20) tones.push(value)
+      return set.call(this, value, when)
+    }
+  })
+  const tones = () => page.evaluate(() => (window as unknown as { tones: number[] }).tones)
+  await openDemo(page, 'macropad')
+  await page.waitForTimeout(750)
+
+  await tap(page, 0)
+  await expect(page.locator('[data-test=count]')).toContainText('1 key')
+  expect(await tones()).toHaveLength(1)
+
+  // The same key again sounds lower: nothing new was found.
+  await tap(page, 0)
+  const [fresh, again] = await tones()
+  expect(again).toBeLessThan(fresh)
+
+  await page.click('[data-test=sound]')
+  await tap(page, 1)
+  await expect(page.locator('[data-test=count]')).toContainText('2 keys')
+  expect(await tones()).toHaveLength(2)
+
+  // Off stays off the next time the app opens.
+  await page.reload()
+  expect(await page.evaluate(() => localStorage.getItem('jmk.sound'))).toBe('off')
 })

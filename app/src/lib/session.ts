@@ -10,6 +10,7 @@ import { localPositions, wiringParts } from './definition'
 import type { Definition, Keymap } from './definition'
 import { DEFINITION_SCHEMA } from './definition'
 import type {
+  LinkConfig,
   Action,
   Combo,
   HardwareConfig,
@@ -199,12 +200,23 @@ const NO_SPLIT: SplitStatus = { connected: false, remote_positions: 0, leading: 
   base: null,
 }
 
-/** The cable pins a half is set up with. */
+/**
+ * The cable pins a half is set up with. A cable with a single data wire
+ * sends and receives on the same pin.
+ */
 export function linkPins(hardware: HardwareConfig): { tx: Pin; rx: Pin } | undefined {
   const split = hardware.split
   if (split === 'None' || split.Half.link === 'Ble') return undefined
+  if ('Wire' in split.Half.link) return { tx: split.Half.link.Wire.pin, rx: split.Half.link.Wire.pin }
   return split.Half.link.Uart
 }
+
+/** The link setting for cable pins, as [`linkPins`] gives them. */
+export const linkFor = (pins: { tx: Pin; rx: Pin }): LinkConfig => (pins.tx === pins.rx ? { Wire: { pin: pins.tx } } : { Uart: pins })
+
+/** From this protocol on a cable with a single data wire works (RP2040 only). */
+export const ONE_WIRE_PROTOCOL = 10
+export const canShareWire = (session: Session) => session.info.protocol >= ONE_WIRE_PROTOCOL && session.info.mcu === 'Rp2040'
 
 /** Where this board's positions start in the keymap. */
 export const splitOffset = (hardware: HardwareConfig) => (hardware.split === 'None' ? 0 : hardware.split.Half.offset)

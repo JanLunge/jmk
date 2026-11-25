@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import VirtualBoard from './components/VirtualBoard.vue'
 import { app, benchOf, closeSession, current, halvesOf, partnerOf, reconnectUsb } from './lib/app'
-import { desktop } from './lib/desktop'
+import { appUpdate, desktop } from './lib/desktop'
 import { updating, watchBootDrives } from './lib/firmware'
 import { role, type Session } from './lib/session'
 import Editor from './views/Editor.vue'
@@ -71,6 +71,9 @@ onMounted(() => {
         <strong>POG</strong><span class="version" title="The second POG, built on JMK firmware">v2</span>
         <template v-if="current"> · {{ current.meta.name || current.transport.label }}</template>
       </span>
+      <button v-if="appUpdate?.kind === 'ready'" class="app-update" data-test="app-update" @click="desktop.update.install()">
+        Restart to update to {{ appUpdate.next }}
+      </button>
     </header>
     <div class="frame">
     <nav class="rail">
@@ -149,6 +152,7 @@ onMounted(() => {
 
 /* Keep the height in step with TITLEBAR_HEIGHT in electron/main.cjs. */
 .titlebar {
+  position: relative;
   flex: none;
   height: 40px;
   display: flex;
@@ -164,6 +168,28 @@ onMounted(() => {
 
 .titlebar.on-darwin {
   padding: 0 84px;
+}
+
+/* On the side the window buttons are not. */
+.app-update {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.on-darwin .app-update {
+  left: auto;
+  right: 12px;
 }
 
 .title {

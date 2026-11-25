@@ -32,6 +32,10 @@ Add `JMK_REAL=1` to the last command with a JMK keyboard attached to also
 check that the desktop app reads it. On Linux the user needs access to the
 keyboard's hidraw device; a udev rule for USB ID 1209:0001 does that.
 
+The desktop app started with `npm run start` can be inspected while it runs:
+it listens for DevTools on `http://127.0.0.1:9333` (`POG_CDP_PORT` picks
+another port, `POG_CDP_PORT=0` none). Released apps never open that port.
+
 ## Layout
 
 | Path | What it is |

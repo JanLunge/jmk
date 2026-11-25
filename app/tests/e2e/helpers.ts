@@ -102,12 +102,14 @@ export async function runWizard(page: Page, options: SetupOptions = {}) {
   if (!options.empty) await giveLetters(page)
 }
 
-/** After the keys: the row ends and the letter rows, both left out. Saves the keyboard and opens the editor. */
+/** After the keys: the row ends and, on a keyboard large enough, the letter rows, both left out. Saves the keyboard and opens the editor. */
 export async function skipArranging(page: Page) {
   await expect(page.locator('[data-test=next]')).toHaveText('Skip')
   await page.click('[data-test=next]')
-  await expect(page.locator('[data-test=letters-board]')).toBeVisible()
-  await page.click('[data-test=next]')
+  // A keyboard too small for the alphabet is not asked where the letters go.
+  const letters = page.locator('[data-test=letters-board]')
+  await expect(letters.or(page.locator('[data-test=rename]')).first()).toBeVisible()
+  if (await letters.isVisible()) await page.click('[data-test=next]')
 }
 
 /**

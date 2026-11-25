@@ -7,7 +7,7 @@ import { isConfigured, role } from '../lib/session'
 import KeyboardView from '../components/KeyboardView.vue'
 import { app, connectUsb, openDemo } from '../lib/app'
 import { DEMOS } from '../lib/demos'
-import { desktop } from '../lib/desktop'
+import { appUpdate, desktop } from '../lib/desktop'
 import { usbSupported } from '../lib/transport'
 
 const canUsb = usbSupported()
@@ -196,7 +196,29 @@ const previews = computed(() =>
             </Transition>
           </div>
           <span class="grow" />
-          <span class="muted small brand" data-test="brand"><strong>POG</strong> v2 · runs on JMK firmware</span>
+          <span class="muted small brand" data-test="brand">
+            <strong>POG</strong> {{ appUpdate ? appUpdate.version : 'v2' }} · runs on JMK firmware
+          </span>
+          <button
+            v-if="appUpdate && appUpdate.kind !== 'off' && appUpdate.kind !== 'ready'"
+            class="btn ghost small"
+            :disabled="appUpdate.kind === 'checking' || appUpdate.kind === 'downloading'"
+            :title="appUpdate.kind === 'failed' ? appUpdate.message : undefined"
+            data-test="check-update"
+            @click="desktop?.update.check()"
+          >
+            {{
+              appUpdate.kind === 'checking'
+                ? 'Checking…'
+                : appUpdate.kind === 'downloading'
+                  ? `Downloading ${appUpdate.next}…`
+                  : appUpdate.kind === 'current'
+                    ? 'Up to date · check again'
+                    : appUpdate.kind === 'failed'
+                      ? 'Could not check · try again'
+                      : 'Check for updates'
+            }}
+          </button>
           <button v-if="canUsb" class="btn" :class="{ primary: !desktop }" data-test="connect" @click="connectUsb">
             {{ desktop ? 'Look for a keyboard' : 'Connect a keyboard' }}
           </button>

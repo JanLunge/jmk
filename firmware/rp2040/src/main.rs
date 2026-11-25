@@ -69,7 +69,7 @@ async fn main(_spawner: Spawner) {
         reboot,
     );
     let usb = Usb::new(Driver::new(p.USB, Irqs));
-    let cable = link::run(&wiring, &link_queues);
+    let cable = link::run(&wiring, &link_queues, p.PIO1);
     let lights = lights::run(p.PIO0, p.DMA_CH0, &wiring);
     join4(run, usb.run(&hid_queues, &config_queues), cable, lights).await;
 }

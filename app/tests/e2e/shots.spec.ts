@@ -41,13 +41,7 @@ test('walk through the macro pad setup', async ({ page }) => {
   await page.click('[data-test=row-key-1-2]')
   await page.waitForTimeout(500)
   await shot(page, '07-rows')
-  await page.click('[data-test=next]')
-  for (const first of [0, 3]) {
-    await page.locator(`[data-test=letters-board] [data-pos="${first}"]`).dispatchEvent('pointerdown')
-    await page.dispatchEvent('body', 'pointerup')
-  }
-  await page.waitForTimeout(500)
-  await shot(page, '07b-letters')
+  // A macro pad is too small for letter rows: the rows are its last step.
   await page.click('[data-test=next]')
   await page.waitForSelector('[data-test=rename]')
   await page.waitForTimeout(800)

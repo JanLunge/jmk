@@ -23,8 +23,9 @@ pub fn supported(link: &LinkConfig) -> bool {
     match link {
         // Whether the pins exist and are free is checked with all others.
         LinkConfig::Uart { .. } => true,
-        // Bluetooth between the halves is not implemented.
-        LinkConfig::Ble => false,
+        // Bluetooth between the halves is not implemented, and this
+        // chip's UART cannot send and listen on one pin.
+        LinkConfig::Ble | LinkConfig::Wire { .. } => false,
     }
 }
 

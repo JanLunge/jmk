@@ -96,7 +96,9 @@ export async function openDemo(demo: Demo): Promise<void> {
     if (transports.length === 2) {
       // Each half's sending pin is soldered to the other half's receiving pin.
       const [left, right] = demo.halves.map((half) => half.link)
-      const wires: [number, number][] = left && right ? [[left.tx, right.rx], [left.rx, right.tx]] : []
+      // A cable with one data wire has the same pin for both directions.
+      const wires: [number, number][] =
+        left && right ? (left.tx === left.rx ? [[left.tx, right.rx]] : [[left.tx, right.rx], [left.rx, right.tx]]) : []
       VirtualTransport.connect(transports[0], transports[1], wires)
     }
     const bench: Bench = reactive({

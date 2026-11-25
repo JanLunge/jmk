@@ -40,17 +40,18 @@ import { app, attempt, benchOf, pairUp, partnerOf, relink, toast } from '../lib/
 import { boardsFor, findBoard, genericBoard, pinLabel, pinsOfAnyShape, shapeFromPins, wirablePins } from '../lib/boards'
 import { desktop, type BootDrive } from '../lib/desktop'
 import { localPositions, parseDefinition, positionCount as definitionPositions, type Definition } from '../lib/definition'
-import { arrivals as allArrivals, bootDrives, installArrival, installOnBoard, updateFirmware } from '../lib/firmware'
+import { arrivals as allArrivals, bootDrives, installArrival, installOnBoard, updateDue, updateFirmware } from '../lib/firmware'
 import SplitPicture, { type PictureBoard } from '../components/SplitPicture.vue'
 import { chooseLink, findWires } from '../lib/cable'
 import { KeyCollector, KnobFinder } from '../lib/collector'
+import { acknowledge, muted } from '../lib/sound'
 import { inferWiring, type KeySignature } from '../lib/infer'
 import { bounds, hasKey, NO_KEY, UNIT } from '../lib/layout'
 import { ALPHAS, letterActions, rowLayout, splitRows } from '../lib/starter'
 import LetterRows from '../components/LetterRows.vue'
 import type { Action, Contact, EncoderConfig, HardwareConfig, KeyGeometry, Pin } from '../lib/protocol'
 import { LIMITS } from '../lib/protocol'
-import { applyDefinition, canKeepLetterRows, isConfigured, knobSpot, linkPins, splitOffset, needsRestart, restart, save, setHardware, setLayout, setMeta, SPLIT_PROTOCOL, starterLayout, type Session } from '../lib/session'
+import { applyDefinition, canKeepLetterRows, canShareWire, linkFor, isConfigured, knobSpot, linkPins, splitOffset, needsRestart, restart, save, setHardware, setLayout, setMeta, SPLIT_PROTOCOL, starterLayout, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 
@@ -118,6 +119,8 @@ const serial = (s: Session) => s.info.uid.slice(-2).map((byte) => byte.toString(
 const nameOf = (s: Session) => s.meta.name || s.demo?.label || `${s.transport.label} …${serial(s)}`
 const isUsb = props.session.transport.kind === 'usb'
 const canSplit = (s: Session) => s.info.protocol >= SPLIT_PROTOCOL
+/** The app carries newer firmware than this board runs, and can install it here. */
+const stale = (s: Session) => !canSplit(s) || updateDue(s)
 /** The cable pins known for a half: just found, or set up before. */
 const cableOf = (s: Session) => s.cable ?? linkPins(s.hardware)
 /** A board that is new or in its setup: looking for a cable on it interrupts nothing. */
@@ -189,6 +192,7 @@ async function findCable(quiet = false) {
     const wires = await findWires(props.session, candidate, cablePins(props.session), cablePins(candidate), undefined, (done, total) => (cable.progress = done / total))
     const choice = chooseLink(wires, info.mcu, candidate.info.mcu, (half, pin) =>
       half === 'a' ? `${pinLabel(board.value, pin)} on this board` : `${pinLabel(boardOf(candidate), pin)} on the other board`,
+      canShareWire(props.session) && canShareWire(candidate),
     )
     if (choice.ok) {
       props.session.cable = choice.a
@@ -252,7 +256,10 @@ const installWaiting = () => flash('new', () => Promise.all(arrivals.value.map(i
 /** The boards and the cable as a picture, once there is more to this than one board. */
 const picture = computed<{ boards: PictureBoard[]; cable: 'idle' | 'searching' | 'found' | 'none' } | undefined>(() => {
   const arrival = arrivals.value[0]
-  const near = other.value && !other.value.closed ? other.value : undefined
+  // Another keyboard on the desk is only a likely other half while it is new
+  // or known to belong to this one. A keyboard in use is a keyboard of its own.
+  const candidate = other.value && !other.value.closed ? other.value : undefined
+  const near = candidate && (isFresh(candidate) || partnerOf(props.session) === candidate) ? candidate : undefined
   const partner = second.value ?? (alone.value || intended.value ? undefined : near)
   if (!intended.value && !partner && !arrival && cable.state !== 'searching') return undefined
   const here: PictureBoard = {
@@ -360,7 +367,9 @@ function onProbe(half: Session, contacts: Contact[]) {
   const relevant = contacts.filter((c) => !('Ground' in c && encoderPins.has(c.Ground)))
   const before = setup.collector.last
   const count = setup.collector.keys.length
+  const presses = setup.collector.presses
   setup.collector.update(relevant)
+  if (setup.collector.presses > presses) acknowledge(setup.collector.keys.length > count ? 'new' : 'known')
   if (setup.collector.keys.length > count || setup.collector.last !== before) {
     firstId.value ??= half.id
     shownId.value = half.id
@@ -524,7 +533,7 @@ const plans = computed(() => {
       reserved_pins: [...reserved],
       debounce_ms: 5,
       encoders: [...setupOf(half).encoders],
-      split: isSplit.value && link ? { Half: { link: { Uart: link }, offset } } : 'None',
+      split: isSplit.value && link ? { Half: { link: linkFor(link), offset } } : 'None',
     }
     const plan = { half, hardware, positions: result.wiring.positions, offset }
     offset += localPositions(hardware)
@@ -601,6 +610,11 @@ const alphas = computed(() => ALPHAS.find((a) => a.id === alphasId.value) ?? ALP
 const letterRows = ref<number[][]>([[], [], []])
 const lettersPlaced = computed(() => letterRows.value.some((row) => row.length > 0))
 watch(rowEnds, () => (letterRows.value = [[], [], []]))
+/**
+ * Placing letter rows only makes sense on a keyboard that can hold the 26
+ * letters. A macro pad goes from its rows straight to the editor.
+ */
+const fitsLetters = computed(() => keyTotal.value >= 26)
 const letters = computed(() => letterActions(letterRows.value, alphas.value))
 /** The keymap the keyboard starts with. */
 const startActions = computed(() => {
@@ -723,7 +737,7 @@ const view = computed(() => (step.value === 'keys' && (cable.state === 'searchin
 const splitFlow = computed(
   () => intended.value || view.value === 'cable' || arrivals.value.length > 0 || (!alone.value && !!other.value && !other.value.closed && isFresh(other.value)),
 )
-const guideSteps = computed(() => [...(splitFlow.value ? ['Plug in', 'Firmware', 'Find the cable'] : ['Plug in', 'Firmware']), 'Find the keys', 'Rows', 'Letters'])
+const guideSteps = computed(() => [...(splitFlow.value ? ['Plug in', 'Firmware', 'Find the cable'] : ['Plug in', 'Firmware']), 'Find the keys', 'Rows', ...(fitsLetters.value ? ['Letters'] : [])])
 const guideAt = computed(() => {
   if (view.value === 'cable') return 2
   const keysAt = guideSteps.value.indexOf('Find the keys')
@@ -770,7 +784,7 @@ const explaining = ref(false)
 
 function next() {
   if (step.value === 'keys') allPressed()
-  else if (step.value === 'rows') go('letters')
+  else if (step.value === 'rows') fitsLetters.value ? go('letters') : apply()
   else if (step.value === 'letters') apply()
   else go('keys')
 }
@@ -778,7 +792,7 @@ const back = () => go(step.value === 'letters' ? 'rows' : 'keys')
 const nextLabel = computed(() => {
   if (applying.value) return 'Saving…'
   if (view.value === 'keys' || view.value === 'cable') return "That's all of them"
-  if (view.value === 'rows') return rowsMarked.value ? 'Continue' : 'Skip'
+  if (view.value === 'rows') return rowsMarked.value ? (fitsLetters.value ? 'Continue' : 'Finish') : 'Skip'
   if (view.value === 'letters') return lettersPlaced.value ? 'Finish' : 'Skip'
   if (view.value === 'result') return 'Press the keys again'
   return isSplit.value ? 'Press the keys' : 'Continue'
@@ -840,8 +854,9 @@ const nextLabel = computed(() => {
               <div class="col">
                 <strong>This board is connected</strong>
                 <span class="muted small">{{ nameOf(session) }}, firmware {{ info.firmware.join('.') }}</span>
-                <div v-if="!canSplit(session)" class="note warn col" data-test="this-old">
-                  <span>Its firmware is from before halves could share the work.</span>
+                <div v-if="stale(session)" class="note col" :class="{ warn: !canSplit(session) }" data-test="this-old">
+                  <span v-if="!canSplit(session)">Its firmware is from before halves could share the work.</span>
+                  <span v-else>This app carries newer firmware. A cable with a single data wire needs it.</span>
                   <div v-if="desktop && isUsb" class="row wrap">
                     <button class="btn small primary" :disabled="flashing !== 'idle'" data-test="update-this" @click="updateThis">
                       {{ flashing === 'this' ? 'Updating… it comes back by itself' : 'Update this board' }}
@@ -864,8 +879,9 @@ const nextLabel = computed(() => {
                       <option v-for="s in others" :key="s.id" :value="s.id">{{ nameOf(s) }}</option>
                     </select>
                   </label>
-                  <div v-if="!canSplit(other)" class="note warn col" data-test="other-old">
-                    <span>Its firmware is from before halves could share the work.</span>
+                  <div v-if="stale(other)" class="note col" :class="{ warn: !canSplit(other) }" data-test="other-old">
+                    <span v-if="!canSplit(other)">Its firmware is from before halves could share the work.</span>
+                    <span v-else>This app carries newer firmware. A cable with a single data wire needs it.</span>
                     <div v-if="desktop && isUsb" class="row wrap">
                       <button class="btn small primary" :disabled="flashing !== 'idle'" data-test="update-other" @click="updateOther">
                         {{ flashing === 'other' ? 'Updating… it comes back by itself' : 'Update the other half' }}
@@ -915,8 +931,13 @@ const nextLabel = computed(() => {
                   <progress :value="cable.progress" max="1" />
                 </div>
                 <span v-else-if="isSplit && cableOf(session)" class="muted small" data-test="cable-found">
-                  This half sends on {{ pinLabel(board, cableOf(session)!.tx) }} and receives on
-                  {{ pinLabel(board, cableOf(session)!.rx) }}. The other half is set to match.
+                  <template v-if="cableOf(session)!.tx === cableOf(session)!.rx">
+                    The cable has one data wire, on {{ pinLabel(board, cableOf(session)!.tx) }}. The halves take turns on it.
+                  </template>
+                  <template v-else>
+                    This half sends on {{ pinLabel(board, cableOf(session)!.tx) }} and receives on
+                    {{ pinLabel(board, cableOf(session)!.rx) }}. The other half is set to match.
+                  </template>
                 </span>
                 <template v-else>
                   <span v-if="!other" class="muted small" data-test="cable-need-both">
@@ -952,7 +973,12 @@ const nextLabel = computed(() => {
               <h1>{{ cable.state === 'found' ? 'Found the cable.' : 'Finding the cable between the halves.' }}</h1>
               <p class="muted lead">
                 <template v-if="cable.state === 'found' && cableOf(session)">
-                  It is on {{ pinLabel(board, cableOf(session)!.tx) }} and {{ pinLabel(board, cableOf(session)!.rx) }}. You never need to know that.
+                  <template v-if="cableOf(session)!.tx === cableOf(session)!.rx">
+                    It has one data wire, on {{ pinLabel(board, cableOf(session)!.tx) }}. The halves take turns on it.
+                  </template>
+                  <template v-else>
+                    It is on {{ pinLabel(board, cableOf(session)!.tx) }} and {{ pinLabel(board, cableOf(session)!.rx) }}. You never need to know that.
+                  </template>
                 </template>
                 <template v-else>Looking for the serial pins it is wired to. Nothing to do.</template>
               </p>
@@ -1013,6 +1039,15 @@ const nextLabel = computed(() => {
           <div v-if="cable.state === 'failed' && !isSplit" class="note warn" data-test="cable-problem">
             {{ cable.problem }} <button class="link" @click="go('shape')">Look again</button>, or carry on to set
             this board up on its own.
+            <div v-if="desktop && isUsb && (stale(session) || (other && stale(other)))" class="row wrap centre-row">
+              <button v-if="stale(session)" class="btn small primary" :disabled="flashing !== 'idle'" data-test="update-this-here" @click="updateThis">
+                {{ flashing === 'this' ? 'Updating… it comes back by itself' : 'Update this board' }}
+              </button>
+              <button v-if="other && stale(other)" class="btn small primary" :disabled="flashing !== 'idle'" data-test="update-other-here" @click="updateOther">
+                {{ flashing === 'other' ? 'Updating… it comes back by itself' : 'Update the other board' }}
+              </button>
+            </div>
+            <p v-if="flashProblem" class="small">{{ flashProblem }}</p>
           </div>
         </Transition>
 
@@ -1194,6 +1229,21 @@ const nextLabel = computed(() => {
             </div>
           </Transition>
         </div>
+        <button
+          class="btn ghost sound"
+          :class="{ off: muted }"
+          :title="muted ? 'Sound is off. Turn on the tone for each key press.' : 'Turn off the tone for each key press'"
+          :aria-label="muted ? 'Turn on the sound for key presses' : 'Turn off the sound for key presses'"
+          :aria-pressed="!muted"
+          data-test="sound"
+          @click="muted = !muted"
+        >
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3.5 7.8h2.6L10 4.5v11l-3.9-3.3H3.5z" />
+            <template v-if="muted"><path d="M13.2 8l3.6 4M16.8 8l-3.6 4" /></template>
+            <template v-else><path d="M13 7.6a3.4 3.4 0 0 1 0 4.8M15.2 5.6a6.2 6.2 0 0 1 0 8.8" /></template>
+          </svg>
+        </button>
       </template>
       <button v-else-if="view !== 'cable'" class="btn ghost" data-test="back" @click="back">Back</button>
       <span v-else class="muted small">continues by itself</span>
@@ -1362,6 +1412,8 @@ const nextLabel = computed(() => {
 .arrival {
   gap: 8px;
   align-self: stretch;
+  /* The picture is narrower than the page. */
+  align-items: center;
 }
 
 .fixes {
@@ -1394,6 +1446,14 @@ const nextLabel = computed(() => {
   gap: 14px;
   align-items: baseline;
   margin-top: 10px;
+}
+
+.sound {
+  padding: 9px 10px;
+}
+
+.sound.off {
+  color: var(--muted);
 }
 
 .count {

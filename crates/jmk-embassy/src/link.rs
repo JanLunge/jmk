@@ -24,6 +24,20 @@ impl Queues {
     }
 }
 
+impl Queues {
+    /// For a port that moves the bytes itself, as a cable of one wire
+    /// needs: wait for bytes the firmware wants sent.
+    pub async fn outgoing(&self, buf: &mut [u8]) -> usize {
+        self.outgoing.read(buf).await
+    }
+
+    /// Hand bytes that arrived to the firmware. Dropped if it is not taking
+    /// any; the other half repeats its state.
+    pub fn deliver(&self, bytes: &[u8]) {
+        let _ = self.incoming.try_write(bytes);
+    }
+}
+
 impl Default for Queues {
     fn default() -> Self {
         Self::new()

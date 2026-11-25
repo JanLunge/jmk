@@ -1,14 +1,14 @@
 {
   "name": "pog",
   "productName": "POG",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "description": "POG v2: the configurator for keyboards running JMK firmware",
   "license": "Apache-2.0",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "wasm": "cd .. && cargo build -p jmk-wasm --target wasm32-unknown-unknown --release && cp target/wasm32-unknown-unknown/release/jmk_wasm.wasm app/src/wasm/jmk.wasm",
+    "wasm": "../scripts/wasm.sh",
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --port 4173 --strictPort",
@@ -18,20 +18,98 @@
     "prebuild": "npm run wasm",
     "pretest": "npm run wasm",
     "pree2e": "npm run build",
-    "firmware": "mkdir -p firmware && cp ../target/jmk-*.uf2 firmware/"
+    "firmware": "mkdir -p firmware && cp ../target/jmk-*.uf2 firmware/",
+    "pack": "electron-builder --publish never"
   },
   "dependencies": {
-    "pinia": "^4.1.0",
-    "vue": "^3.5.45"
+    "electron-updater": "6.8.11"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",
     "@types/w3c-web-hid": "^1.0.7",
     "@vitejs/plugin-vue": "^6.0.11",
     "electron": "^45.3.2",
+    "electron-builder": "26.18.0",
+    "pinia": "^4.1.0",
     "typescript": "^6.0.3",
     "vite": "^8.3.8",
     "vitest": "^5.1.0",
+    "vue": "^3.5.45",
     "vue-tsc": "^3.3.14"
+  },
+  "author": "Jan Lunge",
+  "homepage": "https://github.com/JanLunge/jmk",
+  "build": {
+    "appId": "de.janlunge.pog",
+    "productName": "POG",
+    "artifactName": "POG-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "firmware",
+        "to": "firmware",
+        "filter": [
+          "jmk-*.uf2"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "JanLunge",
+      "repo": "jmk"
+    },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": true,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    },
+    "linux": {
+      "category": "Utility",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
   }
 }
