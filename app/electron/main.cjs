@@ -149,7 +149,12 @@ if (!app.isPackaged && process.env.POG_CDP_PORT !== '0') {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.POG_CDP_PORT || '9333')
 }
 
+// Started with `npm start` the app would carry Electron's own icon; a packaged
+// app gets its icon from the installer.
+const devIcon = app.isPackaged ? undefined : path.join(__dirname, '..', 'build', process.platform === 'darwin' ? 'icon.png' : 'icon-full.png')
+
 app.whenReady().then(() => {
+  if (devIcon && process.platform === 'darwin') app.dock?.setIcon(devIcon)
   serveApp()
   allowKeyboards()
   ipcMain.handle('jmk:flash', flash)
@@ -162,6 +167,7 @@ app.whenReady().then(() => {
     minHeight: 640,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#171717' : '#f3f1ec',
     autoHideMenuBar: true,
+    ...(devIcon ? { icon: devIcon } : {}),
     ...titleBar(),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false },
   })
