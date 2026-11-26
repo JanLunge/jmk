@@ -3,6 +3,10 @@
 <h4 align="center">
 Keyboard firmware you configure after flashing, and the app that does it
 </h4>
+<p align="center">
+<a href="https://pogv2.janlunge.de">Website with a demo</a> ·
+<a href="https://github.com/JanLunge/jmk/releases/latest">Download</a>
+</p>
 
 > **Built with a lot of AI help.** I design this, decide what goes in and test
 > it on my own keyboards, but most of the code was written with AI coding
