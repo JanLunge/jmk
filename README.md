@@ -4,7 +4,7 @@
 Keyboard firmware you configure after flashing, and the app that does it
 </h4>
 <p align="center">
-<a href="https://pogv2.janlunge.de">Website with a demo</a> ·
+<a href="https://pogv2.janlunge.de">Website</a> ·
 <a href="https://github.com/JanLunge/jmk/releases/latest">Download</a>
 </p>
 
