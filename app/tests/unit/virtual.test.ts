@@ -174,6 +174,12 @@ describe('the cable between two halves', () => {
     expect(chooseLink([{ a: 0, b: 1 }, { a: 12, b: 0 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('cannot run a serial connection') })
     // The other chip takes any pins.
     expect(chooseLink([{ a: 2, b: 7 }, { a: 3, b: 9 }], 'Nrf52840', 'Nrf52840')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 9, rx: 7 } })
+    // An RP2350 has a serial port on more pins than an RP2040, and takes turns on one wire as well.
+    expect(chooseLink([{ a: 2, b: 3 }, { a: 3, b: 2 }], 'Rp2350', 'Rp2350')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 2, rx: 3 } })
+    expect(chooseLink([{ a: 2, b: 3 }, { a: 3, b: 2 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false })
+    expect(chooseLink([{ a: 2, b: 5 }, { a: 3, b: 4 }], 'Rp2350', 'Rp2040')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 4, rx: 5 } })
+    expect(chooseLink([{ a: 2, b: 4 }, { a: 3, b: 6 }], 'Rp2350', 'Rp2350')).toMatchObject({ ok: false, problem: expect.stringContaining('An RP2350 also') })
+    expect(chooseLink([{ a: 0, b: 1 }], 'Rp2350', 'Rp2350')).toMatchObject({ ok: false, problem: expect.stringContaining('update the firmware') })
     // Spare wires are skipped until a pair fits.
     expect(chooseLink([{ a: 2, b: 3 }, { a: 4, b: 9 }, { a: 5, b: 8 }], 'Rp2040', 'Rp2040')).toEqual({ ok: true, a: { tx: 4, rx: 5 }, b: { tx: 8, rx: 9 } })
   })

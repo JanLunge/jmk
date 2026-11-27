@@ -29,3 +29,7 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 debug = 2
+
+[lints.rust]
+# The code is shared with firmware/rp2350, which has these features.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("rp235x", "rp235xa", "rp235xb"))'] }

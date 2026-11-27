@@ -80,18 +80,26 @@ export async function findWires(
   }
 }
 
-// The RP2040 can put a serial port only on certain pins; a pin pair must
-// belong to the same port. Mirrors firmware/rp2040/src/link.rs.
-const RP_PORTS: { tx: Pin[]; rx: Pin[] }[] = [
+// The RP2040 and the RP2350 can put a serial port only on certain pins; a
+// pin pair must belong to the same port. Mirrors firmware/rp2040/src/link.rs.
+type Port = { tx: Pin[]; rx: Pin[] }
+const RP2040_PORTS: Port[] = [
   { tx: [0, 12, 16, 28], rx: [1, 13, 17, 29] },
   { tx: [4, 8, 20, 24], rx: [5, 9, 21, 25] },
 ]
+// The pins from 30 up exist only on the package with 48 GPIOs, which is the
+// only one to report them as usable.
+const RP2350_PORTS: Port[] = [
+  { tx: [0, 2, 12, 14, 16, 18, 28, 30, 32, 34, 44, 46], rx: [1, 3, 13, 15, 17, 19, 29, 31, 33, 35, 45, 47] },
+  { tx: [4, 6, 8, 10, 20, 22, 24, 26, 36, 38, 40, 42], rx: [5, 7, 9, 11, 21, 23, 25, 27, 37, 39, 41, 43] },
+]
+const isRp = (mcu: Mcu) => mcu === 'Rp2040' || mcu === 'Rp2350'
 
 /** Whether this chip can send on `tx` and receive on `rx`. */
 export function canLink(mcu: Mcu, tx: Pin, rx: Pin): boolean {
   if (tx === rx) return false
   if (mcu === 'Nrf52840') return true
-  return RP_PORTS.some((port) => port.tx.includes(tx) && port.rx.includes(rx))
+  return (mcu === 'Rp2350' ? RP2350_PORTS : RP2040_PORTS).some((port) => port.tx.includes(tx) && port.rx.includes(rx))
 }
 
 /** With `shared` both directions run over one wire: `tx` and `rx` are the same pin. */
@@ -120,7 +128,7 @@ export function chooseLink(
     return {
       ok: false,
       problem:
-        mcuA === 'Rp2040' && mcuB === 'Rp2040'
+        isRp(mcuA) && isRp(mcuB)
           ? `${found} Newer firmware can use a single wire: update the firmware of both halves, then try again.`
           : `${found} On these chips JMK needs two: one for each direction.`,
     }
@@ -142,6 +150,10 @@ export function chooseLink(
     problem:
       `The cable was found (${list}), but these chips cannot run a serial connection on those pins. ` +
       'An RP2040 sends on GP0, 12, 16 or 28 and receives on GP1, 13, 17 or 29, or sends on GP4, 8, 20 or 24 and ' +
-      'receives on GP5, 9, 21 or 25. Move the two data wires to such a pair on each half.',
+      'receives on GP5, 9, 21 or 25. ' +
+      (mcuA === 'Rp2350' || mcuB === 'Rp2350'
+        ? 'An RP2350 also sends on GP2, 14 or 18 and receives on GP3, 15 or 19, or sends on GP6, 10, 22 or 26 and receives on GP7, 11, 23 or 27. '
+        : '') +
+      'Move the two data wires to such a pair on each half.',
   }
 }

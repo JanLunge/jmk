@@ -41,27 +41,40 @@ const p = (port: 0 | 1, n: number): Pad => ({
   kind: 'gpio',
 })
 
+/** The pads of the Raspberry Pi Pico. The Pico 2 has the same ones in the same places. */
+const picoPads = {
+  width: 8,
+  left: [
+    gp(0), gp(1), gnd, gp(2), gp(3), gp(4), gp(5), gnd, gp(6), gp(7),
+    gp(8), gp(9), gnd, gp(10), gp(11), gp(12), gp(13), gnd, gp(14), gp(15),
+  ],
+  right: [
+    pwr('VBUS'), pwr('VSYS'), gnd, other('3V3 EN'), pwr('3V3'), other('VREF'), gp(28), gnd, gp(27), gp(26),
+    other('RUN'), gp(22), gnd, gp(21), gp(20), gp(19), gp(18), gnd, gp(17), gp(16),
+  ],
+  internal: [
+    { pin: 23, use: 'power supply mode' },
+    { pin: 24, use: 'USB power sense' },
+    { pin: 25, use: 'on-board LED' },
+    { pin: 29, use: 'supply voltage sense' },
+  ],
+}
+
 export const BOARDS: Board[] = [
   {
     id: 'pico',
     name: 'RP2040 controller, long',
     alsoKnownAs: '40 pads in two rows, like the Raspberry Pi Pico',
     mcu: 'Rp2040',
-    width: 8,
-    left: [
-      gp(0), gp(1), gnd, gp(2), gp(3), gp(4), gp(5), gnd, gp(6), gp(7),
-      gp(8), gp(9), gnd, gp(10), gp(11), gp(12), gp(13), gnd, gp(14), gp(15),
-    ],
-    right: [
-      pwr('VBUS'), pwr('VSYS'), gnd, other('3V3 EN'), pwr('3V3'), other('VREF'), gp(28), gnd, gp(27), gp(26),
-      other('RUN'), gp(22), gnd, gp(21), gp(20), gp(19), gp(18), gnd, gp(17), gp(16),
-    ],
-    internal: [
-      { pin: 23, use: 'power supply mode' },
-      { pin: 24, use: 'USB power sense' },
-      { pin: 25, use: 'on-board LED' },
-      { pin: 29, use: 'supply voltage sense' },
-    ],
+    ...picoPads,
+  },
+  {
+    id: 'pico2',
+    name: 'RP2350 controller, long',
+    alsoKnownAs: '40 pads in two rows, like the Raspberry Pi Pico 2',
+    mcu: 'Rp2350',
+    unverified: true,
+    ...picoPads,
   },
   {
     id: 'promicro-rp2040',
@@ -138,6 +151,11 @@ export function pinsOfAnyShape(mcu: Mcu, usablePins: number): Pin[] {
   const shapes = boardsFor(mcu)
   const pins = new Set(shapes.flatMap((board) => wirablePins(board, usablePins)))
   return [...pins].sort((a, b) => a - b)
+}
+
+/** The chip as its maker writes it. A virtual keyboard stands in for an RP2040. */
+export function chipLabel(mcu: Mcu): string {
+  return mcu === 'Nrf52840' ? 'nRF52840' : mcu === 'Rp2350' ? 'RP2350' : 'RP2040'
 }
 
 export function boardsFor(mcu: Mcu): Board[] {

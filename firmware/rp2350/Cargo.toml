@@ -1,0 +1,47 @@
+[package]
+name = "jmk-rp2350"
+version = "0.1.0"
+description = "JMK keyboard firmware for RP2350 boards"
+edition = "2021"
+license = "Apache-2.0"
+
+# The code is the RP2040 port's: the two chips differ in a handful of places,
+# marked there with these features.
+[[bin]]
+name = "jmk-rp2350"
+path = "../rp2040/src/main.rs"
+
+[features]
+default = ["rp235xa"]
+# Set by both packages; do not turn it on by itself.
+rp235x = []
+# RP2350A and RP2354A: 30 GPIOs.
+rp235xa = ["rp235x", "embassy-rp/rp235xa"]
+# RP2350B and RP2354B: 48 GPIOs. Build with
+# `--no-default-features --features rp235xb`.
+rp235xb = ["rp235x", "embassy-rp/rp235xb"]
+
+[dependencies]
+jmk-proto = { path = "../../crates/jmk-proto" }
+jmk-device = { path = "../../crates/jmk-device" }
+jmk-embassy = { path = "../../crates/jmk-embassy" }
+
+embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
+embassy-rp = { version = "0.10", features = ["time-driver", "critical-section-impl", "unstable-pac"] }
+embassy-time = "0.5"
+embassy-futures = "0.1"
+embassy-sync = "0.8"
+fixed = "1"
+critical-section = "1"
+cortex-m-rt = "0.7"
+panic-halt = "1"
+static_cell = "2"
+cortex-m = "0.7"
+portable-atomic = { version = "1", features = ["critical-section"] }
+embedded-storage = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = 2

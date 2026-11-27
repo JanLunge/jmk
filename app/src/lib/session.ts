@@ -216,9 +216,9 @@ export const linkFor = (pins: { tx: Pin; rx: Pin }): LinkConfig => (pins.tx === 
 
 /** From this protocol on a combo can be a sequence, be limited to layers and have up to eight keys. */
 export const canTuneCombos = (session: Session) => session.info.protocol >= COMBO_OPTIONS_PROTOCOL
-/** From this protocol on a cable with a single data wire works (RP2040 only). */
+/** From this protocol on a cable with a single data wire works (RP2040 and RP2350 only). */
 export const ONE_WIRE_PROTOCOL = 10
-export const canShareWire = (session: Session) => session.info.protocol >= ONE_WIRE_PROTOCOL && session.info.mcu === 'Rp2040'
+export const canShareWire = (session: Session) => session.info.protocol >= ONE_WIRE_PROTOCOL && (session.info.mcu === 'Rp2040' || session.info.mcu === 'Rp2350')
 
 /** Where this board's positions start in the keymap. */
 export const splitOffset = (hardware: HardwareConfig) => (hardware.split === 'None' ? 0 : hardware.split.Half.offset)

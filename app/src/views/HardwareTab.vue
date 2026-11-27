@@ -243,7 +243,7 @@ async function updateFirmware() {
             <strong>The keyboard is in update mode.</strong>
             <template v-if="isVirtual"> Copying the new firmware…</template>
             <template v-else-if="!desktop">
-              It now shows up as a drive (RPI-RP2 or similar). Copy the JMK firmware file onto it; the keyboard
+              It now shows up as a drive (RPI-RP2, RP2350 or similar). Copy the JMK firmware file onto it; the keyboard
               restarts by itself. Your settings are kept.
             </template>
           </div>
