@@ -227,7 +227,13 @@ export function keymapPoster(source: PosterSource, options: PosterOptions): Post
     parts.push(text(PAD, y + 8, 14, theme.text, 'Combos', 'font-weight="600" text-anchor="start"'))
     y += 28
     const name = (pos: number) => legend(resolved(source.layers, 0, pos).action).main || `key ${pos + 1}`
-    const lines = combos.map((combo) => `${combo.keys.map(name).join(' + ')}  →  ${describeAction(combo.action)}`)
+    const where = (layers = 0) => {
+      const on = source.layers.map((_, index) => index).filter((index) => layers & (1 << index))
+      return on.length ? `  (layer ${on.join(', ')})` : ''
+    }
+    const lines = combos.map(
+      (combo) => `${combo.keys.map(name).join(combo.sequence ? ', then ' : ' + ')}  →  ${describeAction(combo.action)}${where(combo.layers)}`,
+    )
     const columnW = Math.max(...lines.map((line) => line.length)) * 7 + 30
     const columns = Math.max(1, Math.floor((width - PAD * 2) / columnW))
     lines.forEach((line, index) => {

@@ -1,7 +1,7 @@
 use heapless::Vec;
 
-use crate::action::{Action, Basic, Combo, HoldTapFlavor, HoldTapProfile, MacroStep};
-use crate::combo::ComboStage;
+use crate::action::{Action, Basic, Combo, ComboOptions, HoldTapFlavor, HoldTapProfile, MacroStep};
+use crate::combo::{ComboStage, Combos};
 use crate::keycode::modifier_bit;
 use crate::{Event, Millis, Source};
 
@@ -24,6 +24,10 @@ pub trait Keymap {
         HoldTapProfile::default()
     }
     fn combos(&self) -> &[Combo] {
+        &[]
+    }
+    /// By the index of the combo; one without an entry has the defaults.
+    fn combo_options(&self) -> &[ComboOptions] {
         &[]
     }
     fn macro_steps(&self, _index: u8) -> &[MacroStep] {
@@ -115,14 +119,15 @@ impl Engine {
     /// Feed a physical key change. `pos` indexes the keymap.
     pub fn key_event(&mut self, keymap: &impl Keymap, out: &mut impl Output, pos: u16, pressed: bool, now: Millis) {
         let mut combos = core::mem::take(&mut self.combos);
-        combos.key_event(keymap.combos(), pos, pressed, now, &mut |ev| self.push(keymap, out, ev, now));
+        let layer = (31 - self.active_layers().leading_zeros()) as u8;
+        combos.key_event(all_combos(keymap), layer, pos, pressed, now, &mut |ev| self.push(keymap, out, ev, now));
         self.combos = combos;
     }
 
     /// Call when [`Engine::next_deadline`] has passed.
     pub fn tick(&mut self, keymap: &impl Keymap, out: &mut impl Output, now: Millis) {
         let mut combos = core::mem::take(&mut self.combos);
-        combos.tick(keymap.combos(), now, &mut |ev| self.push(keymap, out, ev, now));
+        combos.tick(all_combos(keymap), now, &mut |ev| self.push(keymap, out, ev, now));
         self.combos = combos;
         self.process(keymap, out, now, false);
         self.play(keymap, out, now);
@@ -136,7 +141,7 @@ impl Engine {
             }
             _ => None,
         });
-        [hold_tap, self.combos.deadline(keymap.combos()), self.playback.map(|p| p.next)].into_iter().flatten().min()
+        [hold_tap, self.combos.deadline(all_combos(keymap)), self.playback.map(|p| p.next)].into_iter().flatten().min()
     }
 
     /// Forget all held keys and layers and tell the host nothing is pressed.
@@ -366,6 +371,10 @@ impl Engine {
             self.last_report = report;
         }
     }
+}
+
+fn all_combos(keymap: &impl Keymap) -> Combos<'_> {
+    Combos { combos: keymap.combos(), options: keymap.combo_options() }
 }
 
 fn layer_bit(layer: u8) -> u32 {

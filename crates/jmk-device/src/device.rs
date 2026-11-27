@@ -463,7 +463,17 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             Request::SetCombos(combos) => {
                 // Held combo keys refer to combos by index.
                 self.engine.reset(out);
+                self.config.combo_options.truncate(combos.len());
                 self.config.combos = combos;
+                Ok(Response::Ok)
+            }
+            Request::GetComboOptions => Ok(Response::ComboOptions(self.config.combo_options.clone())),
+            Request::SetComboOptions(options) => {
+                if options.len() > self.config.combos.len() {
+                    return Err(Error::OutOfRange);
+                }
+                self.engine.reset(out);
+                self.config.combo_options = options;
                 Ok(Response::Ok)
             }
             Request::GetMacro { index, start } => {
