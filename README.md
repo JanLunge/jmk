@@ -88,6 +88,13 @@ cargo run -p jmk-uf2 -- rp2350 \
 (cd app && npm run firmware)
 ```
 
+# Linux
+
+POG finds the keyboard only once Linux lets it. The desktop app offers to
+arrange that when you plug a keyboard in. By hand: save
+[this file](https://raw.githubusercontent.com/JanLunge/jmk/main/app/linux/70-jmk-keyboard.rules)
+into `/etc/udev/rules.d/` and plug the keyboard in again.
+
 `./scripts/check.sh` runs every test and builds all firmwares. There is no
 hosted CI yet, that script is it.
 

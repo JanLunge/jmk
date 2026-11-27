@@ -1071,3 +1071,39 @@ test('the language of the computer names the keys: Ö on a Swedish one', async (
   await page.reload()
   expect(await page.evaluate(() => localStorage.getItem('jmk.language'))).toBe('sv')
 })
+
+test('linux: a keyboard the system keeps the app from is let in with one click', async ({ page }) => {
+  // Stands in for the desktop shell on a Linux computer without the udev rule.
+  await page.addInitScript(() => {
+    const state = { blocked: 1, asked: 0 }
+    Object.assign(window, {
+      linux: state,
+      jmkDesktop: {
+        platform: 'linux',
+        flash: async () => '',
+        drives: async () => [],
+        bundled: async () => [],
+        access: async () => ({ blocked: state.blocked, command: 'printf rule | sudo tee /etc/udev/rules.d/70-jmk-keyboard.rules' }),
+        allowAccess: async () => {
+          // The first time the password dialog cannot be shown.
+          if (state.asked++ === 0) return 'The system did not accept the password, or could not ask for it.'
+          state.blocked = 0
+          return ''
+        },
+        update: { state: async () => ({ kind: 'off', version: 'test' }), check: async () => ({ kind: 'off', version: 'test' }), install: async () => {}, watch: () => {} },
+      },
+    })
+  })
+  await page.goto('/')
+  const notice = page.locator('[data-test=linux-access]')
+  await expect(notice).toContainText('Linux keeps POG from your keyboard')
+  await expect(page.locator('[data-test=linux-command]')).toHaveCount(0)
+
+  // What cannot be done from the app is offered as a command to run.
+  await page.click('[data-test=linux-allow]')
+  await expect(page.locator('[data-test=linux-problem]')).toContainText('could not ask')
+  await expect(page.locator('[data-test=linux-command]')).toContainText('70-jmk-keyboard.rules')
+
+  await page.click('[data-test=linux-allow]')
+  await expect(notice).toHaveCount(0)
+})
