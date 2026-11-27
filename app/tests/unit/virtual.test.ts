@@ -1,19 +1,19 @@
 // The app's session layer against virtual keyboards, without any UI.
 import { readFileSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { KnobFinder } from '../../src/lib/collector'
+import { KeyCollector, KnobFinder } from '../../src/lib/collector'
 import { planAddedKey } from '../../src/lib/addkey'
 import { addSession, app, openFarHalf, partnerOf, reconcile } from '../../src/lib/app'
 import { chooseLink, findWires } from '../../src/lib/cable'
-import { signatureOf } from '../../src/lib/infer'
+import { inferWiring, signatureOf } from '../../src/lib/infer'
 import { DEMOS } from '../../src/lib/demos'
-import type { Contact, HostEvent } from '../../src/lib/protocol'
+import type { Contact, HostEvent, Wire } from '../../src/lib/protocol'
 import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../../src/lib/lighting'
 import { keymapPoster } from '../../src/lib/poster'
 import { layerHex } from '../../src/lib/layers'
 import { gridLayout } from '../../src/lib/layout'
 import { parseDefinition } from '../../src/lib/definition'
-import { addKey, alignHalves, applyDefinition, knobPositions, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { addKey, alignHalves, applyDefinition, canTuneCombos, knobPositions, setCombos, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
 import { starterAction } from './keys'
 import { advanceVirtualTime, VirtualTransport } from '../../src/lib/transport'
 import { loadBridge } from '../../src/lib/wasm'
@@ -127,6 +127,66 @@ describe('a key that was missed during setup', () => {
   })
 })
 
+describe('a board whose keys are not all wired alike', () => {
+  it('is found key by key and types one key per switch', async () => {
+    // Rows 2 and 3, columns 4 and 5, two switches per crossing with diodes
+    // either way; the last crossing has one switch without a diode instead.
+    // A knob's push switch sits between two pins of its own, also without.
+    const crossings: [number, number][] = [[2, 4], [2, 5], [3, 4]]
+    const switches: Wire[] = [
+      ...crossings.flatMap(([row, col]) => [{ Diode: { anode: col, cathode: row } }, { Diode: { anode: row, cathode: col } }]),
+      { Plain: [3, 5] },
+      { Plain: [8, 9] },
+    ]
+    const transport = new VirtualTransport('Mixed', { switches, encoders: [] }, uid++)
+    const session = await during(openSession(transport))
+
+    let now = 0
+    const collector = new KeyCollector(() => now)
+    session.client.onProbe = (contacts) => collector.update(contacts)
+    await during(session.client.startProbe([2, 3, 4, 5, 8, 9]))
+    const wait = (ms: number) => {
+      advanceVirtualTime(ms)
+      now += ms
+    }
+    wait(600)
+    for (const index of switches.keys()) {
+      transport.setKey(index, true)
+      wait(100)
+      transport.setKey(index, false)
+      wait(100)
+    }
+    await during(session.client.stopProbe())
+    expect(collector.keys).toHaveLength(8)
+
+    const result = inferWiring(collector.keys)
+    if (!result.ok) throw new Error(result.problem)
+    const { matrix, more, doubles, positions } = result.wiring
+    expect(matrix).toEqual({ Matrix: { rows: [2, 3], cols: [4, 5], diodes: 'Both' } })
+    expect(more).toEqual([{ Matrix: { rows: [8], cols: [9], diodes: 'Col2Row' } }])
+    expect(positions).toEqual([0, 4, 1, 5, 2, 6, 3, 8])
+    expect(doubles).toEqual([7])
+
+    const hardware = { matrix, more, doubles, reserved_pins: [], debounce_ms: 5, encoders: [], split: 'None' as const }
+    await during(setHardware(session, hardware))
+    await during(setLayout(session, starterLayout(hardware)))
+    for (let pos = 0; pos < 9; pos++) await during(setAction(session, 0, pos, { Basic: { Key: 4 + pos } }))
+    // The keyboard gives back what it was told.
+    expect(await during(session.client.hardware())).toMatchObject({ more, doubles })
+
+    const typed = session.typed
+    for (const index of [6, 7, 5]) {
+      typed.length = 0
+      transport.setKey(index, true)
+      advanceVirtualTime(20)
+      transport.setKey(index, false)
+      advanceVirtualTime(20)
+      // One key down and up again; the switch without a diode does not also type its crossing's other key.
+      expect(keys(typed)).toEqual([[4 + positions[index]], []])
+    }
+  })
+})
+
 describe('the cable between two halves', () => {
   /** Two fresh halves joined by a cable with these data wires. */
   async function halves(wires: [number, number][]) {
@@ -175,6 +235,12 @@ describe('the cable between two halves', () => {
     expect(chooseLink([{ a: 0, b: 1 }, { a: 12, b: 0 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('cannot run a serial connection') })
     // The other chip takes any pins.
     expect(chooseLink([{ a: 2, b: 7 }, { a: 3, b: 9 }], 'Nrf52840', 'Nrf52840')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 9, rx: 7 } })
+    // An RP2350 has a serial port on more pins than an RP2040, and takes turns on one wire as well.
+    expect(chooseLink([{ a: 2, b: 3 }, { a: 3, b: 2 }], 'Rp2350', 'Rp2350')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 2, rx: 3 } })
+    expect(chooseLink([{ a: 2, b: 3 }, { a: 3, b: 2 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false })
+    expect(chooseLink([{ a: 2, b: 5 }, { a: 3, b: 4 }], 'Rp2350', 'Rp2040')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 4, rx: 5 } })
+    expect(chooseLink([{ a: 2, b: 4 }, { a: 3, b: 6 }], 'Rp2350', 'Rp2350')).toMatchObject({ ok: false, problem: expect.stringContaining('An RP2350 also') })
+    expect(chooseLink([{ a: 0, b: 1 }], 'Rp2350', 'Rp2350')).toMatchObject({ ok: false, problem: expect.stringContaining('update the firmware') })
     // Spare wires are skipped until a pair fits.
     expect(chooseLink([{ a: 2, b: 3 }, { a: 4, b: 9 }, { a: 5, b: 8 }], 'Rp2040', 'Rp2040')).toEqual({ ok: true, a: { tx: 4, rx: 5 }, b: { tx: 8, rx: 9 } })
   })
@@ -445,7 +511,10 @@ describe('lights and pictures', () => {
       layers: [layout.map((_, i) => ({ Basic: i === 0 ? { MomentaryLayer: 1 } : { Key: 0x04 + i } })), layout.map(() => 'Transparent' as const)],
       layerColors: [0, 4],
       knobs: [],
-      combos: [{ keys: [1, 2], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 }],
+      combos: [
+        { keys: [1, 2], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 },
+        { keys: [3, 4], action: { Basic: { Key: 0x2b } }, timeout_ms: 500, sequence: true, layers: 0b10 },
+      ],
     }
     for (const mode of ['grid', 'stacked'] as const) {
       const poster = keymapPoster(source, { mode, dark: false })
@@ -453,7 +522,25 @@ describe('lights and pictures', () => {
       expect(poster.svg).toContain('Layer 1')
       expect(poster.svg).toContain('#ef4444')
       expect(poster.svg).toContain('B + C')
+      expect(poster.svg).toContain('D, then E  →  Tab  (layer 1)')
       expect(poster.width).toBeGreaterThan(100)
     }
+  })
+
+  it('a combo keeps its layers and whether it is a sequence', async () => {
+    const { session } = await open('macropad')
+    expect(canTuneCombos(session)).toBe(true)
+    const combos = [
+      { keys: [0, 1, 2, 3, 4, 5], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 },
+      { keys: [2, 1], action: { Basic: { Key: 0x2b } }, timeout_ms: 500, layers: 0b10, sequence: true },
+    ]
+    await during(setCombos(session, combos))
+    // Read back exactly as set: nothing added to the plain one.
+    expect(await during(session.client.combos())).toEqual(combos)
+    // Taking the first away must not leave its options on the second.
+    await during(setCombos(session, [combos[1]]))
+    expect(await during(session.client.combos())).toEqual([combos[1]])
+    await during(setCombos(session, [combos[0]]))
+    expect(await during(session.client.combos())).toEqual([combos[0]])
   })
 })

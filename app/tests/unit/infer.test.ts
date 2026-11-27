@@ -57,7 +57,6 @@ describe('inferWiring', () => {
 
   it('explains wiring that forms no rows and columns', () => {
     expect(inferWiring([link(2, 5, false), link(5, 6, false), link(2, 6, false)])).toMatchObject({ ok: false })
-    expect(inferWiring([link(2, 5), link(2, 6, false)])).toMatchObject({ ok: false })
   })
 
   it('reads diodes pointing both ways as a duplex matrix', () => {
@@ -83,6 +82,80 @@ describe('inferWiring', () => {
     expect(result.wiring.more).toEqual([{ Direct: { pins: [10, 11], active_high: false } }, { Direct: { pins: [12], active_high: true } }])
     // The matrix comes first, then the keys to ground, then the one to supply.
     expect(result.wiring.positions).toEqual([2, 0, 4, 1, 3])
+  })
+})
+
+describe('a board that mixes keys with and without a diode', () => {
+  const matrix = [link(2, 4), link(2, 5), link(3, 4), link(3, 5)]
+
+  it('reads a key without a diode on two pins of its own as a group of its own', () => {
+    // The push switch of a knob, between two pins no other key uses.
+    const result = inferWiring([...matrix, link(8, 9, false)])
+    if (!result.ok) throw new Error(result.problem)
+    expect(result.wiring.matrix).toEqual({ Matrix: { rows: [2, 3], cols: [4, 5], diodes: 'Col2Row' } })
+    expect(result.wiring.more).toEqual([{ Matrix: { rows: [8], cols: [9], diodes: 'Col2Row' } }])
+    expect(result.wiring.positions).toEqual([0, 1, 2, 3, 4])
+    expect(result.wiring.doubles).toEqual([])
+    expect(result.wiring.notes).toContain('One key joins two pins of its own, without a diode.')
+  })
+
+  it('puts the larger matrix first whichever was pressed first', () => {
+    const result = inferWiring([link(8, 9, false), ...matrix, { kind: 'ground', pin: 12 }])
+    if (!result.ok) throw new Error(result.problem)
+    expect(result.wiring.more).toEqual([{ Matrix: { rows: [8], cols: [9], diodes: 'Col2Row' } }, { Direct: { pins: [12], active_high: false } }])
+    expect(result.wiring.positions).toEqual([4, 0, 1, 2, 3, 5])
+  })
+
+  it('places a key without a diode among keys with one, whichever way round it was seen', () => {
+    // Row 3, column 6; the probe names the lower pin first.
+    const result = inferWiring([...matrix, link(3, 6, false), link(2, 6)])
+    if (!result.ok) throw new Error(result.problem)
+    expect(result.wiring.matrix).toEqual({ Matrix: { rows: [2, 3], cols: [4, 5, 6], diodes: 'Col2Row' } })
+    expect(result.wiring.positions).toEqual([0, 1, 3, 4, 5, 2])
+    expect(result.wiring.doubles).toEqual([])
+    // Pressed first, it must not decide which pins are rows.
+    const early = inferWiring([link(5, 12, false), link(10, 4), link(10, 5), link(11, 4), link(11, 5), link(12, 4)])
+    if (!early.ok) throw new Error(early.problem)
+    expect(early.wiring.matrix).toEqual({ Matrix: { rows: [4, 5], cols: [10, 11, 12], diodes: 'Row2Col' } })
+    expect(early.wiring.doubles).toEqual([])
+  })
+
+  it('reads a key without a diode in a duplex matrix as one key', () => {
+    // Rows 2 and 3, columns 4 and 5, two keys per crossing; the last crossing has one key without a diode.
+    const keys = [link(2, 4), link(4, 2), link(2, 5), link(5, 2), link(3, 4), link(4, 3), link(3, 5, false)]
+    const result = inferWiring(keys)
+    if (!result.ok) throw new Error(result.problem)
+    expect(result.wiring.matrix).toEqual({ Matrix: { rows: [2, 3], cols: [4, 5], diodes: 'Both' } })
+    expect(result.wiring.positions).toEqual([0, 4, 1, 5, 2, 6, 3])
+    // Its crossing's second position closes with it and is not reported.
+    expect(result.wiring.doubles).toEqual([7])
+    // A key with a diode on the same two pins cannot be told from it.
+    expect(inferWiring([...keys, link(5, 3)])).toMatchObject({ ok: false })
+  })
+
+  it('counts the positions read twice from where their group starts', () => {
+    const result = inferWiring([link(8, 9, false), link(2, 4), link(4, 2), link(2, 5, false), { kind: 'ground', pin: 12 }])
+    if (!result.ok) throw new Error(result.problem)
+    expect(result.wiring.matrix).toEqual({ Matrix: { rows: [2], cols: [4, 5], diodes: 'Both' } })
+    expect(result.wiring.positions).toEqual([4, 0, 2, 1, 5])
+    expect(result.wiring.doubles).toEqual([3])
+  })
+
+  it('shares a matrix among the smallest groups when the keyboard cannot read so many apart', () => {
+    const lone = [link(8, 9, false), link(10, 11, false), link(12, 13, false)]
+    const keys = [...matrix, ...lone, { kind: 'ground', pin: 20 } as const, { kind: 'supply', pin: 21 } as const]
+    const apart = inferWiring(keys)
+    if (!apart.ok) throw new Error(apart.problem)
+    expect(apart.wiring.more).toHaveLength(5)
+    // Four groups, as older firmware has: the matrix, one for the lone keys, ground and supply.
+    const result = inferWiring(keys, 4)
+    if (!result.ok) throw new Error(result.problem)
+    expect(result.wiring.more).toEqual([
+      { Matrix: { rows: [8, 10, 12], cols: [9, 11, 13], diodes: 'Col2Row' } },
+      { Direct: { pins: [20], active_high: false } },
+      { Direct: { pins: [21], active_high: true } },
+    ])
+    expect(result.wiring.positions).toEqual([0, 1, 2, 3, 4, 8, 12, 13, 14])
   })
 })
 
@@ -131,6 +204,30 @@ describe('KeyCollector', () => {
     expect(collector.last).toBe(0)
     expect(collector.stuck).toEqual([{ Ground: 3 }])
     expect([...collector.active].sort()).toEqual([16, 18])
+  })
+
+  it('reads a key without a diode as one key when one way round shows first', () => {
+    let now = 1000
+    const collector = new KeyCollector(() => now)
+    now = 2000
+    const [there, back]: Contact[] = [{ Link: { driven: 5, sensed: 3 } }, { Link: { driven: 3, sensed: 5 } }]
+    collector.update([there])
+    now += 40
+    collector.update([there, back])
+    expect(collector.keys).toEqual([link(3, 5, false)])
+    // Pressed again later and seen one way only, it is still that key.
+    collector.update([])
+    now += 1000
+    collector.update([there])
+    expect([collector.keys.length, collector.last]).toEqual([1, 0])
+
+    // The two keys of a duplex crossing, the second pressed while the first is held, stay two.
+    const duplex = new KeyCollector(() => now)
+    now += 1000
+    duplex.update([there])
+    now += 400
+    duplex.update([there, back])
+    expect(duplex.keys).toEqual([link(5, 3), link(3, 5)])
   })
 
   it('flags two keys pressed in the same instant', () => {
@@ -195,6 +292,52 @@ describe('adding one key to existing wiring', () => {
   })
 })
 
+describe('a missed key on a board with more than one matrix', () => {
+  const hardware = {
+    matrix: { Matrix: { rows: [2, 3], cols: [4, 5], diodes: 'Col2Row' as const } },
+    more: [{ Matrix: { rows: [8], cols: [9], diodes: 'Col2Row' as const } }],
+    reserved_pins: [], debounce_ms: 5, encoders: [], split: 'None' as const,
+  }
+
+  it('grows the matrix the key shares a pin with', () => {
+    const plan = planAddedKey(hardware, link(8, 10, false))
+    if (!plan.ok) throw new Error(plan.problem)
+    expect(plan.hardware.matrix).toEqual(hardware.matrix)
+    expect(plan.hardware.more).toEqual([{ Matrix: { rows: [8], cols: [9, 10], diodes: 'Col2Row' } }])
+    expect(plan.pos).toBe(5)
+    expect(planAddedKey(hardware, link(9, 8, false))).toMatchObject({ ok: true, rewired: false, pos: 4 })
+  })
+
+  it('gives a key on two unused pins a group of its own while there is room', () => {
+    const plan = planAddedKey(hardware, link(10, 11, false))
+    if (!plan.ok) throw new Error(plan.problem)
+    expect(plan.hardware.more).toEqual([...hardware.more, { Matrix: { rows: [10], cols: [11], diodes: 'Col2Row' } }])
+    expect([plan.pos, plan.move(4), plan.move(5)]).toEqual([5, 4, 6])
+    // Without room it joins the first matrix as a new row and column.
+    const full = planAddedKey(hardware, link(10, 11, false), 1)
+    if (!full.ok) throw new Error(full.problem)
+    expect(full.hardware.matrix).toEqual({ Matrix: { rows: [2, 3, 10], cols: [4, 5, 11], diodes: 'Col2Row' } })
+    expect(full.pos).toBe(8)
+  })
+
+  it('refuses a key that joins two matrices', () => {
+    expect(planAddedKey(hardware, link(2, 9, false))).toMatchObject({ ok: false })
+  })
+
+  it('keeps a key without a diode in a duplex matrix one key, also when the matrix grows', () => {
+    const duplex = { ...hardware, matrix: { Matrix: { rows: [2, 3], cols: [4, 5], diodes: 'Both' as const } } }
+    const plain = planAddedKey(duplex, link(3, 5, false))
+    if (!plain.ok) throw new Error(plain.problem)
+    expect([plain.pos, plain.rewired, plain.hardware.doubles]).toEqual([3, true, [7]])
+    // Found again it changes nothing.
+    expect(planAddedKey(plain.hardware, link(3, 5, false))).toMatchObject({ ok: true, rewired: false, pos: 3 })
+    // A new column moves the position that is not reported along with the others.
+    const wider = planAddedKey(plain.hardware, link(2, 6))
+    if (!wider.ok) throw new Error(wider.problem)
+    expect([wider.pos, wider.hardware.doubles]).toEqual([2, [10]])
+  })
+})
+
 describe('a missed key on a board that mixes wiring styles', () => {
   const hardware = {
     matrix: { Matrix: { rows: [2, 3], cols: [4, 5], diodes: 'Both' as const } },
@@ -251,14 +394,14 @@ describe('keys that open when pressed', () => {
 
   it('turns pressed and untouched crossings closed at rest round', () => {
     const keys = [{ ...link(8, 12), inverted: true }, link(8, 14), link(7, 13), link(8, 13)]
-    const result = inferWiring(keys, atRest)
+    const result = inferWiring(keys, undefined, atRest)
     expect(result).toMatchObject({ ok: true, wiring: { matrix: { Matrix: { rows: [8, 7], cols: [12, 14, 13], diodes: 'Col2Row' } } } })
     // Row 8 centre was pressed; row 7 centre never was but still rests.
     if (result.ok) expect(result.wiring.inverted).toEqual([0, 3])
   })
 
   it('ignores connections at rest outside the matrix or against its direction', () => {
-    const result = inferWiring([link(8, 14), link(7, 13)], [{ Link: { driven: 14, sensed: 8 } }, { Link: { driven: 3, sensed: 4 } }])
+    const result = inferWiring([link(8, 14), link(7, 13)], undefined, [{ Link: { driven: 14, sensed: 8 } }, { Link: { driven: 3, sensed: 4 } }])
     if (result.ok) expect(result.wiring.inverted).toEqual([])
   })
 

@@ -1,7 +1,7 @@
 {
   "name": "pog",
   "productName": "POG",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "POG v2: the configurator for keyboards running JMK firmware",
   "license": "Apache-2.0",
@@ -18,6 +18,7 @@
     "prebuild": "npm run wasm",
     "pretest": "npm run wasm",
     "pree2e": "npm run build",
+    "layouts": "node scripts/layouts.mjs",
     "firmware": "mkdir -p firmware && cp ../target/jmk-*.uf2 firmware/",
     "pack": "electron-builder --publish never"
   },

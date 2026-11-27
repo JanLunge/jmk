@@ -5,7 +5,8 @@
 // drag it onto any key.
 import { computed, ref, watch } from 'vue'
 import { startDrag, type Dragged } from '../lib/drag'
-import { ANSI_BLOCKS, describeAction, describeBasic, EXTRA_KEYS, KEY_GROUPS, keyLabel, keyName, MEDIA_KEYS, MOD_BITS } from '../lib/keycodes'
+import { ANSI_BLOCKS, boardBlocks, describeAction, describeBasic, EXTRA_KEYS, KEY_GROUPS, keyIcon, keyLabel, keyName, MEDIA_KEYS, MOD_BITS, modKeyChar } from '../lib/keycodes'
+import { ALTGR_BIT, language, languageId, LANGUAGES, symbols } from '../lib/language'
 import { layerHex } from '../lib/layers'
 import type { Action, Basic } from '../lib/protocol'
 import { macroLabel, type Session } from '../lib/session'
@@ -93,7 +94,7 @@ interface Found {
   basic: Basic
 }
 const everything = computed<Found[]>(() => [
-  ...KEY_GROUPS.flatMap((group) => group.keys).map((key) => ({ label: key.label, name: key.name, basic: { Key: key.usage } as Basic })),
+  ...KEY_GROUPS.flatMap((group) => group.keys).map((key) => ({ label: keyLabel(key.usage), name: keyName(key.usage), basic: { Key: key.usage } as Basic })),
   ...MEDIA_KEYS.map((key) => ({ label: key.label, name: key.name, basic: { Consumer: key.usage } as Basic })),
   ...MOD_BITS.slice(0, 4).map((mod) => ({ label: `${mod.label} once`, name: `${mod.label} for the next key only`, basic: { OneShotMods: mod.bit } as Basic })),
 ])
@@ -104,9 +105,15 @@ const found = computed(() => {
 })
 const foundBasic = (item: Found): Basic => (typeof item.basic === 'object' && 'Key' in item.basic ? keyBasic(item.basic.Key) : item.basic)
 
+const PLATFORMS = [
+  { id: 'pc', name: 'Windows and Linux' },
+  { id: 'mac', name: 'macOS' },
+] as const
+
 // --- Pages --------------------------------------------------------------------
 const TABS = [
   { id: 'keys', name: 'Keyboard' },
+  { id: 'symbols', name: 'Symbols' },
   { id: 'layers', name: 'Layers' },
   { id: 'mods', name: 'One-shot' },
   { id: 'media', name: 'Media' },
@@ -123,7 +130,7 @@ const home = computed<TabId | undefined>(() => {
   if (props.action === 'Transparent' || basic === 'None') return 'more'
   if (!basic || props.mixed) return undefined
   if ('Key' in basic) return ON_BOARD.has(basic.Key) ? 'keys' : 'more'
-  if ('ModKey' in basic) return ON_BOARD.has(basic.ModKey.key) ? 'keys' : 'more'
+  if ('ModKey' in basic) return modKeyChar(basic.ModKey.mods, basic.ModKey.key) ? 'symbols' : ON_BOARD.has(basic.ModKey.key) ? 'keys' : 'more'
   if ('MomentaryLayer' in basic || 'ToggleLayer' in basic || 'ToLayer' in basic) return 'layers'
   if ('OneShotMods' in basic) return 'mods'
   if ('Consumer' in basic) return 'media'
@@ -168,6 +175,11 @@ const summary = computed(() => {
       </template>
 
       <span class="grow" />
+      <select v-model="languageId" class="input language" title="The language your computer's keyboard setting is on, and the kind of computer. It changes what the keys are called here, not what the keyboard sends." aria-label="Language of the computer" data-test="language" @change="($event.target as HTMLElement).blur()">
+        <optgroup v-for="group in PLATFORMS" :key="group.id" :label="group.name">
+          <option v-for="each in LANGUAGES.filter((one) => one.platform === group.id)" :key="each.id" :value="each.id">{{ each.name }}</option>
+        </optgroup>
+      </select>
       <input v-model="search" class="input search" placeholder="Search keys…" data-test="search" />
       <button class="fold" :title="minimized ? 'Open the key picker' : 'Minimise, so the keyboard has the room'" :aria-label="minimized ? 'Open the key picker' : 'Minimise the key picker'" :aria-expanded="!minimized" data-test="picker-fold" @click="emit('minimize', !minimized)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="minimized ? 'm18 15-6-6-6 6' : 'm6 9 6 6 6-6'" /></svg>
@@ -184,6 +196,7 @@ const summary = computed(() => {
         <button v-for="mod in MOD_BITS.slice(0, 4)" :key="mod.bit" class="chip-btn" :class="{ on: withMods & mod.bit }" :data-test="'with-' + mod.label" @click="withMods ^= mod.bit">
           {{ mod.label }}
         </button>
+        <button class="chip-btn" :class="{ on: withMods & ALTGR_BIT }" title="The right Alt key, which many languages use for a third character on a key" data-test="with-AltGr" @click="withMods ^= ALTGR_BIT">{{ language().platform === 'mac' ? 'ROption' : 'AltGr' }}</button>
       </div>
     </div>
 
@@ -207,14 +220,14 @@ const summary = computed(() => {
       </section>
 
       <div v-else-if="tab === 'keys'" class="board">
-        <div v-for="block in ANSI_BLOCKS" :key="block.id" class="block" :class="block.id">
+        <div v-for="block in boardBlocks()" :key="block.id" class="block" :class="block.id">
           <div v-for="(keys, index) in block.rows" :key="index" class="keys">
             <template v-for="([usage, width], at) in keys" :key="at">
               <span v-if="usage === undefined" class="gap" :style="{ '--w': width }" />
               <button
                 v-else
                 class="key-btn cap"
-                :class="{ on: isKey(usage), long: keyLabel(usage).length > 4 && width < 1.5 }"
+                :class="{ on: isKey(usage), long: !keyIcon(usage) && keyLabel(usage).length > 4 && width < 1.5 }"
                 :style="{ '--w': width }"
                 :title="keyName(usage)"
                 :data-usage="usage"
@@ -222,7 +235,11 @@ const summary = computed(() => {
                 @dragstart="drag($event, { basic: keyBasic(usage) })"
                 @click="choose(keyBasic(usage))"
               >
-                {{ keyLabel(usage) }}
+                <template v-if="keyIcon(usage)">
+                  <span class="icon" aria-hidden="true">{{ keyIcon(usage) }}</span>
+                  <span class="word" :class="{ 'visually-hidden': width < 1.5 }">{{ keyLabel(usage) }}</span>
+                </template>
+                <template v-else>{{ keyLabel(usage) }}</template>
               </button>
             </template>
           </div>
@@ -247,6 +264,25 @@ const summary = computed(() => {
         <div class="grid big">
           <button v-for="mod in MOD_BITS.slice(0, 4)" :key="mod.bit" class="key-btn" :class="{ on: same({ OneShotMods: mod.bit }) }" :data-test="'oneshot-' + mod.label" draggable="true" @dragstart="drag($event, { basic: { OneShotMods: mod.bit } })" @click="choose({ OneShotMods: mod.bit })">
             {{ mod.label }} once
+          </button>
+        </div>
+      </section>
+
+      <section v-else-if="tab === 'symbols'" class="page scroll">
+        <p class="muted small">Characters that need Shift or {{ language().platform === 'mac' ? 'Option' : 'AltGr' }} on a {{ language().platform === 'mac' ? 'Mac' : 'Windows or Linux computer' }} set to {{ language().name }}. The key holds the modifier for you.</p>
+        <div class="grid">
+          <button
+            v-for="each in symbols()"
+            :key="each.char"
+            class="key-btn symbol"
+            :class="{ on: same({ ModKey: { mods: each.mods, key: each.usage } }) }"
+            :title="describeBasic({ ModKey: { mods: each.mods, key: each.usage } })"
+            :data-symbol="each.char"
+            draggable="true"
+            @dragstart="drag($event, { basic: { ModKey: { mods: each.mods, key: each.usage } } })"
+            @click="choose({ ModKey: { mods: each.mods, key: each.usage } })"
+          >
+            {{ each.char }}
           </button>
         </div>
       </section>
@@ -290,8 +326,8 @@ const summary = computed(() => {
         </div>
         <p class="muted small">See-through uses whatever the key does on the layer below.</p>
         <div class="grid">
-          <button v-for="key in EXTRA_KEYS" :key="key.usage" class="key-btn" :class="{ on: isKey(key.usage) }" :title="key.name" :data-usage="key.usage" draggable="true" @dragstart="drag($event, { basic: keyBasic(key.usage) })" @click="choose(keyBasic(key.usage))">
-            {{ key.label }}
+          <button v-for="key in EXTRA_KEYS" :key="key.usage" class="key-btn" :class="{ on: isKey(key.usage) }" :title="keyName(key.usage)" :data-usage="key.usage" draggable="true" @dragstart="drag($event, { basic: keyBasic(key.usage) })" @click="choose(keyBasic(key.usage))">
+            {{ keyLabel(key.usage) }}
           </button>
         </div>
       </section>
@@ -376,6 +412,37 @@ const summary = computed(() => {
 .search {
   width: 200px;
   flex: none;
+}
+
+.cap .icon {
+  font-size: 1.15em;
+  line-height: 1;
+}
+
+.cap .word {
+  margin-left: 0.35em;
+  font-size: 0.8em;
+  opacity: 0.55;
+}
+
+.cap .word.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.key-btn.symbol {
+  min-width: 36px;
+  font-size: 1rem;
+}
+
+.language {
+  flex: none;
+  width: auto;
+  max-width: 170px;
 }
 
 .fold {

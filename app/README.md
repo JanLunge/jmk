@@ -22,7 +22,7 @@ screen for trying the app, and the tests use them.
 npm install
 npm run dev        # in a browser, with hot reload (run `npm run wasm` first)
 npm run start      # build and open the desktop app
-npm run firmware   # copy the built RP2040 image into the desktop app
+npm run firmware   # copy the built firmware images into the desktop app
 npm test           # unit tests (logic, and the session layer on virtual keyboards)
 npm run e2e        # the whole app in headless Chromium on virtual keyboards
 JMK_DESKTOP=1 xvfb-run -a npx playwright test desktop   # the desktop shell

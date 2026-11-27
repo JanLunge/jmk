@@ -37,7 +37,7 @@ import BoardThumb from '../components/BoardThumb.vue'
 import SetupGuide from '../components/SetupGuide.vue'
 import MatrixExplainer from '../components/MatrixExplainer.vue'
 import { app, attempt, benchOf, pairUp, partnerOf, relink, toast } from '../lib/app'
-import { boardsFor, findBoard, genericBoard, pinLabel, pinsOfAnyShape, shapeFromPins, wirablePins } from '../lib/boards'
+import { boardsFor, chipLabel, findBoard, genericBoard, pinLabel, pinsOfAnyShape, shapeFromPins, wirablePins } from '../lib/boards'
 import { desktop, type BootDrive } from '../lib/desktop'
 import { localPositions, parseDefinition, positionCount as definitionPositions, type Definition } from '../lib/definition'
 import { arrivals as allArrivals, bootDrives, carriedVersion, installArrival, installOnBoard, updateDue, updateFirmware } from '../lib/firmware'
@@ -46,6 +46,7 @@ import { chooseLink, findWires } from '../lib/cable'
 import { KeyCollector, KnobFinder } from '../lib/collector'
 import { acknowledge, muted } from '../lib/sound'
 import { inferWiring, type KeySignature } from '../lib/infer'
+import { moreWiringLimit } from '../lib/client'
 import { bounds, hasKey, NO_KEY, UNIT } from '../lib/layout'
 import { ALPHAS, letterActions, rowLayout, splitRows } from '../lib/starter'
 import LetterRows from '../components/LetterRows.vue'
@@ -97,7 +98,7 @@ const boardOf = (session: Session) => findBoard(resolvedId.value, session.info.m
 const reachable = (session: Session) =>
   boardId.value === AUTO ? pinsOfAnyShape(session.info.mcu, session.info.usable_pins) : wirablePins(boardOf(session), session.info.usable_pins)
 const board = computed(() => boardOf(props.session))
-const boardName = computed(() => (boardId.value === AUTO && !settledShape.value ? `${info.mcu === 'Nrf52840' ? 'nRF52840' : 'RP2040'} controller` : board.value.name))
+const boardName = computed(() => (boardId.value === AUTO && !settledShape.value ? `${chipLabel(info.mcu)} controller` : board.value.name))
 const reserved = reactive(new Set<Pin>(props.session.hardware.reserved_pins))
 
 function toggleReserved(pin: Pin) {
@@ -522,7 +523,10 @@ function describeKey(half: Session, key: KeySignature): string {
 
 // --- Result ------------------------------------------------------------------
 const results = computed(() =>
-  ordered.value.map((half) => ({ half, result: inferWiring(setupOf(half).collector.keys, setupOf(half).collector.stuck) })),
+  ordered.value.map((half) => ({
+    half,
+    result: inferWiring(setupOf(half).collector.keys, moreWiringLimit(half.info.protocol) + 1, setupOf(half).collector.stuck),
+  })),
 )
 /** The first thing that could not be read, if any. */
 const problem = computed(() => {
@@ -545,6 +549,7 @@ const plans = computed(() => {
     const hardware: HardwareConfig = {
       matrix: result.wiring.matrix,
       more: result.wiring.more.length ? result.wiring.more : undefined,
+      doubles: result.wiring.doubles.length ? result.wiring.doubles : undefined,
       scan: inverted.length || settle_us || drive_idle_high ? { inverted, settle_us, drive_idle_high } : undefined,
       reserved_pins: [...reserved],
       debounce_ms: 5,
@@ -716,7 +721,7 @@ async function pickBackup(event: Event) {
   if (!file) return
   try {
     const chosen = parseDefinition(await file.text())
-    if (chosen.mcu !== info.mcu) throw new Error(`This file is for a ${chosen.mcu === 'Nrf52840' ? 'nRF52840' : 'RP2040'} controller.`)
+    if (chosen.mcu !== info.mcu) throw new Error(`This file is for a ${chipLabel(chosen.mcu)} controller.`)
     if (chosen.halves.length < halves.value.length) throw new Error('This file is for a keyboard in one piece, but two halves are being set up.')
     backup.value = chosen
   } catch (error) {
@@ -779,15 +784,17 @@ const takenPins = computed(() => {
  */
 const stuckPins = computed(() => {
   const ambiguous = new Set(boardId.value === AUTO ? shapes.flatMap((shape) => shape.internal.map((i) => i.pin)) : [])
-  return halves.value.some((half) =>
-    setupOf(half).collector.stuck.some((contact) => {
+  return halves.value.some((half) => {
+    // A knob can rest with a contact closed; once it is found, that is no stuck key.
+    const knobs = new Set(setupOf(half).encoders.flatMap((e) => [e.a, e.b]))
+    return setupOf(half).collector.stuck.some((contact) => {
       // A connection between two pins at rest can be a sensor key that
       // opens when pressed; the result step tells about those.
       if ('Link' in contact) return false
       const pin = 'Ground' in contact ? contact.Ground : contact.Supply
-      return !ambiguous.has(pin)
-    }),
-  )
+      return !('Ground' in contact && knobs.has(pin)) && !ambiguous.has(pin)
+    })
+  })
 })
 
 const canContinue = computed(() => {

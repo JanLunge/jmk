@@ -406,7 +406,9 @@ export async function openFarHalf(session: Session): Promise<void> {
   const uid = session.split.peer_uid
   const key = uid.join(',')
   if (!uid.some((byte) => byte !== 0) || opening.has(key) || (cableRetryAt.get(key) ?? 0) > Date.now()) return
-  if (app.sessions.some((each) => !each.closed && sameUid(each.info.uid, uid))) return
+  // Also one that was unplugged and is still listed: it keeps its place and
+  // its pairing until it is plugged in again or closed.
+  if (app.sessions.some((each) => sameUid(each.info.uid, uid))) return
   opening.add(key)
   const transport = new CableTransport(session.client, `${session.transport.label} (over the cable)`)
   const closeBefore = session.transport.onClose
@@ -416,7 +418,7 @@ export async function openFarHalf(session: Session): Promise<void> {
   }
   try {
     const far = await openSession(transport)
-    if (session.closed || app.sessions.some((each) => !each.closed && sameBoard(each, far))) {
+    if (session.closed || app.sessions.some((each) => sameBoard(each, far))) {
       await far.client.close().catch(() => {})
       return
     }

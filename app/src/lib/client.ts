@@ -3,6 +3,7 @@
 import type {
   Action,
   Combo,
+  ComboOptions,
   Contact,
   DeviceEvent,
   DeviceMessage,
@@ -26,6 +27,12 @@ import { bridge } from './wasm'
 const REPLY_TIMEOUT_MS = 3000
 /** Protocol version from which a board can mix wiring styles and scan a duplex matrix. */
 export const MORE_WIRING_PROTOCOL = 9
+/** Protocol version from which a combo can be a sequence, be limited to layers and have more than four keys. */
+export const COMBO_OPTIONS_PROTOCOL = 11
+/** From which a board has eight groups of switches, not four, and reads a key without a diode in a duplex matrix as one key. */
+export const MANY_GROUPS_PROTOCOL = 11
+/** Groups of switches a keyboard of that protocol version can have besides its first. */
+export const moreWiringLimit = (protocol: number) => (protocol < MORE_WIRING_PROTOCOL ? 0 : protocol < MANY_GROUPS_PROTOCOL ? 3 : LIMITS.moreWiring)
 export const isUsualScan = (scan: ScanConfig) => !scan.inverted.length && !scan.settle_us && !scan.drive_idle_high
 
 /** Firmware that can read keys the other way round and wait longer between lines. */
@@ -149,33 +156,43 @@ export class KeyboardClient {
     const hardware: HardwareConfig = await this.expect('GetHardware', 'Hardware')
     if (this.protocol < MORE_WIRING_PROTOCOL) return hardware
     const more: MatrixConfig[] = await this.expect('GetMoreWiring', 'MoreWiring')
-    const withMore = more.length ? { ...hardware, more } : hardware
-    if (this.protocol < SCAN_PROTOCOL) return withMore
+    if (more.length) hardware.more = more
+    if (this.protocol < MANY_GROUPS_PROTOCOL) return hardware
+    const doubles: number[] = await this.expect('GetDoubles', 'Doubles')
+    if (doubles.length) hardware.doubles = doubles
+    if (this.protocol < SCAN_PROTOCOL) return hardware
     const scan: ScanConfig = await this.expect('GetScan', 'Scan')
-    return isUsualScan(scan) ? withMore : { ...withMore, scan }
+    if (!isUsualScan(scan)) hardware.scan = scan
+    return hardware
   }
 
   async setHardware(hardware: HardwareConfig): Promise<void> {
-    const { more = [], scan = NO_SCAN, ...first } = hardware
+    const { more = [], doubles = [], scan = NO_SCAN, ...first } = hardware
     if (this.protocol < SCAN_PROTOCOL && !isUsualScan(scan)) {
       throw new KeyboardError("This keyboard's firmware is too old for keys that open when pressed. Update the firmware first.")
     }
     const matrix = first.matrix
     const duplex = [matrix, ...more].some((part) => part !== 'None' && 'Matrix' in part && part.Matrix.diodes === 'Both')
+    const tooOld = new KeyboardError("This keyboard's firmware is too old for this wiring. Update the firmware first.")
     if (this.protocol < MORE_WIRING_PROTOCOL) {
-      if (more.length || duplex) throw new KeyboardError("This keyboard's firmware is too old for this wiring. Update the firmware first.")
+      if (more.length || duplex) throw tooOld
       return this.ok({ SetHardware: first })
     }
+    if (more.length > moreWiringLimit(this.protocol) || (doubles.length && this.protocol < MANY_GROUPS_PROTOCOL)) throw tooOld
     // The keyboard checks each part against what it holds, so the old extra
     // groups go first: their pins may be wanted elsewhere now.
     const before: MatrixConfig[] = await this.expect('GetMoreWiring', 'MoreWiring')
+    const doublesBefore: number[] = this.protocol < MANY_GROUPS_PROTOCOL ? [] : await this.expect('GetDoubles', 'Doubles')
     if (before.length) await this.ok({ SetMoreWiring: [] })
     try {
       await this.ok({ SetHardware: first })
       if (more.length) await this.ok({ SetMoreWiring: more })
+      // Last: the keyboard forgets them whenever the wiring is set.
+      if (doubles.length) await this.ok({ SetDoubles: doubles })
       if (this.protocol >= SCAN_PROTOCOL) await this.ok({ SetScan: scan })
     } catch (error) {
       if (before.length) await this.ok({ SetMoreWiring: before }).catch(() => {})
+      if (doublesBefore.length) await this.ok({ SetDoubles: doublesBefore }).catch(() => {})
       throw error
     }
   }
@@ -183,8 +200,28 @@ export class KeyboardClient {
   setLayerCount = (count: number) => this.shared({ SetLayerCount: count })
   profiles = (): Promise<HoldTapProfile[]> => this.expect('GetHoldTapProfiles', 'HoldTapProfiles')
   setProfile = (index: number, profile: HoldTapProfile) => this.shared({ SetHoldTapProfile: { index, profile } })
-  combos = (): Promise<Combo[]> => this.expect('GetCombos', 'Combos')
-  setCombos = (combos: Combo[]) => this.shared({ SetCombos: combos })
+  async combos(): Promise<Combo[]> {
+    const combos: Combo[] = await this.expect('GetCombos', 'Combos')
+    if (this.protocol < COMBO_OPTIONS_PROTOCOL) return combos
+    const options: ComboOptions[] = await this.expect('GetComboOptions', 'ComboOptions')
+    return combos.map((combo, index) => ({
+      ...combo,
+      ...(options[index]?.layers ? { layers: options[index].layers } : {}),
+      ...(options[index]?.sequence ? { sequence: true } : {}),
+    }))
+  }
+
+  async setCombos(combos: Combo[]): Promise<void> {
+    const plain = ({ keys, action, timeout_ms }: Combo) => ({ keys, action, timeout_ms })
+    if (this.protocol < COMBO_OPTIONS_PROTOCOL) {
+      // Older firmware would run a sequence as a chord and a combo for one
+      // layer on all of them, and refuses long ones: leave those out.
+      const known = combos.filter((combo) => !combo.sequence && !combo.layers && combo.keys.length <= LIMITS.comboKeysBefore)
+      return this.shared({ SetCombos: known.map(plain) })
+    }
+    await this.shared({ SetCombos: combos.map(plain) })
+    await this.shared({ SetComboOptions: combos.map((combo) => ({ layers: combo.layers ?? 0, sequence: combo.sequence ?? false })) })
+  }
   meta = (): Promise<Meta> => this.expect('GetMeta', 'Meta')
   setMeta = (meta: Meta) => this.ok({ SetMeta: meta })
   splitStatus = (): Promise<SplitStatus> => this.expect('GetSplitStatus', 'SplitStatus')

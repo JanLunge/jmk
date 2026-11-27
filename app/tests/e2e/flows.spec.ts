@@ -392,6 +392,29 @@ test('macros and combos', async ({ page }) => {
   await expect(typed(page)).toHaveText('Hi!zb')
 })
 
+test('a combo of keys pressed one after the other', async ({ page }) => {
+  await openDemo(page, 'macropad')
+  await runWizard(page)
+  await page.click('[data-test=nav-behaviours]')
+  await page.click('[data-test=section-combos]')
+  await page.click('[data-test=add-combo]')
+  await page.click('[data-test=combo-sequence]')
+  // Picked in the order they are pressed: the third key, then the second.
+  await page.locator('[data-test=combo-board] [data-pos="2"]').dispatchEvent('pointerdown')
+  await page.locator('[data-test=combo-board] [data-pos="1"]').dispatchEvent('pointerdown')
+  await expect(page.locator('[data-test=combo-order]')).toHaveText('Order: C → B')
+  await page.click('.picker [data-usage="29"]') // Z
+
+  await page.click('[data-test=nav-keymap]')
+  await tap(page, 2)
+  await tap(page, 1)
+  await expect(typed(page)).toHaveText('z')
+  // The other way round they are two keys; the one that starts the sequence waits a moment.
+  await tap(page, 1)
+  await tap(page, 2)
+  await expect(typed(page)).toHaveText('zbc')
+})
+
 test('a macro is named and recorded right in the keymap', async ({ page }) => {
   await openDemo(page, 'macropad')
   await runWizard(page)
@@ -1024,4 +1047,31 @@ test('setup: a key press is acknowledged with a tone, which can be turned off', 
   // Off stays off the next time the app opens.
   await page.reload()
   expect(await page.evaluate(() => localStorage.getItem('jmk.sound'))).toBe('off')
+})
+
+test('the language of the computer names the keys: Ö on a Swedish one', async ({ page }) => {
+  await openDemo(page, 'macropad')
+  await runWizard(page)
+  await page.locator('[data-test=keymap-board] [data-pos="0"]').dispatchEvent('pointerdown')
+  await expect(page.locator('.picker [data-usage="51"]').first()).toHaveText(';')
+  await page.selectOption('[data-test=language]', 'sv')
+  // An ISO keyboard: Å Ä Ö where they sit, and the key next to the left Shift.
+  await expect(page.locator('.picker .board [data-usage="47"]')).toHaveText('Å')
+  await expect(page.locator('.picker .board [data-usage="100"]')).toHaveText('<')
+  await page.locator('.picker .board [data-usage="51"]').click()
+  await expect(page.locator('[data-test=keymap-board] [data-pos="0"]')).toContainText('Ö')
+  await expect(page.locator('[data-test=action-description]')).toContainText('Ö')
+  await page.waitForTimeout(150)
+  await tap(page, 0)
+  await expect(typed(page)).toHaveText('ö')
+  // @ needs AltGr on a Swedish computer; the Symbols page knows that.
+  await page.locator('[data-test=keymap-board] [data-pos="1"]').dispatchEvent('pointerdown')
+  await page.click('[data-test=tab-symbols]')
+  await page.locator('.picker [data-symbol="@"]').click()
+  await expect(page.locator('[data-test=keymap-board] [data-pos="1"]')).toContainText('@')
+  await expect(page.locator('[data-test=action-description]')).toContainText('@, typed as AltGr + 2')
+  if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT })
+  // Kept for the next time.
+  await page.reload()
+  expect(await page.evaluate(() => localStorage.getItem('jmk.language'))).toBe('sv')
 })

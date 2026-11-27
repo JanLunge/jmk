@@ -103,7 +103,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             config.reset();
         }
         let mut scanner = Scanner::new();
-        scanner.configure(&config.hardware, &config.more_wiring, &config.scan, &mut pins);
+        scanner.configure(&config.hardware, &config.more_wiring, &config.doubles, &config.scan, &mut pins);
         let stored_digest = config.shared_digest();
         // A half first listens for the other one; see `Split::leading`.
         let leading = config.hardware.split == SplitConfig::None;
@@ -503,6 +503,8 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 self.stop_probe();
                 self.release_matrix_pins();
                 self.config.hardware = hardware;
+                // They were counted in the old wiring's positions.
+                self.config.doubles.clear();
                 self.restart_scanning(out);
                 Ok(Response::Ok)
             }
@@ -515,6 +517,19 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 self.stop_probe();
                 self.release_matrix_pins();
                 self.config.more_wiring = more;
+                self.config.doubles.clear();
+                self.restart_scanning(out);
+                Ok(Response::Ok)
+            }
+            Request::GetDoubles => Ok(Response::Doubles(self.config.doubles.clone())),
+            Request::SetDoubles(doubles) => {
+                let switches = self.config.hardware.switch_count(&self.config.more_wiring);
+                if doubles.iter().any(|pos| *pos as usize >= switches) {
+                    return Err(Error::OutOfRange);
+                }
+                self.stop_probe();
+                self.release_matrix_pins();
+                self.config.doubles = doubles;
                 self.restart_scanning(out);
                 Ok(Response::Ok)
             }
@@ -571,7 +586,17 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             Request::SetCombos(combos) => {
                 // Held combo keys refer to combos by index.
                 self.engine.reset(out);
+                self.config.combo_options.truncate(combos.len());
                 self.config.combos = combos;
+                Ok(Response::Ok)
+            }
+            Request::GetComboOptions => Ok(Response::ComboOptions(self.config.combo_options.clone())),
+            Request::SetComboOptions(options) => {
+                if options.len() > self.config.combos.len() {
+                    return Err(Error::OutOfRange);
+                }
+                self.engine.reset(out);
+                self.config.combo_options = options;
                 Ok(Response::Ok)
             }
             Request::GetMacro { index, start } => {
@@ -792,7 +817,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         self.compared = None;
         self.fetch = None;
         self.sync = SplitSync::Unknown;
-        self.scanner.configure(&self.config.hardware, &self.config.more_wiring, &self.config.scan, &mut self.pins);
+        self.scanner.configure(&self.config.hardware, &self.config.more_wiring, &self.config.doubles, &self.config.scan, &mut self.pins);
     }
 }
 

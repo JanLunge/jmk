@@ -6,6 +6,12 @@ import type { Contact, Pin } from './protocol'
 
 /** Contacts present this long after probing starts are not keys. */
 const SETTLE_MS = 500
+/**
+ * A key without a diode conducts both ways, but the keyboard may notice one
+ * way a moment before the other. The second way showing up this soon, while
+ * the first is still there, is the same key and not the next one.
+ */
+const SAME_PRESS_MS = 150
 
 export class KeyCollector {
   keys: KeySignature[] = []
@@ -20,6 +26,8 @@ export class KeyCollector {
   /** How many presses were read as one key so far. */
   presses = 0
   private previous = new Set<string>()
+  /** When the last new key was found. */
+  private foundAt = -Infinity
   /** Contacts from `stuck` missing from the last probe pass. */
   private opened = new Set<string>()
   private readonly startedAt: number
@@ -36,6 +44,7 @@ export class KeyCollector {
     const ignored = new Set(this.stuck.map(contactKey))
     const current = contacts.filter((contact) => !ignored.has(contactKey(contact)))
     const fresh = current.filter((contact) => !this.previous.has(contactKey(contact)))
+    const held = this.previous
     this.previous = new Set(current.map(contactKey))
     // A connection that was there at rest and lets go is a key that opens
     // when pressed: a light-beam sensor, like the centre key of a Svalboard
@@ -47,18 +56,36 @@ export class KeyCollector {
     this.active = new Set([...current, ...opened].flatMap(pinsOf))
     if (!fresh.length && !freshlyOpened.length) return
 
+    if (fresh.length === 1 && !freshlyOpened.length && 'Link' in fresh[0] && this.last !== undefined && this.now() - this.foundAt < SAME_PRESS_MS) {
+      const { driven, sensed } = fresh[0].Link
+      const key = this.keys[this.last]
+      const reverse: Contact = { Link: { driven: sensed, sensed: driven } }
+      const newest = key.kind === 'link' && key.diode && !key.inverted && key.driven === sensed && key.sensed === driven
+      // Not when this way round is a key found before: then they are the two keys of a duplex crossing.
+      const apart = this.keys.some((other) => other.kind === 'link' && other.diode && other.driven === driven && other.sensed === sensed)
+      if (newest && !apart && held.has(contactKey(reverse))) {
+        // The other way round of the key just found: it has no diode.
+        this.keys[this.last] = signatureOf([fresh[0], reverse])!
+        this.confused = false
+        return
+      }
+    }
     const closing = fresh.length ? signatureOf(fresh) : undefined
     const opening = freshlyOpened.length ? signatureOf(freshlyOpened) : undefined
     const signature = fresh.length && freshlyOpened.length ? undefined : (closing ?? (opening && { ...opening, inverted: true }))
     this.confused = !signature
     if (!signature) return
     this.presses++
-    const known = this.keys.findIndex((key) => sameKey(key, signature))
+    // A key known to have no diode is the same key when seen one way only.
+    const plain = (key: KeySignature) =>
+      key.kind === 'link' && !key.diode && signature.kind === 'link' && key.driven === signature.sensed && key.sensed === signature.driven
+    const known = this.keys.findIndex((key) => sameKey(key, signature) || plain(key))
     if (known >= 0) {
       this.last = known
     } else {
       this.keys.push(signature)
       this.last = this.keys.length - 1
+      this.foundAt = this.now()
     }
   }
 

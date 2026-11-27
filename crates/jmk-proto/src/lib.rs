@@ -7,16 +7,18 @@
 pub mod frame;
 
 pub use heapless::{String, Vec};
-use jmk_core::{Action, Combo, HoldTapProfile, MacroStep};
+use jmk_core::{Action, Combo, ComboOptions, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
-/// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours.
+/// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours;
+/// 11 combo options, more groups of switches and [`Request::SetDoubles`];
+/// 12 [`Request::SetScan`]; 13 [`Request::Peer`].
 pub const PROTOCOL_VERSION: u16 = 13;
 
 /// What runs on the keyboard, as the app compares it with the firmware it
 /// carries to offer an update. Count it up with every change to the firmware
 /// that a keyboard should get, also one that leaves the protocol alone.
-pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 5, 0);
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 5, 1);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -26,7 +28,9 @@ pub const MAX_MATRIX_ROWS: usize = 16;
 pub const MAX_MATRIX_COLS: usize = 24;
 pub const MAX_DIRECT_PINS: usize = 64;
 /// Groups of switches a board can have besides its first one.
-pub const MAX_MORE_WIRING: usize = 3;
+pub const MAX_MORE_WIRING: usize = 7;
+/// Positions a board can have that read a switch a second time.
+pub const MAX_DOUBLES: usize = 16;
 pub const MAX_RESERVED_PINS: usize = 32;
 pub const MAX_PROBE_PINS: usize = 48;
 pub const MAX_CONTACTS: usize = 16;
@@ -183,6 +187,11 @@ pub struct HardwareConfig {
 /// read.
 pub type MoreWiring = Vec<MatrixConfig, MAX_MORE_WIRING>;
 
+/// Positions the board never reports, counted like its own switches (before
+/// [`SplitConfig::Half::offset`]). A switch without a diode in a matrix read
+/// in both directions closes both positions of its crossing; the second of
+/// them is listed here, so the switch is one key.
+pub type Doubles = Vec<u16, MAX_DOUBLES>;
 /// How this board's own switches are read, beyond which pins they use. Kept
 /// apart from [`HardwareConfig`] like [`MoreWiring`], so that older firmware
 /// and saves still read.
@@ -498,6 +507,16 @@ pub enum Request {
     /// The groups of switches after the first. Checked together with the
     /// rest of the hardware configuration: no pin may appear twice.
     SetMoreWiring(MoreWiring),
+    GetComboOptions,
+    /// The layers each combo works on and whether it is a sequence, by the
+    /// index of the combo. Send it after [`Request::SetCombos`], which drops
+    /// the options of combos that are no longer there. Combos without an
+    /// entry have the defaults.
+    SetComboOptions(Vec<ComboOptions, MAX_COMBOS>),
+    GetDoubles,
+    /// Positions that read a switch a second time and are not reported.
+    /// Setting the wiring empties the list, so send it after the wiring.
+    SetDoubles(Doubles),
     GetScan,
     /// How the switches are read. Takes effect at once.
     SetScan(ScanConfig),
@@ -534,6 +553,8 @@ pub enum Response {
     MacroName(String<MAX_MACRO_NAME>),
     LetterRows(LetterRows),
     MoreWiring(MoreWiring),
+    ComboOptions(Vec<ComboOptions, MAX_COMBOS>),
+    Doubles(Doubles),
     Scan(ScanConfig),
 }
 

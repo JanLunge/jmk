@@ -3,10 +3,7 @@
 
 import type { KeySignature } from './infer'
 import { keyCount, wiringParts } from './definition'
-import { NO_SCAN, type HardwareConfig, type MatrixConfig, type Pin } from './protocol'
-
-/** Groups of switches a board can have besides its first (the firmware's limit). */
-const MAX_MORE_WIRING = 3
+import { LIMITS, NO_SCAN, type HardwareConfig, type MatrixConfig, type Pin } from './protocol'
 
 export type AddPlan =
   | {
@@ -22,11 +19,13 @@ export type AddPlan =
   | { ok: false; problem: string }
 
 /**
- * Work out how the key that made `key` joins the wiring in `hardware`. Keys
+/**
+ * Work out how the key that made `key` joins the wiring in `hardware`, on a
+ * keyboard that can have `maxMore` groups of switches besides its first. Keys
  * read the other way round keep that, wherever the new numbering puts them.
  */
-export function planAddedKey(hardware: HardwareConfig, key: KeySignature): AddPlan {
-  const plan = planWiring(hardware, key)
+export function planAddedKey(hardware: HardwareConfig, key: KeySignature, maxMore: number = LIMITS.moreWiring): AddPlan {
+  const plan = planDoubles(hardware, key, maxMore)
   if (!plan.ok) return plan
   const before = hardware.scan?.inverted ?? []
   const inverted = [...new Set([...before.map(plan.move), ...(key.inverted ? [plan.pos] : [])])].sort((a, b) => a - b)
@@ -34,7 +33,23 @@ export function planAddedKey(hardware: HardwareConfig, key: KeySignature): AddPl
   return { ...plan, hardware: { ...plan.hardware, scan: { ...(hardware.scan ?? NO_SCAN), inverted } } }
 }
 
-function planWiring(hardware: HardwareConfig, key: KeySignature): AddPlan {
+function planDoubles(hardware: HardwareConfig, key: KeySignature, maxMore: number): AddPlan {
+  const plan = planGroups(hardware, key, maxMore)
+  if (!plan.ok) return plan
+  const { double, ...rest } = plan
+  // Positions that read a key a second time are renumbered like any other.
+  const doubles = (hardware.doubles ?? []).map(plan.move)
+  const added = double !== undefined && !doubles.includes(double)
+  if (added) doubles.push(double)
+  if (doubles.length > LIMITS.doubles) {
+    return { ok: false, problem: 'This keyboard already has as many keys without a diode among ones with diodes both ways as it can hold.' }
+  }
+  if (!doubles.length) return rest
+  return { ...rest, hardware: { ...plan.hardware, doubles }, rewired: plan.rewired || added }
+}
+
+/** `double`: a position that reads the new key a second time and must not be reported. */
+function planGroups(hardware: HardwareConfig, key: KeySignature, maxMore: number): AddPlan & { double?: number } {
   if (hardware.matrix === 'None') return { ok: false, problem: 'This keyboard has no keys set up yet. Run the setup first.' }
   const parts = wiringParts(hardware)
   /** Put a changed group back where it was; the first group lives in `matrix`. */
@@ -50,7 +65,7 @@ function planWiring(hardware: HardwareConfig, key: KeySignature): AddPlan {
     const index = parts.findIndex((part) => part !== 'None' && 'Direct' in part && part.Direct.active_high === activeHigh)
     if (index < 0) {
       // The first key of its kind: a group of its own after the others.
-      if (parts.length > MAX_MORE_WIRING) return { ok: false, problem: 'This keyboard already mixes as many wiring styles as it can hold.' }
+      if (parts.length > maxMore) return { ok: false, problem: 'This keyboard already mixes as many wiring styles as it can hold.' }
       return {
         ok: true,
         hardware: { ...hardware, more: [...(hardware.more ?? []), { Direct: { pins: [key.pin], active_high: activeHigh } }] },
@@ -75,7 +90,25 @@ function planWiring(hardware: HardwareConfig, key: KeySignature): AddPlan {
     }
   }
 
-  const index = parts.findIndex((part) => part !== 'None' && 'Matrix' in part)
+  const isMatrix = (part: MatrixConfig): part is Extract<MatrixConfig, { Matrix: unknown }> => part !== 'None' && 'Matrix' in part
+  /** The matrices the key's pins belong to already. */
+  const owners = parts.flatMap((part, i) => (isMatrix(part) && [...part.Matrix.rows, ...part.Matrix.cols].some((pin) => pin === key.driven || pin === key.sensed) ? [i] : []))
+  if (owners.length > 1) {
+    return { ok: false, problem: 'This key joins two groups of keys that are read apart from each other. Find the keys again to set the wiring up anew.' }
+  }
+  let index = owners[0] ?? -1
+  if (index < 0 && parts.length <= maxMore) {
+    // Two pins no other key uses: a group of its own after the others.
+    return {
+      ok: true,
+      hardware: { ...hardware, more: [...(hardware.more ?? []), { Matrix: { rows: [key.driven], cols: [key.sensed], diodes: 'Col2Row' } }] },
+      pos: switches,
+      move: (old) => (old < switches ? old : old + 1),
+      rewired: true,
+    }
+  }
+  // No room for another group: the first matrix takes it in, as a new row and column.
+  if (index < 0) index = parts.findIndex(isMatrix)
   if (index < 0) {
     return { ok: false, problem: 'This key joins two pins, but the other keys each use one pin. Find the keys again to change the wiring style.' }
   }
@@ -113,6 +146,8 @@ function planWiring(hardware: HardwareConfig, key: KeySignature): AddPlan {
     ok: true,
     hardware: rewired ? withPart(index, { Matrix: { rows: newRows, cols: newCols, diodes } }) : hardware,
     pos,
+    // Read in both directions, a key without a diode also shows as its crossing's second key.
+    double: duplex && !key.diode ? pos + newCrossings : undefined,
     move: (old) => {
       if (old < base) return old
       const local = old - base

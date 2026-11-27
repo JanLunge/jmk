@@ -30,10 +30,11 @@ What has actually run on hardware:
 | | |
 | --- | --- |
 | RP2040 (Pi Pico and friends) | Runs on my own boards. This is the one to use. |
+| RP2350 (Pi Pico 2 and friends) | Compiles, from the same code as the RP2040. Has not run on a board yet. |
 | nRF52840 (nice!nano and friends) | Compiles. will wireup my first bluetooth board soon with it (wireless is not supported yet). |
 | Split keyboards over a cable | Works both with 2 pin and 1pin serial connections |
 | widirng types | Direct pin, matrix, duplex matrix and rotary encoders work |
-| RGB lights (WS2812) | RP2040 only. |
+| RGB lights (WS2812) | RP2040 only (RP2350: built in, not tried). |
 
 # What it does
 
@@ -41,7 +42,7 @@ What has actually run on hardware:
   without diodes, a duplex matrix, or a mix of them on one board
 - rotary knobs, split keyboards over a serial cable, RGB underglow and
   per-key lights
-- layers, hold-tap, combos, one-shot modifiers, macros you can record
+- layers, hold-tap, combos (keys together or one after the other, per layer), one-shot modifiers, macros you can record
 - keymap editor: click or drag keys, or just type on your normal keyboard to
   fill in key after key
 - puts QWERTY, Colemak, Colemak-DH or Dvorak on the letter keys in one go
@@ -79,7 +80,17 @@ cargo run -p jmk-uf2 -- rp2040 \
 (cd app && npm run firmware)
 ```
 
-`./scripts/check.sh` runs every test and builds both firmwares. There is no
+For a Pi Pico 2 it is the same with `rp2350` and its target:
+
+```sh
+rustup target add thumbv8m.main-none-eabihf
+(cd firmware/rp2350 && cargo build --release)
+cargo run -p jmk-uf2 -- rp2350 \
+    firmware/rp2350/target/thumbv8m.main-none-eabihf/release/jmk-rp2350 target/jmk-rp2350.uf2
+(cd app && npm run firmware)
+```
+
+`./scripts/check.sh` runs every test and builds all firmwares. There is no
 hosted CI yet, that script is it.
 
 How the crates fit together, the pin safety rules and the protocol notes are
@@ -98,6 +109,7 @@ in [docs/internals.md](docs/internals.md).
 - [ ] releases with installers for macOS, Windows and Linux
 - [ ] CI that runs the check script
 - [ ] run the nRF52840 port on a real board
+- [ ] run the RP2350 port on a real board
 - [ ] test duplex and mixed wiring on real boards
 
 ## wishlist

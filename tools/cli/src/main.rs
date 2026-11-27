@@ -256,16 +256,19 @@ fn find_config_channel() -> Option<PathBuf> {
 }
 
 fn flash(image: &str) -> Result<()> {
-    const DRIVE: &str = "/dev/disk/by-label/RPI-RP2";
+    // What the boot ROMs of the RP2040 and the RP2350 call their drive.
+    const DRIVES: [&str; 2] = ["/dev/disk/by-label/RPI-RP2", "/dev/disk/by-label/RP2350"];
     let image = fs::read(image).map_err(|e| format!("{image}: {e}"))?;
     if image.len() % 512 != 0 || !image.starts_with(b"UF2\n") {
         return Err("not a UF2 file".into());
     }
-    if fs::metadata(DRIVE).is_err() {
+    if DRIVES.iter().all(|drive| fs::metadata(drive).is_err()) {
         Keyboard::open()?.ok(Request::Reboot { bootloader: true })?;
     }
-    let drive = wait_for("the bootloader drive", || OpenOptions::new().write(true).open(DRIVE).ok())?;
-    // The RP2040 boot ROM takes UF2 blocks written to any sector of its
+    let drive = wait_for("the bootloader drive", || {
+        DRIVES.iter().find_map(|drive| OpenOptions::new().write(true).open(drive).ok())
+    })?;
+    // The boot ROM takes UF2 blocks written to any sector of its
     // drive, so no filesystem access is needed. Stay clear of the first
     // sectors, which hold its FAT structures.
     use std::os::unix::fs::FileExt;

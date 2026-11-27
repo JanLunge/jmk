@@ -25,6 +25,8 @@ pub(crate) struct Scanner {
     lockout: [u8; MAX_KEYS],
     /// Scans in a row a held key has read open.
     open: [u8; MAX_KEYS],
+    /// Positions that read a switch a second time and are never reported.
+    skip: [bool; MAX_KEYS],
     encoders: [Encoder; MAX_ENCODERS],
     /// Bit n set: position n reads closed at rest and open while pressed.
     inverted: u128,
@@ -40,6 +42,7 @@ impl Scanner {
             pressed: [false; MAX_KEYS],
             lockout: [0; MAX_KEYS],
             open: [0; MAX_KEYS],
+            skip: [false; MAX_KEYS],
             encoders: [Encoder { last: 0, steps: 0 }; MAX_ENCODERS],
             inverted: 0,
             settle_us: 0,
@@ -48,8 +51,13 @@ impl Scanner {
     }
 
     /// Put all scanned pins into their idle state and forget key states.
-    pub fn configure(&mut self, hardware: &HardwareConfig, more: &[MatrixConfig], scan: &ScanConfig, pins: &mut impl Pins) {
+    pub fn configure(&mut self, hardware: &HardwareConfig, more: &[MatrixConfig], doubles: &[u16], scan: &ScanConfig, pins: &mut impl Pins) {
         *self = Self::new();
+        for pos in doubles {
+            if let Some(skip) = self.skip.get_mut(*pos as usize) {
+                *skip = true;
+            }
+        }
         self.inverted = scan.inverted.iter().filter(|pos| (**pos as usize) < MAX_KEYS).fold(0, |bits, pos| bits | 1 << pos);
         self.settle_us = scan.settle_us;
         self.drive_high = scan.drive_idle_high;
@@ -76,7 +84,7 @@ impl Scanner {
         let (inverted, settle_us) = (self.inverted, self.settle_us);
         let lines = Lines { settle_us, drive_high: self.drive_high };
         let mut update = |pos: usize, raw: bool| {
-            if pos >= MAX_KEYS {
+            if pos >= MAX_KEYS || self.skip[pos] {
                 return;
             }
             let raw = raw != (inverted >> pos & 1 != 0);
