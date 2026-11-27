@@ -49,6 +49,8 @@ mkdir -p "$out/logs"
 say "Firmware and page, built once"
 (cd firmware/rp2040 && cargo build --release --locked)
 cargo run -q --locked -p jmk-uf2 -- rp2040 firmware/rp2040/target/thumbv6m-none-eabi/release/jmk-rp2040 target/jmk-rp2040.uf2
+(cd firmware/rp2350 && cargo build --release --locked)
+cargo run -q --locked -p jmk-uf2 -- rp2350 firmware/rp2350/target/thumbv8m.main-none-eabihf/release/jmk-rp2350 target/jmk-rp2350.uf2
 (cd firmware/nrf52840 && cargo build --release --locked)
 cargo run -q --locked -p jmk-uf2 -- nrf52840 firmware/nrf52840/target/thumbv7em-none-eabihf/release/jmk-nrf52840 target/jmk-nrf52840.uf2
 (cd app && npm ci --no-audit --no-fund --silent && rm -rf firmware && npm run firmware --silent && npm run build --silent)

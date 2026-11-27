@@ -1,8 +1,8 @@
 //! The serial cable between two halves of a split keyboard.
 //!
-//! A cable with a wire for each direction runs on a UART. The RP2040 can
+//! A cable with a wire for each direction runs on a UART. These chips can
 //! only put one on certain pins, so the pin pair from the configuration
-//! selects the UART. A cable with a single data wire runs on any pin: see
+//! selects the UART. The RP2350 offers more such pins than the RP2040. A cable with a single data wire runs on any pin: see
 //! [`wire`]. A changed link configuration is followed while the keyboard
 //! runs.
 
@@ -28,17 +28,45 @@ bind_interrupts!(struct Irqs {
     PIO1_IRQ_0 => pio::InterruptHandler<PIO1>;
 });
 
-const UART0_TX: [Pin; 4] = [0, 12, 16, 28];
-const UART0_RX: [Pin; 4] = [1, 13, 17, 29];
-const UART1_TX: [Pin; 4] = [4, 8, 20, 24];
-const UART1_RX: [Pin; 4] = [5, 9, 21, 25];
+// `app/src/lib/cable.ts` has the same lists, to pick the wires of a cable.
+#[cfg(not(feature = "rp235x"))]
+mod ports {
+    use super::Pin;
+    pub const UART0_TX: &[Pin] = &[0, 12, 16, 28];
+    pub const UART0_RX: &[Pin] = &[1, 13, 17, 29];
+    pub const UART1_TX: &[Pin] = &[4, 8, 20, 24];
+    pub const UART1_RX: &[Pin] = &[5, 9, 21, 25];
+}
+#[cfg(all(feature = "rp235x", not(feature = "rp235xb")))]
+mod ports {
+    use super::Pin;
+    pub const UART0_TX: &[Pin] = &[0, 2, 12, 14, 16, 18, 28];
+    pub const UART0_RX: &[Pin] = &[1, 3, 13, 15, 17, 19, 29];
+    pub const UART1_TX: &[Pin] = &[4, 6, 8, 10, 20, 22, 24, 26];
+    pub const UART1_RX: &[Pin] = &[5, 7, 9, 11, 21, 23, 25, 27];
+}
+#[cfg(feature = "rp235xb")]
+mod ports {
+    use super::Pin;
+    pub const UART0_TX: &[Pin] = &[0, 2, 12, 14, 16, 18, 28, 30, 32, 34, 44, 46];
+    pub const UART0_RX: &[Pin] = &[1, 3, 13, 15, 17, 19, 29, 31, 33, 35, 45, 47];
+    pub const UART1_TX: &[Pin] = &[4, 6, 8, 10, 20, 22, 24, 26, 36, 38, 40, 42];
+    pub const UART1_RX: &[Pin] = &[5, 7, 9, 11, 21, 23, 25, 27, 37, 39, 41, 43];
+}
+use ports::{UART0_RX, UART0_TX, UART1_RX, UART1_TX};
+
+/// A cable with one wire cannot use the GPIOs from 32 up, which only the
+/// RP2350B has: the PIO reaches them only when told to look at GPIO 16 to
+/// 47 instead, and the driver does not carry that through for every use the
+/// listener makes of the pin.
+const WIRE_PINS: usize = if crate::pins::GPIO_COUNT < 32 { crate::pins::GPIO_COUNT } else { 32 };
 
 pub fn supported(link: &LinkConfig) -> bool {
     match link {
         LinkConfig::Uart { tx, rx } => {
             (UART0_TX.contains(tx) && UART0_RX.contains(rx)) || (UART1_TX.contains(tx) && UART1_RX.contains(rx))
         }
-        LinkConfig::Wire { pin } => *pin < 30,
+        LinkConfig::Wire { pin } => (*pin as usize) < WIRE_PINS,
         LinkConfig::Ble => false,
     }
 }
@@ -112,10 +140,36 @@ fn open(link: &LinkConfig, bufs: &mut ([u8; 128], [u8; 128])) -> Option<Buffered
             }
         }};
     }
+    // The same pins as in `ports`.
+    #[cfg(not(feature = "rp235x"))]
     if UART0_TX.contains(&tx) {
         open!(UART0, tx: [0 PIN_0, 12 PIN_12, 16 PIN_16, 28 PIN_28], rx: [1 PIN_1, 13 PIN_13, 17 PIN_17, 29 PIN_29])
     } else {
         open!(UART1, tx: [4 PIN_4, 8 PIN_8, 20 PIN_20, 24 PIN_24], rx: [5 PIN_5, 9 PIN_9, 21 PIN_21, 25 PIN_25])
+    }
+    #[cfg(all(feature = "rp235x", not(feature = "rp235xb")))]
+    if UART0_TX.contains(&tx) {
+        open!(UART0,
+            tx: [0 PIN_0, 2 PIN_2, 12 PIN_12, 14 PIN_14, 16 PIN_16, 18 PIN_18, 28 PIN_28],
+            rx: [1 PIN_1, 3 PIN_3, 13 PIN_13, 15 PIN_15, 17 PIN_17, 19 PIN_19, 29 PIN_29])
+    } else {
+        open!(UART1,
+            tx: [4 PIN_4, 6 PIN_6, 8 PIN_8, 10 PIN_10, 20 PIN_20, 22 PIN_22, 24 PIN_24, 26 PIN_26],
+            rx: [5 PIN_5, 7 PIN_7, 9 PIN_9, 11 PIN_11, 21 PIN_21, 23 PIN_23, 25 PIN_25, 27 PIN_27])
+    }
+    #[cfg(feature = "rp235xb")]
+    if UART0_TX.contains(&tx) {
+        open!(UART0,
+            tx: [0 PIN_0, 2 PIN_2, 12 PIN_12, 14 PIN_14, 16 PIN_16, 18 PIN_18, 28 PIN_28, 30 PIN_30, 32 PIN_32,
+                34 PIN_34, 44 PIN_44, 46 PIN_46],
+            rx: [1 PIN_1, 3 PIN_3, 13 PIN_13, 15 PIN_15, 17 PIN_17, 19 PIN_19, 29 PIN_29, 31 PIN_31, 33 PIN_33,
+                35 PIN_35, 45 PIN_45, 47 PIN_47])
+    } else {
+        open!(UART1,
+            tx: [4 PIN_4, 6 PIN_6, 8 PIN_8, 10 PIN_10, 20 PIN_20, 22 PIN_22, 24 PIN_24, 26 PIN_26, 36 PIN_36,
+                38 PIN_38, 40 PIN_40, 42 PIN_42],
+            rx: [5 PIN_5, 7 PIN_7, 9 PIN_9, 11 PIN_11, 21 PIN_21, 23 PIN_23, 25 PIN_25, 27 PIN_27, 37 PIN_37,
+                39 PIN_39, 41 PIN_41, 43 PIN_43])
     }
 }
 
@@ -141,7 +195,6 @@ const WIRE_QUIET_US: u64 = 3 * WIRE_BYTE_US;
 async fn wire(pio: Peri<'_, PIO1>, pin: Pin, queues: &Queues) {
     let Pio { mut common, sm0: mut sender, sm1: mut listener, .. } = Pio::new(pio, Irqs);
 
-    // The driver wants pin types, the configuration has a number.
     macro_rules! claim {
         ($($number:literal $name:ident),*) => {
             match pin {
@@ -152,12 +205,7 @@ async fn wire(pio: Peri<'_, PIO1>, pin: Pin, queues: &Queues) {
             }
         };
     }
-    let mut line = claim!(
-        0 PIN_0, 1 PIN_1, 2 PIN_2, 3 PIN_3, 4 PIN_4, 5 PIN_5, 6 PIN_6, 7 PIN_7, 8 PIN_8, 9 PIN_9,
-        10 PIN_10, 11 PIN_11, 12 PIN_12, 13 PIN_13, 14 PIN_14, 15 PIN_15, 16 PIN_16, 17 PIN_17, 18 PIN_18,
-        19 PIN_19, 20 PIN_20, 21 PIN_21, 22 PIN_22, 23 PIN_23, 24 PIN_24, 25 PIN_25, 26 PIN_26, 27 PIN_27,
-        28 PIN_28, 29 PIN_29
-    );
+    let mut line = crate::pins::each_gpio!(claim);
     line.set_pull(Pull::Up);
     // Eight PIO cycles to a bit, for both programs.
     let divider = U24F8::from_bits((clk_sys_freq() as u64 * 256 / (8 * WIRE_BAUD as u64)) as u32);

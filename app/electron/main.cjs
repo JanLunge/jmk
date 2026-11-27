@@ -81,7 +81,9 @@ async function bootDrives() {
       const field = (name) => (info.match(new RegExp(`^${name}:\\s*(.+)$`, 'm')) || [])[1]?.trim() || ''
       const id = field('Board-ID')
       const model = field('Model')
-      const mcu = /RP2040|RPI-RP2\b/i.test(id + ' ' + model) ? 'rp2040' : /nRF52840/i.test(id + ' ' + model) ? 'nrf52840' : ''
+      const says = id + ' ' + model
+      // An RP2350 calls itself that; an RP2040 says "RPI-RP2" and "Raspberry Pi RP2".
+      const mcu = /RP2350/i.test(says) ? 'rp2350' : /RP2040|RPI-RP2\b/i.test(says) ? 'rp2040' : /nRF52840/i.test(says) ? 'nrf52840' : ''
       return { path: drive, model: model || id || path.basename(drive), mcu }
     }),
   )
