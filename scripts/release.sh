@@ -55,7 +55,7 @@ cargo run -q --locked -p jmk-uf2 -- rp2350 firmware/rp2350/target/thumbv8m.main-
 cargo run -q --locked -p jmk-uf2 -- nrf52840 firmware/nrf52840/target/thumbv7em-none-eabihf/release/jmk-nrf52840 target/jmk-nrf52840.uf2
 (cd app && npm ci --no-audit --no-fund --silent && rm -rf firmware && npm run firmware --silent && npm run build --silent)
 # Only what goes into the app, so every machine wraps the same files.
-COPYFILE_DISABLE=1 tar -czf "$out/stage.tgz" -C app package.json package-lock.json electron dist firmware build
+COPYFILE_DISABLE=1 tar -czf "$out/stage.tgz" -C app package.json package-lock.json electron dist firmware build linux
 
 # --- The three builds, side by side -------------------------------------------
 # What runs on a Mac, here or over SSH. Signing and notarising read their

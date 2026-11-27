@@ -1,7 +1,7 @@
 {
   "name": "pog",
   "productName": "POG",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "description": "POG v2: the configurator for keyboards running JMK firmware",
   "license": "Apache-2.0",
