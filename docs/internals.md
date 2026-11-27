@@ -131,3 +131,20 @@ waits for the keyboard to come back, one half of a split after the other.
 
 Count `FIRMWARE_VERSION` up with every firmware change a keyboard should
 get. Without that the app has no way to tell and offers nothing.
+
+## Linux
+
+Linux gives a keyboard's settings channel (a hidraw device) to root alone, so
+the app needs the udev rule in `app/linux/`. The desktop app installs it
+through `pkexec` when it sees a keyboard it may not open.
+
+- The rule opens only the third USB interface, the settings channel. A
+  program that could read the first one would see every key pressed.
+- It matches the maker's name `JMK`, not USB numbers, so it survives a change
+  of those (see [usb-id.md](usb-id.md)).
+- It relies on systemd-logind (`uaccess`). Without it, `GROUP="plugdev",
+  MODE="0660"` in place of the tag does the same for that group.
+- A browser installed as a snap or flatpak may be kept from USB keyboards by
+  its own sandbox whatever the rule says.
+- A firmware update copies a file onto the drive the board shows up as, which
+  the desktop has to mount by itself, as GNOME and KDE do.

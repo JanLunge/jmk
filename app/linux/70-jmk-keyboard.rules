@@ -1,13 +1,4 @@
-# Lets the person sitting at this computer set up a JMK keyboard with POG.
-#
-# Goes into /etc/udev/rules.d/ under this name; the number must stay below 73.
-# Then: sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw
-#
-# Typing needs none of this. It opens only the keyboard's settings channel,
-# its third USB interface, and not the interface that types: a program that
-# can read that one sees every key pressed.
-#
-# Keyboards are matched by the maker's name the firmware reports, not by USB
-# numbers, so the rule keeps working when JMK gets numbers of its own.
+# Lets POG set up JMK keyboards. Save as /etc/udev/rules.d/70-jmk-keyboard.rules
+# and plug the keyboard in again.
 ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{manufacturer}=="JMK", ENV{JMK_KEYBOARD}="1"
 ENV{JMK_KEYBOARD}=="1", ATTRS{bInterfaceNumber}=="02", TAG+="uaccess"

@@ -1096,7 +1096,7 @@ test('linux: a keyboard the system keeps the app from is let in with one click',
   })
   await page.goto('/')
   const notice = page.locator('[data-test=linux-access]')
-  await expect(notice).toContainText('Linux keeps POG from it')
+  await expect(notice).toContainText('Linux keeps POG from your keyboard')
   await expect(page.locator('[data-test=linux-command]')).toHaveCount(0)
 
   // What cannot be done from the app is offered as a command to run.

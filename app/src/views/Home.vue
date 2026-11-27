@@ -137,11 +137,8 @@ const previews = computed(() =>
           <div v-if="access?.blocked" class="note warn access col" data-test="linux-access">
             <div class="row">
               <div class="col grow">
-                <strong>{{ access.blocked > 1 ? 'Keyboards are plugged in, but Linux keeps POG from them.' : 'A keyboard is plugged in, but Linux keeps POG from it.' }}</strong>
-                <span class="small">
-                  It types as it is. To set it up, POG needs a rule in the system that lets you at its settings. That takes your
-                  password once.
-                </span>
+                <strong>Linux keeps POG from your keyboard.</strong>
+                <span class="small">Allow it once with your password.</span>
               </div>
               <button class="btn primary" :disabled="allowing" data-test="linux-allow" @click="allow">{{ allowing ? 'Waiting…' : 'Allow' }}</button>
             </div>
