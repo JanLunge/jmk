@@ -208,6 +208,16 @@ impl MemFlash {
         Self { bytes: Rc::new(RefCell::new(vec![0xFF; size])), writes_left: Default::default() }
     }
 
+    /// Everything in the flash, as a debug probe would read it out.
+    pub fn bytes(&self) -> Vec<u8> {
+        self.bytes.borrow().clone()
+    }
+
+    /// Put bytes at the start of the flash, as another firmware left them.
+    pub fn load(&self, bytes: &[u8]) {
+        self.bytes.borrow_mut()[..bytes.len()].copy_from_slice(bytes);
+    }
+
     /// Let this many writes succeed, then fail each one half way through,
     /// like a power cut. `None` restores normal operation.
     pub fn fail_after_writes(&self, writes: Option<usize>) {

@@ -146,3 +146,11 @@ waits for the keyboard to come back, one half of a split after the other.
 
 Count `FIRMWARE_VERSION` up with every firmware change a keyboard should
 get. Without that the app has no way to tell and offers nothing.
+
+An update keeps the settings: every firmware reads what every earlier one
+saved. New settings are written after the ones already there, and a save
+that ends before them gets the defaults (`crates/jmk-device/src/storage.rs`).
+`crates/jmk-sim/tests/upgrade.rs` loads a save made by each earlier version's
+own code, kept in `crates/jmk-sim/tests/saves/`. A change to what is saved
+adds its version's file there before it is released; the test's header says
+how.

@@ -18,7 +18,7 @@ pub const PROTOCOL_VERSION: u16 = 13;
 /// What runs on the keyboard, as the app compares it with the firmware it
 /// carries to offer an update. Count it up with every change to the firmware
 /// that a keyboard should get, also one that leaves the protocol alone.
-pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 5, 1);
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 5, 2);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
