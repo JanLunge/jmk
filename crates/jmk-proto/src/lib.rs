@@ -7,16 +7,16 @@
 pub mod frame;
 
 pub use heapless::{String, Vec};
-use jmk_core::{Action, Combo, HoldTapProfile, MacroStep};
+use jmk_core::{Action, Combo, ComboOptions, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours.
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
 
 /// What runs on the keyboard, as the app compares it with the firmware it
 /// carries to offer an update. Count it up with every change to the firmware
 /// that a keyboard should get, also one that leaves the protocol alone.
-pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 3, 0);
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 4, 0);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -465,6 +465,12 @@ pub enum Request {
     /// The groups of switches after the first. Checked together with the
     /// rest of the hardware configuration: no pin may appear twice.
     SetMoreWiring(MoreWiring),
+    GetComboOptions,
+    /// The layers each combo works on and whether it is a sequence, by the
+    /// index of the combo. Send it after [`Request::SetCombos`], which drops
+    /// the options of combos that are no longer there. Combos without an
+    /// entry have the defaults.
+    SetComboOptions(Vec<ComboOptions, MAX_COMBOS>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -489,6 +495,7 @@ pub enum Response {
     MacroName(String<MAX_MACRO_NAME>),
     LetterRows(LetterRows),
     MoreWiring(MoreWiring),
+    ComboOptions(Vec<ComboOptions, MAX_COMBOS>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

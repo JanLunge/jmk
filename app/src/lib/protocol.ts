@@ -31,6 +31,16 @@ export interface Combo {
   keys: number[]
   action: Action
   timeout_ms: number
+  /** One bit per layer the combo works on. Left out: on every layer. */
+  layers?: number
+  /** The keys are pressed one after the other in this order. Left out: together. */
+  sequence?: boolean
+}
+
+/** How the keyboard holds what a combo has besides keys, action and time. */
+export interface ComboOptions {
+  layers: number
+  sequence: boolean
 }
 
 export type MacroStep = { Tap: number } | { Press: number } | { Release: number } | { DelayMs: number }
@@ -189,6 +199,8 @@ export type Request =
   | { SetLetterRows: number[][] }
   | 'GetMoreWiring'
   | { SetMoreWiring: MatrixConfig[] }
+  | 'GetComboOptions'
+  | { SetComboOptions: ComboOptions[] }
   | { ResolveSplit: { keep_this: boolean } }
   | { SplitAgreed: { digest: number; revision: number } }
 
@@ -221,6 +233,7 @@ export type Response =
   | { MacroName: string }
   | { LetterRows: number[][] }
   | { MoreWiring: MatrixConfig[] }
+  | { ComboOptions: ComboOptions[] }
 
 export type DeviceEvent =
   | { Key: { pos: number; pressed: boolean } }
@@ -247,7 +260,9 @@ export const LIMITS = {
   macros: 16,
   macroSteps: 512,
   combos: 16,
-  comboKeys: 4,
+  comboKeys: 8,
+  /** What firmware before combo options could hold. */
+  comboKeysBefore: 4,
   holdTapProfiles: 4,
   encoders: 4,
   nameLength: 32,

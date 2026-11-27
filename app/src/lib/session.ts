@@ -4,7 +4,7 @@
 
 import { markRaw, reactive, type Raw } from 'vue'
 import type { AddPlan } from './addkey'
-import { KeyboardClient } from './client'
+import { COMBO_OPTIONS_PROTOCOL, KeyboardClient } from './client'
 import type { DemoHalf } from './demos'
 import { localPositions, wiringParts } from './definition'
 import type { Definition, Keymap } from './definition'
@@ -214,6 +214,8 @@ export function linkPins(hardware: HardwareConfig): { tx: Pin; rx: Pin } | undef
 /** The link setting for cable pins, as [`linkPins`] gives them. */
 export const linkFor = (pins: { tx: Pin; rx: Pin }): LinkConfig => (pins.tx === pins.rx ? { Wire: { pin: pins.tx } } : { Uart: pins })
 
+/** From this protocol on a combo can be a sequence, be limited to layers and have up to eight keys. */
+export const canTuneCombos = (session: Session) => session.info.protocol >= COMBO_OPTIONS_PROTOCOL
 /** From this protocol on a cable with a single data wire works (RP2040 and RP2350 only). */
 export const ONE_WIRE_PROTOCOL = 10
 export const canShareWire = (session: Session) => session.info.protocol >= ONE_WIRE_PROTOCOL && (session.info.mcu === 'Rp2040' || session.info.mcu === 'Rp2350')
