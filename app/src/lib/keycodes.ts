@@ -1,5 +1,6 @@
 // What can be put on a key, with the names people know them by.
 
+import { charsOf, keyFor, language, US } from './language'
 import type { Action, Basic, MacroStep } from './protocol'
 
 export interface KeyInfo {
@@ -103,6 +104,14 @@ export const ANSI_BLOCKS: { id: string; rows: BoardKey[][] }[] = [
   },
 ]
 
+/** The same picture for an ISO keyboard: one more key next to a shorter left Shift. */
+const ISO_BLOCKS: typeof ANSI_BLOCKS = ANSI_BLOCKS.map((block) =>
+  block.id !== 'main' ? block : { ...block, rows: block.rows.map((keys, n) => (n === 4 ? [[0xe1, 1.25], [0x64, 1], ...keys.slice(1)] : keys)) },
+)
+
+/** The picture of an ordinary keyboard as the chosen language has it. */
+export const boardBlocks = () => (language().iso ? ISO_BLOCKS : ANSI_BLOCKS)
+
 /** Keys an ordinary keyboard does not have. */
 export const EXTRA_KEYS: KeyInfo[] = [
   ...range(0x68, ['F13', 'F14', 'F15', 'F16', 'F17', 'F18', 'F19', 'F20', 'F21', 'F22', 'F23', 'F24']),
@@ -117,6 +126,19 @@ export const MEDIA_KEYS: KeyInfo[] = [
   k(0x70, 'Bri−', 'Brightness down'), k(0x192, 'Calc', 'Calculator'), k(0x18a, 'Mail'), k(0x223, 'WWW', 'Browser home'),
   k(0x224, 'Back', 'Browser back'), k(0x225, 'Fwd', 'Browser forward'), k(0x227, 'Refr', 'Browser refresh'),
 ]
+
+/**
+ * The symbol printed on such a key, for keys that have one people know.
+ * The word stays next to it wherever there is room, for whoever does not.
+ */
+const ICONS = new Map<number, string>([
+  [0x28, '⏎'], [0x29, '⎋'], [0x2a, '⌫'], [0x2b, '⇥'], [0x2c, '␣'], [0x4c, '⌦'], [0x39, '⇪'],
+  [0x4a, '↖'], [0x4d, '↘'], [0x4b, '⇞'], [0x4e, '⇟'], [0x65, '☰'],
+  [0xe0, '⌃'], [0xe1, '⇧'], [0xe2, '⌥'], [0xe3, '⌘'], [0xe4, '⌃'], [0xe5, '⇧'], [0xe6, '⌥'], [0xe7, '⌘'],
+])
+
+/** The symbol for a key, if it has one. */
+export const keyIcon = (usage: number): string | undefined => ICONS.get(usage)
 
 const KEY_BY_USAGE = new Map(KEY_GROUPS.flatMap((g) => g.keys).map((key) => [key.usage, key]))
 const MEDIA_BY_USAGE = new Map(MEDIA_KEYS.map((key) => [key.usage, key]))
@@ -156,12 +178,35 @@ export function modsLabel(mods: number): string {
   return names.length ? names.join('+') : 'no modifier'
 }
 
+const usLabel = (usage: number) => KEY_BY_USAGE.get(usage)?.label ?? `0x${usage.toString(16)}`
+const isLetter = (char: string) => char.toLowerCase() !== char.toUpperCase()
+
+/**
+ * What a key types on a computer set to the chosen language, if that differs
+ * from what its key code is called on a US keyboard.
+ */
+function local(usage: number): { label: string; name: string } | undefined {
+  const lang = language()
+  if (lang === US) return undefined
+  const chars = charsOf(usage, lang)
+  if (!chars?.plain) return undefined
+  const { plain, shifted } = chars
+  const us = charsOf(usage, US)
+  if (us?.plain === plain && us.shifted === shifted) return undefined
+  // A letter key types its capital with Shift; é on the French 2 key is not one.
+  const letter = isLetter(plain) && shifted === plain.toUpperCase()
+  // A row of digits under Shift (French) is still the number row to whoever looks for a key.
+  const label = letter ? shifted : /\d/.test(shifted) ? shifted : plain
+  const both = letter || !shifted ? label : `${plain} and ${shifted}`
+  return { label, name: `${both} (US: ${KEY_BY_USAGE.get(usage)?.name ?? usLabel(usage)})` }
+}
+
 export function keyLabel(usage: number): string {
-  return KEY_BY_USAGE.get(usage)?.label ?? `0x${usage.toString(16)}`
+  return local(usage)?.label ?? usLabel(usage)
 }
 
 export function keyName(usage: number): string {
-  return KEY_BY_USAGE.get(usage)?.name ?? `Key 0x${usage.toString(16)}`
+  return local(usage)?.name ?? KEY_BY_USAGE.get(usage)?.name ?? `Key 0x${usage.toString(16)}`
 }
 
 /** What to print on a keycap. `kind` picks the colour. */
@@ -172,11 +217,18 @@ export interface Legend {
   kind: 'key' | 'mod' | 'layer' | 'media' | 'macro' | 'empty' | 'through' | 'special'
   /** The layer this key leads to, if it is a layer key. */
   layer?: number
+  /** The key in words, where `main` is its symbol. */
+  word?: string
 }
 
 export function basicLegend(basic: Basic): Legend {
   if (basic === 'None') return { main: '', kind: 'empty' }
-  if ('Key' in basic) return { main: keyLabel(basic.Key), kind: basic.Key >= 0xe0 ? 'mod' : 'key' }
+  if ('Key' in basic) {
+    const kind = basic.Key >= 0xe0 ? 'mod' : 'key'
+    const icon = keyIcon(basic.Key)
+    // The symbol, with the word small below it.
+    return icon ? { main: icon, sub: keyLabel(basic.Key), word: keyLabel(basic.Key), kind } : { main: keyLabel(basic.Key), kind }
+  }
   if ('Mods' in basic) return { main: modsLabel(basic.Mods), kind: 'mod' }
   if ('ModKey' in basic) return { main: `${modsLabel(basic.ModKey.mods)}+${keyLabel(basic.ModKey.key)}`, kind: 'key' }
   if ('Consumer' in basic) return { main: MEDIA_BY_USAGE.get(basic.Consumer)?.label ?? 'Media', kind: 'media' }
@@ -193,7 +245,7 @@ export function legend(action: Action): Legend {
   if ('Basic' in action) return basicLegend(action.Basic)
   const tap = basicLegend(action.HoldTap.tap)
   const hold = basicLegend(action.HoldTap.hold)
-  return { main: tap.main, sub: `hold: ${hold.main}`, kind: tap.kind === 'empty' ? hold.kind : tap.kind, layer: hold.layer ?? tap.layer }
+  return { main: tap.main, sub: `hold: ${hold.word ?? hold.main}`, kind: tap.kind === 'empty' ? hold.kind : tap.kind, layer: hold.layer ?? tap.layer }
 }
 
 export function describeBasic(basic: Basic): string {
@@ -219,14 +271,16 @@ export function describeAction(action: Action): string {
 export const key = (usage: number): Action => ({ Basic: { Key: usage } })
 export const NONE: Action = { Basic: 'None' }
 
-// --- Text for macros (US layout) -------------------------------------------
+// --- Text for macros --------------------------------------------------------
 
 const SHIFT = 0xe1
-// Index = HID usage - 0x04. \u0000 fills usage 0x32, which US layouts lack.
-const PLAIN = "abcdefghijklmnopqrstuvwxyz1234567890\n\u001b\b\t -=[]\\\u0000;'`,./"
-const SHIFTED = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()\n\u001b\b\t _+{}|\u0000:"~<>?'
+/** Characters that are the same key in every language. */
+const FIXED = new Map<string, number>([['\n', 0x28], ['\t', 0x2b], [' ', 0x2c]])
 
-/** Macro steps that type `text` on a computer set to a US layout. Unknown characters are skipped. */
+/**
+ * Macro steps that type `text` on a computer set to the chosen language.
+ * Characters that language has no key for, or needs AltGr or an accent key for, are skipped.
+ */
 export function textToSteps(text: string): MacroStep[] {
   const steps: MacroStep[] = []
   let shifted = false
@@ -235,12 +289,11 @@ export function textToSteps(text: string): MacroStep[] {
     shifted = want
   }
   for (const char of text) {
-    let index = PLAIN.indexOf(char)
-    const needsShift = index < 0
-    if (needsShift) index = SHIFTED.indexOf(char)
-    if (index < 0) continue
-    setShift(needsShift)
-    steps.push({ Tap: 0x04 + index })
+    const fixed = FIXED.get(char)
+    const found = fixed === undefined ? keyFor(char) : { usage: fixed, shift: false }
+    if (!found) continue
+    setShift(found.shift)
+    steps.push({ Tap: found.usage })
   }
   setShift(false)
   return steps
@@ -254,8 +307,9 @@ export function describeStep(step: MacroStep): string {
   return `Wait ${step.DelayMs} ms`
 }
 
-/** The character a key produces on a US layout, if it is a printable one. */
+/** The character a key produces on a computer set to the chosen language, if it is a printable one. */
 export function charFor(usage: number, shifted: boolean): string | undefined {
-  const char = (shifted ? SHIFTED : PLAIN)[usage - 0x04]
-  return char && char >= ' ' ? char : undefined
+  if (usage === 0x2c) return ' '
+  const chars = charsOf(usage)
+  return (shifted ? chars?.shifted : chars?.plain) || undefined
 }
