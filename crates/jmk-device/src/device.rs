@@ -92,7 +92,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             config.reset();
         }
         let mut scanner = Scanner::new();
-        scanner.configure(&config.hardware, &config.more_wiring, &mut pins);
+        scanner.configure(&config.hardware, &config.more_wiring, &config.doubles, &mut pins);
         let stored_digest = config.shared_digest();
         // A half first listens for the other one; see `Split::leading`.
         let leading = config.hardware.split == SplitConfig::None;
@@ -413,6 +413,8 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 self.stop_probe();
                 self.release_matrix_pins();
                 self.config.hardware = hardware;
+                // They were counted in the old wiring's positions.
+                self.config.doubles.clear();
                 self.restart_scanning(out);
                 Ok(Response::Ok)
             }
@@ -425,6 +427,19 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 self.stop_probe();
                 self.release_matrix_pins();
                 self.config.more_wiring = more;
+                self.config.doubles.clear();
+                self.restart_scanning(out);
+                Ok(Response::Ok)
+            }
+            Request::GetDoubles => Ok(Response::Doubles(self.config.doubles.clone())),
+            Request::SetDoubles(doubles) => {
+                let switches = self.config.hardware.switch_count(&self.config.more_wiring);
+                if doubles.iter().any(|pos| *pos as usize >= switches) {
+                    return Err(Error::OutOfRange);
+                }
+                self.stop_probe();
+                self.release_matrix_pins();
+                self.config.doubles = doubles;
                 self.restart_scanning(out);
                 Ok(Response::Ok)
             }
@@ -694,7 +709,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         self.compared = None;
         self.fetch = None;
         self.sync = SplitSync::Unknown;
-        self.scanner.configure(&self.config.hardware, &self.config.more_wiring, &mut self.pins);
+        self.scanner.configure(&self.config.hardware, &self.config.more_wiring, &self.config.doubles, &mut self.pins);
     }
 }
 

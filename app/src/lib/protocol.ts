@@ -71,6 +71,12 @@ export interface HardwareConfig {
    * the rest (see client.ts), so firmware from before them still reads.
    */
   more?: MatrixConfig[]
+  /**
+   * Positions the keyboard does not report: the second reading of a key
+   * without a diode in a matrix read in both directions. Counted like the
+   * board's own switches, and kept apart like `more`.
+   */
+  doubles?: number[]
   reserved_pins: Pin[]
   debounce_ms: number
   encoders: EncoderConfig[]
@@ -201,6 +207,8 @@ export type Request =
   | { SetMoreWiring: MatrixConfig[] }
   | 'GetComboOptions'
   | { SetComboOptions: ComboOptions[] }
+  | 'GetDoubles'
+  | { SetDoubles: number[] }
   | { ResolveSplit: { keep_this: boolean } }
   | { SplitAgreed: { digest: number; revision: number } }
 
@@ -234,6 +242,7 @@ export type Response =
   | { LetterRows: number[][] }
   | { MoreWiring: MatrixConfig[] }
   | { ComboOptions: ComboOptions[] }
+  | { Doubles: number[] }
 
 export type DeviceEvent =
   | { Key: { pos: number; pressed: boolean } }
@@ -265,6 +274,10 @@ export const LIMITS = {
   comboKeysBefore: 4,
   holdTapProfiles: 4,
   encoders: 4,
+  /** Groups of switches besides the first. */
+  moreWiring: 7,
+  /** Positions that read a key a second time. */
+  doubles: 16,
   nameLength: 32,
   macroNameLength: 16,
   leds: 120,

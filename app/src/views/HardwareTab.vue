@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import BoardDiagram, { type PinRole } from '../components/BoardDiagram.vue'
 import { attempt, toast } from '../lib/app'
 import { planAddedKey } from '../lib/addkey'
+import { moreWiringLimit } from '../lib/client'
 import { findBoard, pinLabel, wirablePins } from '../lib/boards'
 import { KeyCollector } from '../lib/collector'
 import { desktop } from '../lib/desktop'
@@ -46,6 +47,7 @@ function describe(part: MatrixConfig): string {
     return `${pins.length} ${pins.length === 1 ? 'key' : 'keys, each'} on its own pin${to} (${pins.map(name).join(', ')}).`
   }
   const { rows, cols, diodes } = part.Matrix
+  if (rows.length === 1 && cols.length === 1 && diodes !== 'Both') return `1 key between two pins of its own (${name(rows[0])}, ${name(cols[0])}).`
   const lines = `rows ${rows.map(name).join(', ')}; columns ${cols.map(name).join(', ')}`
   if (diodes === 'Both') return `Duplex matrix: ${lines}. Two keys per crossing; the chip switches the rows and reads the columns, then the other way round.`
   return `Matrix: ${lines}. The chip switches the ${diodes === 'Col2Row' ? 'rows' : 'columns'} and reads the ${diodes === 'Col2Row' ? 'columns' : 'rows'}.`
@@ -107,7 +109,7 @@ async function onAddProbe(contacts: Contact[]) {
   const key = collector.keys[0]
   if (!key) return
   collector.keys.splice(0)
-  const plan = planAddedKey(hardware.value, key)
+  const plan = planAddedKey(hardware.value, key, moreWiringLimit(info.protocol))
   if (!plan.ok) {
     addProblem.value = plan.problem
     return
