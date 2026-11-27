@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('jmkDesktop', {
   flash: (mcu, onto) => ipcRenderer.invoke('jmk:flash', mcu, onto),
   drives: () => ipcRenderer.invoke('jmk:drives'),
   bundled: () => ipcRenderer.invoke('jmk:bundled'),
+  access: () => ipcRenderer.invoke('jmk:access'),
+  allowAccess: () => ipcRenderer.invoke('jmk:allow-access'),
   update: {
     state: () => ipcRenderer.invoke('jmk:update-state'),
     check: () => ipcRenderer.invoke('jmk:update-check'),

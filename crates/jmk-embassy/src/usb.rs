@@ -153,6 +153,10 @@ impl<D: Driver<'static>> Usb<D> {
         );
         builder.handler(BUS_STATE.init(BusState));
 
+        // The order is part of what a computer is told: on Linux the udev
+        // rule (app/linux/70-jmk-keyboard.rules) lets programs of the user
+        // at the third interface, the settings channel, and at no other.
+        // A new interface goes after these three.
         let keyboard = HidReaderWriter::new(
             &mut builder,
             KEYBOARD_STATE.init(State::new()),

@@ -1,6 +1,7 @@
 // Desktop shell: serves the built app, lets it talk to JMK keyboards over
 // USB, and copies firmware onto a bootloader drive.
 const { app, BrowserWindow, ipcMain, nativeTheme, net, protocol, session } = require('electron')
+const { execFile } = require('node:child_process')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -45,6 +46,67 @@ function allowKeyboards() {
 
 /** Whether a path can be reached, asked without holding up the window. */
 const reachable = (file) => fs.promises.access(file).then(() => true, () => false)
+
+// --- Linux: leave to talk to the keyboard ---------------------------------------
+// Linux gives a keyboard's settings channel (a hidraw device) to root alone
+// until a udev rule says otherwise. The rule comes with the app.
+const RULE = path.join(__dirname, '..', 'linux', '70-jmk-keyboard.rules')
+const RULE_TARGET = '/etc/udev/rules.d/70-jmk-keyboard.rules'
+const APPLY_RULE = 'udevadm control --reload-rules && udevadm trigger --subsystem-match=hidraw'
+/** How the settings channel's description starts: the firmware's own usage page. */
+const SETTINGS_CHANNEL = Buffer.from([0x06, 0x4a, 0xff])
+
+/** How many JMK keyboards are plugged in that this user may not talk to. */
+async function shutOut() {
+  const names = await fs.promises.readdir('/sys/class/hidraw').catch(() => [])
+  const each = names.map(async (name) => {
+    const described = await fs.promises.readFile(`/sys/class/hidraw/${name}/device/report_descriptor`).catch(() => Buffer.alloc(0))
+    if (!described.subarray(0, SETTINGS_CHANNEL.length).equals(SETTINGS_CHANNEL)) return false
+    return fs.promises.access(`/dev/${name}`, fs.constants.R_OK | fs.constants.W_OK).then(() => false, () => true)
+  })
+  return (await Promise.all(each)).filter(Boolean).length
+}
+
+/** The rule's lines that do something, and what to type in a terminal to install them by hand. */
+async function ruleByHand() {
+  const lines = (await fs.promises.readFile(RULE, 'utf8')).split('\n').filter((line) => line.trim() && !line.startsWith('#'))
+  const quoted = lines.map((line) => `'${line}'`).join(' ')
+  return `printf '%s\\n' ${quoted} | sudo tee ${RULE_TARGET} >/dev/null && sudo ${APPLY_RULE.replace('&& ', '&& sudo ')}`
+}
+
+/** Whether a keyboard is plugged in that the app is kept from, and the way out by hand. */
+async function access() {
+  if (process.platform !== 'linux') return { blocked: 0, command: '' }
+  return { blocked: await shutOut(), command: await ruleByHand() }
+}
+
+/**
+ * Install the rule, asking for the password in the system's own dialog.
+ * Resolves to '' when it worked, 'dismissed' when the user closed the
+ * dialog, and otherwise to why it could not be done.
+ */
+async function allowAccess() {
+  if (process.platform !== 'linux') return ''
+  // Root cannot read inside an AppImage, so it gets a copy.
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pog-'))
+  const copy = path.join(dir, path.basename(RULE_TARGET))
+  try {
+    await fs.promises.writeFile(copy, await fs.promises.readFile(RULE))
+    const script = `install -m 0644 "$1" ${RULE_TARGET} && ${APPLY_RULE} && udevadm settle --timeout=5`
+    return await new Promise((resolve) => {
+      execFile('pkexec', ['/bin/sh', '-c', script, 'sh', copy], { timeout: 120_000 }, (error, _stdout, stderr) => {
+        if (!error) return resolve('')
+        if (error.code === 'ENOENT') return resolve('This system has no way to ask for your password from an app (pkexec is missing).')
+        // pkexec: 126 is a closed dialog, 127 a wrong password or no dialog to show.
+        if (error.code === 126) return resolve('dismissed')
+        if (error.code === 127) return resolve('The system did not accept the password, or could not ask for it.')
+        resolve(String(stderr).trim().split('\n').pop() || error.message)
+      })
+    })
+  } finally {
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+}
 
 /**
  * Folders where a UF2 bootloader drive is mounted. Nothing here may use the
@@ -162,6 +224,8 @@ app.whenReady().then(() => {
   ipcMain.handle('jmk:flash', flash)
   ipcMain.handle('jmk:drives', bootDrives)
   ipcMain.handle('jmk:bundled', bundled)
+  ipcMain.handle('jmk:access', access)
+  ipcMain.handle('jmk:allow-access', allowAccess)
   const window = new BrowserWindow({
     width: 1280,
     height: 880,

@@ -47,6 +47,7 @@
     "files": [
       "dist/**",
       "electron/**",
+      "linux/**",
       "package.json"
     ],
     "extraResources": [

@@ -88,6 +88,36 @@ cargo run -p jmk-uf2 -- rp2350 \
 (cd app && npm run firmware)
 ```
 
+# Linux
+
+Typing works on Linux like anywhere. Setting the keyboard up needs one more
+thing: Linux gives a keyboard's settings channel to root alone until a udev
+rule says otherwise, and without it POG does not find the keyboard.
+
+The desktop app notices a keyboard it is kept from and offers to install the
+rule; that asks for your password once. To do it by hand, or for a browser
+or an older version of the app:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/JanLunge/jmk/main/app/linux/70-jmk-keyboard.rules \
+  | sudo tee /etc/udev/rules.d/70-jmk-keyboard.rules >/dev/null
+sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw
+```
+
+No need to unplug the keyboard or log in again. The
+[rule](app/linux/70-jmk-keyboard.rules) opens only the settings channel, not
+the part of the keyboard that types, and only for whoever sits at the
+computer. It works with every firmware version so far.
+
+- It relies on systemd-logind (`uaccess`). On a system without it, replace
+  `TAG+="uaccess"` in the file with `GROUP="plugdev", MODE="0660"` and be in
+  that group.
+- A browser installed as a snap or flatpak may be kept from USB keyboards by
+  its own sandbox, rule or no rule. The desktop app is not.
+- Updating the firmware from the app copies a file onto the drive the board
+  shows up as. That needs a desktop that mounts such drives by itself, as
+  GNOME and KDE do; elsewhere mount it first.
+
 `./scripts/check.sh` runs every test and builds all firmwares. There is no
 hosted CI yet, that script is it.
 
