@@ -1037,6 +1037,12 @@ test('the language of the computer names the keys: Ö on a Swedish one', async (
   await page.waitForTimeout(150)
   await tap(page, 0)
   await expect(typed(page)).toHaveText('ö')
+  // @ needs AltGr on a Swedish computer; the Symbols page knows that.
+  await page.locator('[data-test=keymap-board] [data-pos="1"]').dispatchEvent('pointerdown')
+  await page.click('[data-test=tab-symbols]')
+  await page.locator('.picker [data-symbol="@"]').click()
+  await expect(page.locator('[data-test=keymap-board] [data-pos="1"]')).toContainText('@')
+  await expect(page.locator('[data-test=action-description]')).toContainText('@, typed as AltGr + 2')
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT })
   // Kept for the next time.
   await page.reload()

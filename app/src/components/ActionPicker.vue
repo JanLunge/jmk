@@ -5,8 +5,8 @@
 // drag it onto any key.
 import { computed, ref, watch } from 'vue'
 import { startDrag, type Dragged } from '../lib/drag'
-import { ANSI_BLOCKS, boardBlocks, describeAction, describeBasic, EXTRA_KEYS, KEY_GROUPS, keyIcon, keyLabel, keyName, MEDIA_KEYS, MOD_BITS } from '../lib/keycodes'
-import { languageId, LANGUAGES } from '../lib/language'
+import { ANSI_BLOCKS, boardBlocks, describeAction, describeBasic, EXTRA_KEYS, KEY_GROUPS, keyIcon, keyLabel, keyName, MEDIA_KEYS, MOD_BITS, modKeyChar } from '../lib/keycodes'
+import { ALTGR_BIT, language, languageId, LANGUAGES, symbols } from '../lib/language'
 import { layerHex } from '../lib/layers'
 import type { Action, Basic } from '../lib/protocol'
 import { macroLabel, type Session } from '../lib/session'
@@ -105,9 +105,15 @@ const found = computed(() => {
 })
 const foundBasic = (item: Found): Basic => (typeof item.basic === 'object' && 'Key' in item.basic ? keyBasic(item.basic.Key) : item.basic)
 
+const PLATFORMS = [
+  { id: 'pc', name: 'Windows and Linux' },
+  { id: 'mac', name: 'macOS' },
+] as const
+
 // --- Pages --------------------------------------------------------------------
 const TABS = [
   { id: 'keys', name: 'Keyboard' },
+  { id: 'symbols', name: 'Symbols' },
   { id: 'layers', name: 'Layers' },
   { id: 'mods', name: 'One-shot' },
   { id: 'media', name: 'Media' },
@@ -124,7 +130,7 @@ const home = computed<TabId | undefined>(() => {
   if (props.action === 'Transparent' || basic === 'None') return 'more'
   if (!basic || props.mixed) return undefined
   if ('Key' in basic) return ON_BOARD.has(basic.Key) ? 'keys' : 'more'
-  if ('ModKey' in basic) return ON_BOARD.has(basic.ModKey.key) ? 'keys' : 'more'
+  if ('ModKey' in basic) return modKeyChar(basic.ModKey.mods, basic.ModKey.key) ? 'symbols' : ON_BOARD.has(basic.ModKey.key) ? 'keys' : 'more'
   if ('MomentaryLayer' in basic || 'ToggleLayer' in basic || 'ToLayer' in basic) return 'layers'
   if ('OneShotMods' in basic) return 'mods'
   if ('Consumer' in basic) return 'media'
@@ -169,8 +175,10 @@ const summary = computed(() => {
       </template>
 
       <span class="grow" />
-      <select v-model="languageId" class="input language" title="The language your computer's keyboard setting is on. It changes what the keys are called here, not what the keyboard sends." aria-label="Language of the computer" data-test="language" @change="($event.target as HTMLElement).blur()">
-        <option v-for="each in LANGUAGES" :key="each.id" :value="each.id">{{ each.name }}</option>
+      <select v-model="languageId" class="input language" title="The language your computer's keyboard setting is on, and the kind of computer. It changes what the keys are called here, not what the keyboard sends." aria-label="Language of the computer" data-test="language" @change="($event.target as HTMLElement).blur()">
+        <optgroup v-for="group in PLATFORMS" :key="group.id" :label="group.name">
+          <option v-for="each in LANGUAGES.filter((one) => one.platform === group.id)" :key="each.id" :value="each.id">{{ each.name }}</option>
+        </optgroup>
       </select>
       <input v-model="search" class="input search" placeholder="Search keys…" data-test="search" />
       <button class="fold" :title="minimized ? 'Open the key picker' : 'Minimise, so the keyboard has the room'" :aria-label="minimized ? 'Open the key picker' : 'Minimise the key picker'" :aria-expanded="!minimized" data-test="picker-fold" @click="emit('minimize', !minimized)">
@@ -188,6 +196,7 @@ const summary = computed(() => {
         <button v-for="mod in MOD_BITS.slice(0, 4)" :key="mod.bit" class="chip-btn" :class="{ on: withMods & mod.bit }" :data-test="'with-' + mod.label" @click="withMods ^= mod.bit">
           {{ mod.label }}
         </button>
+        <button class="chip-btn" :class="{ on: withMods & ALTGR_BIT }" title="The right Alt key, which many languages use for a third character on a key" data-test="with-AltGr" @click="withMods ^= ALTGR_BIT">{{ language().platform === 'mac' ? 'ROption' : 'AltGr' }}</button>
       </div>
     </div>
 
@@ -255,6 +264,25 @@ const summary = computed(() => {
         <div class="grid big">
           <button v-for="mod in MOD_BITS.slice(0, 4)" :key="mod.bit" class="key-btn" :class="{ on: same({ OneShotMods: mod.bit }) }" :data-test="'oneshot-' + mod.label" draggable="true" @dragstart="drag($event, { basic: { OneShotMods: mod.bit } })" @click="choose({ OneShotMods: mod.bit })">
             {{ mod.label }} once
+          </button>
+        </div>
+      </section>
+
+      <section v-else-if="tab === 'symbols'" class="page scroll">
+        <p class="muted small">Characters that need Shift or {{ language().platform === 'mac' ? 'Option' : 'AltGr' }} on a {{ language().platform === 'mac' ? 'Mac' : 'Windows or Linux computer' }} set to {{ language().name }}. The key holds the modifier for you.</p>
+        <div class="grid">
+          <button
+            v-for="each in symbols()"
+            :key="each.char"
+            class="key-btn symbol"
+            :class="{ on: same({ ModKey: { mods: each.mods, key: each.usage } }) }"
+            :title="describeBasic({ ModKey: { mods: each.mods, key: each.usage } })"
+            :data-symbol="each.char"
+            draggable="true"
+            @dragstart="drag($event, { basic: { ModKey: { mods: each.mods, key: each.usage } } })"
+            @click="choose({ ModKey: { mods: each.mods, key: each.usage } })"
+          >
+            {{ each.char }}
           </button>
         </div>
       </section>
@@ -404,6 +432,11 @@ const summary = computed(() => {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+.key-btn.symbol {
+  min-width: 36px;
+  font-size: 1rem;
 }
 
 .language {

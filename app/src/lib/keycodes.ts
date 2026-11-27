@@ -1,6 +1,6 @@
 // What can be put on a key, with the names people know them by.
 
-import { charsOf, keyFor, language, US } from './language'
+import { ALTGR_BIT, charsOf, heldName, keyFor, language, US } from './language'
 import type { Action, Basic, MacroStep } from './protocol'
 
 export interface KeyInfo {
@@ -29,6 +29,16 @@ export const KEY_GROUPS: KeyGroup[] = [
       k(0x31, '\\', 'Backslash'), k(0x33, ';', 'Semicolon'), k(0x34, "'", 'Quote'), k(0x35, '`', 'Grave'),
       k(0x36, ',', 'Comma'), k(0x37, '.', 'Period'), k(0x38, '/', 'Slash'), k(0x32, '#~', 'Non-US hash'),
       k(0x64, '\\|', 'Non-US backslash'),
+    ],
+  },
+  {
+    // Keys that only keyboards for some languages have. Nothing on a computer set to another one.
+    title: 'International',
+    keys: [
+      k(0x87, 'Ro', 'International 1 (Japanese Ro, Brazilian / ?)'), k(0x88, 'Kana', 'International 2 (Japanese Katakana / Hiragana)'),
+      k(0x89, '¥', 'International 3 (Japanese Yen)'), k(0x8a, 'Henk', 'International 4 (Japanese Henkan)'),
+      k(0x8b, 'Mhen', 'International 5 (Japanese Muhenkan)'), k(0x90, '한/영', 'Language 1 (Korean Hangul / English, Mac Kana)'),
+      k(0x91, '한자', 'Language 2 (Korean Hanja, Mac Eisu)'), k(0x85, 'N,', 'Numpad comma (Brazilian)'), k(0x67, 'N=', 'Numpad equals'),
     ],
   },
   {
@@ -117,6 +127,7 @@ export const EXTRA_KEYS: KeyInfo[] = [
   ...range(0x68, ['F13', 'F14', 'F15', 'F16', 'F17', 'F18', 'F19', 'F20', 'F21', 'F22', 'F23', 'F24']),
   k(0x32, '#~', 'Non-US hash'),
   k(0x64, '\\|', 'Non-US backslash'),
+  ...[0x87, 0x88, 0x89, 0x8a, 0x8b, 0x90, 0x91, 0x85, 0x67].map((usage) => KEY_GROUPS.flatMap((g) => g.keys).find((key) => key.usage === usage)!),
 ]
 
 /** Consumer-page usages (media keys). */
@@ -201,6 +212,18 @@ function local(usage: number): { label: string; name: string } | undefined {
   return { label, name: `${both} (US: ${KEY_BY_USAGE.get(usage)?.name ?? usLabel(usage)})` }
 }
 
+/**
+ * The character a key types with Shift or AltGr held, in the chosen language:
+ * what `Shift+2` or `RAlt+2` is to whoever put it on a key. Capital letters are left as they are.
+ */
+export function modKeyChar(mods: number, usage: number): string | undefined {
+  const chars = charsOf(usage)
+  if (!chars) return undefined
+  const shift = mods === 0x02 || mods === 0x20
+  const char = shift ? chars.shifted : mods === ALTGR_BIT ? chars.altgr : mods === (ALTGR_BIT | 0x02) ? chars.altshift : ''
+  return char && !(shift && isLetter(chars.plain) && char === chars.plain.toUpperCase()) ? char : undefined
+}
+
 export function keyLabel(usage: number): string {
   return local(usage)?.label ?? usLabel(usage)
 }
@@ -230,7 +253,13 @@ export function basicLegend(basic: Basic): Legend {
     return icon ? { main: icon, sub: keyLabel(basic.Key), word: keyLabel(basic.Key), kind } : { main: keyLabel(basic.Key), kind }
   }
   if ('Mods' in basic) return { main: modsLabel(basic.Mods), kind: 'mod' }
-  if ('ModKey' in basic) return { main: `${modsLabel(basic.ModKey.mods)}+${keyLabel(basic.ModKey.key)}`, kind: 'key' }
+  if ('ModKey' in basic) {
+    const { mods, key } = basic.ModKey
+    const char = modKeyChar(mods, key)
+    const keys = `${heldName(mods) ?? modsLabel(mods)}+${keyLabel(key)}`
+    // The character itself, with how it is typed small below it.
+    return char ? { main: char, sub: keys, word: char, kind: 'key' } : { main: keys, kind: 'key' }
+  }
   if ('Consumer' in basic) return { main: MEDIA_BY_USAGE.get(basic.Consumer)?.label ?? 'Media', kind: 'media' }
   if ('MomentaryLayer' in basic) return { main: `L${basic.MomentaryLayer}`, sub: 'hold', kind: 'layer', layer: basic.MomentaryLayer }
   if ('ToggleLayer' in basic) return { main: `L${basic.ToggleLayer}`, sub: 'toggle', kind: 'layer', layer: basic.ToggleLayer }
@@ -252,7 +281,12 @@ export function describeBasic(basic: Basic): string {
   if (basic === 'None') return 'Nothing'
   if ('Key' in basic) return keyName(basic.Key)
   if ('Mods' in basic) return modsLabel(basic.Mods)
-  if ('ModKey' in basic) return `${modsLabel(basic.ModKey.mods)} + ${keyName(basic.ModKey.key)}`
+  if ('ModKey' in basic) {
+    const { mods, key } = basic.ModKey
+    const char = modKeyChar(mods, key)
+    const held = heldName(mods) ?? modsLabel(mods)
+    return char ? `${char}, typed as ${held} + ${keyLabel(key)}` : `${held} + ${keyName(key)}`
+  }
   if ('Consumer' in basic) return MEDIA_BY_USAGE.get(basic.Consumer)?.name ?? 'Media key'
   if ('MomentaryLayer' in basic) return `Layer ${basic.MomentaryLayer} while held`
   if ('ToggleLayer' in basic) return `Toggle layer ${basic.ToggleLayer}`
@@ -274,28 +308,31 @@ export const NONE: Action = { Basic: 'None' }
 // --- Text for macros --------------------------------------------------------
 
 const SHIFT = 0xe1
+const ALTGR = 0xe6
 /** Characters that are the same key in every language. */
 const FIXED = new Map<string, number>([['\n', 0x28], ['\t', 0x2b], [' ', 0x2c]])
 
 /**
  * Macro steps that type `text` on a computer set to the chosen language.
- * Characters that language has no key for, or needs AltGr or an accent key for, are skipped.
+ * Characters that language has no key for, or needs an accent key for, are skipped.
  */
 export function textToSteps(text: string): MacroStep[] {
   const steps: MacroStep[] = []
-  let shifted = false
-  const setShift = (want: boolean) => {
-    if (want !== shifted) steps.push(want ? { Press: SHIFT } : { Release: SHIFT })
-    shifted = want
+  const held = new Map([[SHIFT, false], [ALTGR, false]])
+  const hold = (key: number, want: boolean) => {
+    if (want !== held.get(key)) steps.push(want ? { Press: key } : { Release: key })
+    held.set(key, want)
   }
   for (const char of text) {
     const fixed = FIXED.get(char)
-    const found = fixed === undefined ? keyFor(char) : { usage: fixed, shift: false }
+    const found = fixed === undefined ? keyFor(char) : { usage: fixed, mods: 0 }
     if (!found) continue
-    setShift(found.shift)
+    hold(SHIFT, (found.mods & 0x02) !== 0)
+    hold(ALTGR, (found.mods & ALTGR_BIT) !== 0)
     steps.push({ Tap: found.usage })
   }
-  setShift(false)
+  hold(SHIFT, false)
+  hold(ALTGR, false)
   return steps
 }
 

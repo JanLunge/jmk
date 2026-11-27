@@ -235,7 +235,7 @@ function chip(step: MacroStep): { kind: 'tap' | 'press' | 'release' | 'wait'; la
               <input v-model.number="newDelay" class="input delay" type="number" min="1" max="60000" />
               <button class="btn small" @click="edit([...steps, { DelayMs: clampMs(newDelay) }])">+ wait (ms)</button>
             </div>
-            <p class="muted small">Text is typed for a computer set to {{ language().name }}, the language chosen in the key picker. Characters that need AltGr or an accent key are left out.</p>
+            <p class="muted small">Text is typed for a {{ language().platform === 'mac' ? 'Mac' : 'Windows or Linux computer' }} set to {{ language().name }}, as chosen in the key picker. Characters that need an accent key are left out.</p>
           </div>
         </template>
       </div>
