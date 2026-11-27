@@ -330,35 +330,57 @@ fn usb_port(sys: &Path) -> Option<String> {
     interface.split(':').next().map(str::to_string)
 }
 
+/// USB disks with their port. Where a disk has partitions, its first one,
+/// which is where a bootloader keeps its filesystem.
+fn usb_disks() -> Vec<(String, PathBuf)> {
+    let Ok(entries) = fs::read_dir("/sys/block") else { return Vec::new() };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let sys = fs::canonicalize(entry.path()).ok()?;
+            let port = usb_port(&sys)?;
+            let mut partitions: Vec<_> = fs::read_dir(&sys)
+                .ok()?
+                .flatten()
+                .filter(|part| part.path().join("partition").exists())
+                .map(|part| part.file_name())
+                .collect();
+            partitions.sort();
+            let name = partitions.into_iter().next().unwrap_or(entry.file_name());
+            Some((port, PathBuf::from("/dev").join(name)))
+        })
+        .collect()
+}
+
 fn flash(device: Option<&str>, image: &str) -> Result<()> {
-    // What the boot ROMs of the RP2040 and the RP2350 call their drive.
-    const DRIVES: [&str; 2] = ["/dev/disk/by-label/RPI-RP2", "/dev/disk/by-label/RP2350"];
     let image = fs::read(image).map_err(|e| format!("{image}: {e}"))?;
     if image.len() % 512 != 0 || !image.starts_with(b"UF2\n") {
         return Err("not a UF2 file".into());
     }
-    if DRIVES.iter().all(|drive| fs::metadata(drive).is_err()) {
-        Keyboard::open(&select(device)?.hidraw)?.ok(Request::Reboot { bootloader: true })?;
-    }
-    let drive = wait_for("the bootloader drive", || {
-        DRIVES.iter().find_map(|drive| OpenOptions::new().write(true).open(drive).ok())
+    let Found { port, hidraw } = select(device)?;
+    Keyboard::open(&hidraw)?.ok(Request::Reboot { bootloader: true })?;
+    // The bootloader's disk appears on the port the keyboard was on, so no
+    // other disk can be taken for it.
+    let (disk, file) = wait_for("the bootloader drive", || {
+        let (_, disk) = usb_disks().into_iter().find(|(at, _)| *at == port)?;
+        let file = OpenOptions::new().write(true).open(&disk).ok()?;
+        Some((disk, file))
     })?;
-    // The boot ROM takes UF2 blocks written to any sector of its
+    println!("writing to {}", disk.display());
+    // A UF2 bootloader takes UF2 blocks written to any sector of its
     // drive, so no filesystem access is needed. Stay clear of the first
     // sectors, which hold its FAT structures.
     use std::os::unix::fs::FileExt;
-    drive.write_all_at(&image, 1000 * 512).map_err(|e| format!("write failed: {e}"))?;
+    file.write_all_at(&image, 1000 * 512).map_err(|e| format!("write failed: {e}"))?;
     // The board resets as soon as the last block arrives, which can fail the sync.
-    let _ = drive.sync_all();
-    drop(drive);
-    wait_for("the keyboard", find_config_channel_ready)?;
+    let _ = file.sync_all();
+    drop(file);
+    wait_for("the keyboard", || {
+        let keyboard = keyboards().into_iter().find(|keyboard| keyboard.port == port)?;
+        OpenOptions::new().read(true).write(true).open(keyboard.hidraw).ok()
+    })?;
     println!("flashed");
     Ok(())
-}
-
-fn find_config_channel_ready() -> Option<()> {
-    let keyboard = keyboards().into_iter().next()?;
-    OpenOptions::new().read(true).write(true).open(keyboard.hidraw).ok().map(|_| ())
 }
 
 fn wait_for<T>(what: &str, mut attempt: impl FnMut() -> Option<T>) -> Result<T> {
