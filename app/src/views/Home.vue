@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { arrivals, installArrival } from '../lib/firmware'
+import { arrivals, installArrival, updateDue, updateNeedsUsb } from '../lib/firmware'
 import SplitPicture, { type PictureBoard } from '../components/SplitPicture.vue'
 import SetupGuide from '../components/SetupGuide.vue'
 import { isConfigured, role } from '../lib/session'
@@ -105,6 +105,9 @@ const previews = computed(() =>
                 <strong>{{ session.meta.name || session.demo?.label || session.transport.label }}</strong>
                 <span class="muted small">
                   {{ describe(session) }} · firmware {{ session.info.firmware.join('.') }}
+                  <template v-if="updateDue(session)"> · <span class="due" data-test="found-update-due">update ready, open to install</span></template>
+                  <template v-else-if="updateNeedsUsb(session)"> · <span class="due">update ready, plug it in by USB to install</span></template>
+                  <template v-if="session.transport.kind === 'cable'"> · over the cable</template>
                   <template v-if="session.transport.kind === 'usb'"> · serial …{{ serial(session) }}</template>
                 </span>
               </div>
@@ -445,6 +448,10 @@ const previews = computed(() =>
   transition:
     border-color 0.15s,
     transform 0.15s var(--ease);
+}
+
+.found-row .due {
+  color: var(--accent);
 }
 
 .found-row:hover {

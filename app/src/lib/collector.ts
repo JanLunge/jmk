@@ -20,6 +20,8 @@ export class KeyCollector {
   /** How many presses were read as one key so far. */
   presses = 0
   private previous = new Set<string>()
+  /** Contacts from `stuck` missing from the last probe pass. */
+  private opened = new Set<string>()
   private readonly startedAt: number
 
   constructor(private readonly now: () => number = () => performance.now()) {
@@ -35,10 +37,19 @@ export class KeyCollector {
     const current = contacts.filter((contact) => !ignored.has(contactKey(contact)))
     const fresh = current.filter((contact) => !this.previous.has(contactKey(contact)))
     this.previous = new Set(current.map(contactKey))
-    this.active = new Set(current.flatMap(pinsOf))
-    if (!fresh.length) return
+    // A connection that was there at rest and lets go is a key that opens
+    // when pressed: a light-beam sensor, like the centre key of a Svalboard
+    // finger cluster.
+    const present = new Set(contacts.map(contactKey))
+    const opened = this.stuck.filter((contact) => !present.has(contactKey(contact)))
+    const freshlyOpened = opened.filter((contact) => !this.opened.has(contactKey(contact)))
+    this.opened = new Set(opened.map(contactKey))
+    this.active = new Set([...current, ...opened].flatMap(pinsOf))
+    if (!fresh.length && !freshlyOpened.length) return
 
-    const signature = signatureOf(fresh)
+    const closing = fresh.length ? signatureOf(fresh) : undefined
+    const opening = freshlyOpened.length ? signatureOf(freshlyOpened) : undefined
+    const signature = fresh.length && freshlyOpened.length ? undefined : (closing ?? (opening && { ...opening, inverted: true }))
     this.confused = !signature
     if (!signature) return
     this.presses++

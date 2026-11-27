@@ -282,6 +282,10 @@ test('split keyboard: set up together, either half types, the keymap follows thr
   await assign(page, 1, 29) // Z
   await saved(page)
   await expect(splitStatus(page)).toHaveAttribute('data-revision', String(before + 1))
+  // The left half has fetched it before the cable comes out.
+  await page.click('[data-test=split-status]')
+  await expect(page.locator('[data-test=split-details]')).toContainText(`revision ${before + 1}, same on both`, { timeout: 8000 })
+  await page.click('[data-test=split-details]')
 
   // Without the cable each half is a keyboard of its own. The left half
   // lost its power in between and still has the new key.

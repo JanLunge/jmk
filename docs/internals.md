@@ -43,6 +43,21 @@ halves take turns on it (`LinkConfig::Wire`, `wire` in
 talking at once garble a message but cannot harm the pins; each waits for
 the wire to be quiet for a random while before it talks.
 
+The cable also carries requests from the computer to a half that has no USB
+cable of its own (`Request::Peer`, `crates/jmk-device/src/peer.rs`). The half
+on USB passes on the request in the bytes it would take over USB; the other
+half handles it as its own and sends back the bytes it would have sent over
+USB, which reach the computer as `Event::Peer`. In the app a
+`CableTransport` turns these back into reports, so the far half opens as a
+keyboard like any other (`openFarHalf` in `app/src/lib/app.ts`). Messages
+travel in 24-byte parts paced 8 ms apart. The asking half asks again when the
+answer stops coming, and the answering half keeps its last answer to send
+again instead of running a request twice. Over the cable a half refuses
+wiring detection, holding a pin low and restarting into its bootloader:
+the first two would stop it talking, and the bootloader only listens on USB.
+Updating firmware over the cable is planned in
+[firmware-over-the-cable.md](firmware-over-the-cable.md).
+
 ## Wiring the firmware can read
 
 All of this is set at run time; nothing is compiled in.

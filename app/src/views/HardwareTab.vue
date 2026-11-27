@@ -7,9 +7,10 @@ import { findBoard, pinLabel, wirablePins } from '../lib/boards'
 import { KeyCollector } from '../lib/collector'
 import { desktop } from '../lib/desktop'
 import { carriedVersion, isOlder, updateFirmware as updateByItself } from '../lib/firmware'
-import { wiringParts } from '../lib/definition'
-import type { Contact, HardwareConfig, MatrixConfig, Pin } from '../lib/protocol'
-import { addKey, linkPins, refresh, role, setHardware, type Session } from '../lib/session'
+import { SCAN_PROTOCOL } from '../lib/client'
+import { switchCount, wiringParts } from '../lib/definition'
+import { MAX_SETTLE_US, NO_SCAN, type Contact, type HardwareConfig, type MatrixConfig, type Pin } from '../lib/protocol'
+import { addKey, linkPins, refresh, role, setHardware, splitOffset, type Session } from '../lib/session'
 import { VirtualTransport } from '../lib/transport'
 
 const props = defineProps<{ session: Session }>()
@@ -53,6 +54,26 @@ function describe(part: MatrixConfig): string {
 const summary = computed(() => wiringParts(hardware.value).map(describe).filter(Boolean).join(' ') || 'No keys set up.')
 
 const change = (patch: Partial<HardwareConfig>) => attempt(() => setHardware(props.session, { ...hardware.value, ...patch }))
+
+// --- Sensor keys ---------------------------------------------------------------
+const canTuneScan = info.protocol >= SCAN_PROTOCOL
+const scan = computed(() => hardware.value.scan ?? NO_SCAN)
+/** This half's own switches held right now, counted from its first. */
+const heldHere = computed(() => {
+  const offset = splitOffset(hardware.value)
+  const count = switchCount(hardware.value)
+  return [...props.session.pressed].map((pos) => pos - offset).filter((pos) => pos >= 0 && pos < count)
+})
+const changeScan = (patch: Partial<typeof NO_SCAN>) => {
+  const next = { ...scan.value, ...patch }
+  return change({ scan: next.inverted.length || next.settle_us || next.drive_idle_high ? next : undefined })
+}
+/** Whatever reads held now rests from here on: those keys swap round, and so would any held by hand. */
+function restHeldKeys() {
+  const inverted = new Set(scan.value.inverted)
+  for (const pos of heldHere.value) if (!inverted.delete(pos)) inverted.add(pos)
+  return changeScan({ inverted: [...inverted].sort((a, b) => a - b) })
+}
 
 function patchEncoder(index: number, reverse: boolean, steps?: number) {
   const encoders = hardware.value.encoders.map((e, i) =>
@@ -190,6 +211,46 @@ async function updateFirmware() {
           <input type="range" min="1" max="30" :value="hardware.debounce_ms" data-test="debounce" @change="change({ debounce_ms: Number(($event.target as HTMLInputElement).value) })" />
         </label>
         <p class="muted small">Raise this if one press sometimes types a letter twice.</p>
+      </div>
+
+      <div v-if="canTuneScan && hardware.matrix !== 'None'" class="card col" data-test="sensor-keys">
+        <h2>Sensor keys</h2>
+        <p class="muted">
+          For keys that use light beams or other sensors instead of contacts, like the Svalboard. Normal switches
+          need nothing here.
+        </p>
+        <p data-test="inverted-summary">
+          {{
+            scan.inverted.length
+              ? `${scan.inverted.length} ${scan.inverted.length === 1 ? 'key reads' : 'keys read'} closed at rest and count${scan.inverted.length === 1 ? 's' : ''} as pressed when ${scan.inverted.length === 1 ? 'it opens' : 'they open'}.`
+              : 'Every key counts as pressed while it is closed.'
+          }}
+        </p>
+        <div class="row wrap">
+          <button class="btn small" data-test="rest-held" :disabled="!heldHere.length" @click="restHeldKeys">
+            Treat the keys held now as resting ({{ heldHere.length }})
+          </button>
+        </div>
+        <p class="muted small">
+          Take your hands off the keyboard first. A key that shows as held while nobody touches it is then read the
+          other way round, and one you set that way by mistake goes back.
+        </p>
+        <label class="field">
+          Wait {{ scan.settle_us || 'the usual few' }} µs on each row
+          <input type="range" min="0" :max="MAX_SETTLE_US" step="10" :value="scan.settle_us" data-test="settle" @change="changeScan({ settle_us: Number(($event.target as HTMLInputElement).value) })" />
+        </label>
+        <label class="row check">
+          <input type="checkbox" :checked="scan.drive_idle_high" data-test="drive-idle-high" @change="changeScan({ drive_idle_high: ($event.target as HTMLInputElement).checked })" />
+          Rows switch the sensors' power: hold the rows not being read high
+        </label>
+        <p class="muted small">
+          Turn this on if one press shows up on several rows at once. The Svalboard needs it. The chip then drives
+          these pins high, so use it only when the rows lead to transistors and nothing else.
+        </p>
+        <p class="muted small">
+          Sensors that get their power through the row need time to wake. Raise this if keys flicker or show up
+          on the wrong row; the Svalboard's own firmware waits 90 µs.
+        </p>
       </div>
 
       <div v-if="hardware.matrix !== 'None'" class="card col">

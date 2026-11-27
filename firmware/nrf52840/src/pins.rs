@@ -60,6 +60,13 @@ impl Pins for NrfPins {
         }
     }
 
+    fn drive_high(&mut self, pin: Pin) {
+        if let Some(flex) = self.pin(pin) {
+            flex.set_high();
+            flex.set_as_output(OutputDrive::Standard);
+        }
+    }
+
     fn read(&mut self, pin: Pin) -> bool {
         self.pin(pin).is_some_and(|flex| flex.is_high())
     }
@@ -75,5 +82,9 @@ impl Pins for NrfPins {
         // 32768 Hz, too coarse for this, so count CPU cycles: 64 per
         // microsecond.
         cortex_m::asm::delay(64 * 10);
+    }
+
+    fn wait_us(&mut self, us: u16) {
+        cortex_m::asm::delay(64 * us as u32);
     }
 }

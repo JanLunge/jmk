@@ -95,6 +95,7 @@ dependencies = [
  "jmk-core",
  "jmk-device",
  "jmk-proto",
+ "postcard",
  "serde",
 ]
 

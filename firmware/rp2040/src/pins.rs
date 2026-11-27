@@ -49,6 +49,13 @@ impl Pins for RpPins {
         }
     }
 
+    fn drive_high(&mut self, pin: Pin) {
+        if let Some(flex) = self.pin(pin) {
+            flex.set_high();
+            flex.set_as_output();
+        }
+    }
+
     fn read(&mut self, pin: Pin) -> bool {
         self.pin(pin).is_some_and(|flex| flex.is_high())
     }
@@ -83,5 +90,9 @@ impl Pins for RpPins {
         // Internal pull-ups are weak (50 to 80 kOhm), so a released line
         // needs tens of microseconds to rise against the wiring capacitance.
         block_for(Duration::from_micros(30));
+    }
+
+    fn wait_us(&mut self, us: u16) {
+        block_for(Duration::from_micros(us as u64));
     }
 }

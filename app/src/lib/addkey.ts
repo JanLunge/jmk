@@ -3,7 +3,7 @@
 
 import type { KeySignature } from './infer'
 import { keyCount, wiringParts } from './definition'
-import type { HardwareConfig, MatrixConfig, Pin } from './protocol'
+import { NO_SCAN, type HardwareConfig, type MatrixConfig, type Pin } from './protocol'
 
 /** Groups of switches a board can have besides its first (the firmware's limit). */
 const MAX_MORE_WIRING = 3
@@ -21,8 +21,20 @@ export type AddPlan =
     }
   | { ok: false; problem: string }
 
-/** Work out how the key that made `key` joins the wiring in `hardware`. */
+/**
+ * Work out how the key that made `key` joins the wiring in `hardware`. Keys
+ * read the other way round keep that, wherever the new numbering puts them.
+ */
 export function planAddedKey(hardware: HardwareConfig, key: KeySignature): AddPlan {
+  const plan = planWiring(hardware, key)
+  if (!plan.ok) return plan
+  const before = hardware.scan?.inverted ?? []
+  const inverted = [...new Set([...before.map(plan.move), ...(key.inverted ? [plan.pos] : [])])].sort((a, b) => a - b)
+  if (inverted.length === before.length && inverted.every((pos, i) => pos === before[i])) return plan
+  return { ...plan, hardware: { ...plan.hardware, scan: { ...(hardware.scan ?? NO_SCAN), inverted } } }
+}
+
+function planWiring(hardware: HardwareConfig, key: KeySignature): AddPlan {
   if (hardware.matrix === 'None') return { ok: false, problem: 'This keyboard has no keys set up yet. Run the setup first.' }
   const parts = wiringParts(hardware)
   /** Put a changed group back where it was; the first group lives in `matrix`. */

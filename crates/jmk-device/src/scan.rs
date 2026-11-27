@@ -1,6 +1,6 @@
 //! Debounced key scanning for the wiring described by a [`HardwareConfig`].
 
-use jmk_proto::{DiodeDirection, EncoderConfig, HardwareConfig, MatrixConfig, Pin, MAX_ENCODERS, MAX_KEYS};
+use jmk_proto::{DiodeDirection, EncoderConfig, HardwareConfig, MatrixConfig, Pin, ScanConfig, MAX_ENCODERS, MAX_KEYS};
 
 use crate::pins::{Pins, Pull};
 
@@ -26,6 +26,12 @@ pub(crate) struct Scanner {
     /// Scans in a row a held key has read open.
     open: [u8; MAX_KEYS],
     encoders: [Encoder; MAX_ENCODERS],
+    /// Bit n set: position n reads closed at rest and open while pressed.
+    inverted: u128,
+    /// Wait after each change of a matrix line, 0 for the port's usual.
+    settle_us: u16,
+    /// Hold the driven lines high between reads.
+    drive_high: bool,
 }
 
 impl Scanner {
@@ -35,12 +41,18 @@ impl Scanner {
             lockout: [0; MAX_KEYS],
             open: [0; MAX_KEYS],
             encoders: [Encoder { last: 0, steps: 0 }; MAX_ENCODERS],
+            inverted: 0,
+            settle_us: 0,
+            drive_high: false,
         }
     }
 
     /// Put all scanned pins into their idle state and forget key states.
-    pub fn configure(&mut self, hardware: &HardwareConfig, more: &[MatrixConfig], pins: &mut impl Pins) {
+    pub fn configure(&mut self, hardware: &HardwareConfig, more: &[MatrixConfig], scan: &ScanConfig, pins: &mut impl Pins) {
         *self = Self::new();
+        self.inverted = scan.inverted.iter().filter(|pos| (**pos as usize) < MAX_KEYS).fold(0, |bits, pos| bits | 1 << pos);
+        self.settle_us = scan.settle_us;
+        self.drive_high = scan.drive_idle_high;
         idle_pins(hardware, more, pins);
         pins.settle();
         for (state, encoder) in self.encoders.iter_mut().zip(&hardware.encoders) {
@@ -61,10 +73,13 @@ impl Scanner {
         mut on_change: impl FnMut(Change),
     ) {
         let debounce = hardware.debounce_ms;
+        let (inverted, settle_us) = (self.inverted, self.settle_us);
+        let lines = Lines { settle_us, drive_high: self.drive_high };
         let mut update = |pos: usize, raw: bool| {
             if pos >= MAX_KEYS {
                 return;
             }
+            let raw = raw != (inverted >> pos & 1 != 0);
             if !self.pressed[pos] {
                 if raw {
                     self.pressed[pos] = true;
@@ -95,13 +110,15 @@ impl Scanner {
                 }
                 MatrixConfig::Matrix { rows, cols, diodes } => {
                     let crossings = rows.len() * cols.len();
+                    // Lines held high could not be read in a matrix read both ways.
+                    let lines = Lines { drive_high: lines.drive_high && *diodes != DiodeDirection::Both, ..lines };
                     if *diodes != DiodeDirection::Row2Col {
-                        scan_lines(rows, cols, pins, |row, col, down| update(base + row * cols.len() + col, down));
+                        lines.scan(rows, cols, pins, |row, col, down| update(base + row * cols.len() + col, down));
                     }
                     if *diodes != DiodeDirection::Col2Row {
                         // The second switch of each crossing in a duplex matrix comes after all the first ones.
                         let start = if *diodes == DiodeDirection::Both { base + crossings } else { base };
-                        scan_lines(cols, rows, pins, |col, row, down| update(start + row * cols.len() + col, down));
+                        lines.scan(cols, rows, pins, |col, row, down| update(start + row * cols.len() + col, down));
                     }
                 }
             }
@@ -125,18 +142,53 @@ impl Scanner {
     }
 }
 
-/// Pull each of `driven` low in turn and report which of `sensed` follow.
-fn scan_lines(driven: &[Pin], sensed: &[Pin], pins: &mut impl Pins, mut found: impl FnMut(usize, usize, bool)) {
-    for (d, drive) in driven.iter().enumerate() {
-        pins.drive_low(*drive);
-        pins.settle();
-        for (s, sense) in sensed.iter().enumerate() {
-            found(d, s, !pins.read(*sense));
+/// How matrix lines are driven, from the [`ScanConfig`].
+#[derive(Clone, Copy)]
+struct Lines {
+    /// Wait after each change of a line, 0 for the port's usual.
+    settle_us: u16,
+    /// Hold lines high between reads instead of letting them go.
+    drive_high: bool,
+}
+
+impl Lines {
+    /// Pull each of `driven` low in turn and report which of `sensed` follow.
+    ///
+    /// A line pulled low may also switch on power for sensor keys (the
+    /// Svalboard powers one finger cluster at a time through a transistor on
+    /// each row). `settle_us` then gives them time to wake before the read,
+    /// which is also the time the line before has to go quiet, and
+    /// `drive_high` switches the others off properly. The wait comes once per
+    /// line: a scan must stay well inside its millisecond.
+    fn scan(self, driven: &[Pin], sensed: &[Pin], pins: &mut impl Pins, mut found: impl FnMut(usize, usize, bool)) {
+        if self.drive_high {
+            // Again on every scan: a pin change elsewhere may have let them go.
+            for line in driven {
+                pins.drive_high(*line);
+            }
         }
-        pins.input(*drive, Pull::Up);
+        for (d, drive) in driven.iter().enumerate() {
+            pins.drive_low(*drive);
+            self.settle(pins);
+            for (s, sense) in sensed.iter().enumerate() {
+                found(d, s, !pins.read(*sense));
+            }
+            if self.drive_high {
+                pins.drive_high(*drive);
+            } else {
+                pins.input(*drive, Pull::Up);
+            }
+        }
+        // Let the last driven line recover before pins of another group are read.
+        pins.settle();
     }
-    // Let the last driven line recover before the next read.
-    pins.settle();
+
+    fn settle(self, pins: &mut impl Pins) {
+        match self.settle_us {
+            0 => pins.settle(),
+            us => pins.wait_us(us),
+        }
+    }
 }
 
 /// Put all scanned pins into their idle state, leaving key states alone.

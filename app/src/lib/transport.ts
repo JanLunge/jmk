@@ -1,11 +1,12 @@
-// How reports reach a keyboard: USB (WebHID) or a virtual keyboard running
-// in the WebAssembly bridge. Both look the same to the rest of the app.
+// How reports reach a keyboard: USB (WebHID), a virtual keyboard running
+// in the WebAssembly bridge, or the cable from the other half of a split.
+// All look the same to the rest of the app.
 
 import type { HostEvent, Wiring } from './protocol'
 import { bridge } from './wasm'
 
 export interface Transport {
-  readonly kind: 'usb' | 'virtual'
+  readonly kind: 'usb' | 'virtual' | 'cable'
   readonly label: string
   send(report: number[]): Promise<void>
   /** Called for every 64-byte report from the keyboard. */
@@ -204,6 +205,91 @@ export class VirtualTransport implements Transport {
     if (this.replaced) return
     world.remove(this.id)
     bridge({ op: 'destroy', id: this.id })
+  }
+}
+
+// --- The other half, over the cable ------------------------------------------
+
+/** Byte 0 of a report: set if more reports of the message follow; the rest is its length (see frame.rs). */
+const MORE = 0x80
+const PAYLOAD = 63
+
+/** The reports of one message put back together. */
+export function joinReports(reports: number[][]): number[] {
+  return reports.flatMap((report) => report.slice(1, 1 + (report[0] & ~MORE)))
+}
+
+/** One message cut into 64-byte reports, as the keyboard sends it over USB. */
+export function splitReports(bytes: number[]): number[][] {
+  const reports: number[][] = []
+  for (let at = 0; at === 0 || at < bytes.length; at += PAYLOAD) {
+    const chunk = bytes.slice(at, at + PAYLOAD)
+    const more = at + PAYLOAD < bytes.length
+    const report = [chunk.length | (more ? MORE : 0), ...chunk]
+    while (report.length < PAYLOAD + 1) report.push(0)
+    reports.push(report)
+  }
+  return reports
+}
+
+/** The half on USB that passes messages on: what a `CableTransport` needs of its client. */
+export interface CableEnd {
+  peer(bytes: number[]): Promise<void>
+  onPeer: (bytes: number[]) => void
+}
+
+/**
+ * The other half of a split, reached through the half on USB and the cable
+ * between them. Each request goes over as the bytes it would take over USB,
+ * and what the other half sends back arrives the same way, so the app talks
+ * to it like to any keyboard.
+ */
+export class CableTransport implements Transport {
+  readonly kind = 'cable'
+  onReport: (report: number[]) => void = () => {}
+  onClose: () => void = () => {}
+  private pending: number[][] = []
+  private closed = false
+
+  constructor(
+    private readonly via: CableEnd,
+    readonly label: string,
+  ) {
+    via.onPeer = (bytes) => {
+      if (!this.closed) splitReports(bytes).forEach((report) => this.onReport(report))
+    }
+  }
+
+  async send(report: number[]): Promise<void> {
+    if (this.closed) throw new Error('The other half is no longer connected.')
+    this.pending.push(report)
+    if (report[0] & MORE) return
+    const bytes = joinReports(this.pending)
+    this.pending = []
+    try {
+      await this.via.peer(bytes)
+    } catch (error) {
+      // The cable came out, or the half on USB went away.
+      this.lost()
+      throw error
+    }
+  }
+
+  /** The cable or the half on USB went away. */
+  lost() {
+    if (this.closed) return
+    this.closed = true
+    this.via.onPeer = () => {}
+    this.onClose()
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
+    // Nobody shows its keys any more: the other half can stop sending them.
+    const { reports } = bridge<{ reports: number[][] }>({ op: 'encode', request: { WatchKeys: false } })
+    await this.via.peer(joinReports(reports)).catch(() => {})
+    this.via.onPeer = () => {}
   }
 }
 

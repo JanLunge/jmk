@@ -4,7 +4,8 @@ import { computed, markRaw, reactive, type Raw } from 'vue'
 import { DEMOS, type Demo, type DemoHalf } from './demos'
 import type { HostEvent, SplitStatus } from './protocol'
 import { alignHalves, isConfigured, openSession, refresh, role, save, type Session } from './session'
-import { chooseUsbDevice, knownUsbDevices, UsbTransport, VirtualTransport } from './transport'
+import { PEER_PROTOCOL } from './client'
+import { CableTransport, chooseUsbDevice, knownUsbDevices, UsbTransport, VirtualTransport } from './transport'
 
 interface Toast {
   id: number
@@ -356,13 +357,19 @@ function sameBoard(a: Session, b: Session): boolean {
  * back, or returned from a firmware update) takes its old place instead of
  * appearing a second time.
  */
-export function addSession(session: Session): void {
+export function addSession(session: Session, front = true): void {
   const index = app.sessions.findIndex((known) => sameBoard(known, session))
   if (index < 0) {
     app.sessions.push(session)
     // A keyboard in the middle of its setup stays in front: a second board
     // that appears joins that setup.
-    if (!app.holding && (!current.value || current.value.closed || !current.value.setup)) app.currentId = session.id
+    if (front && !app.holding && (!current.value || current.value.closed || !current.value.setup)) app.currentId = session.id
+    return
+  }
+  // Over USB a half answers faster than over the cable: a half open both
+  // ways stays the USB one.
+  if (session.transport.kind === 'cable') {
+    session.client.close().catch(() => {})
     return
   }
   const old = app.sessions[index]
@@ -376,7 +383,53 @@ export function addSession(session: Session): void {
 }
 
 async function openUsb(device: HIDDevice): Promise<void> {
-  addSession(await openSession(await UsbTransport.open(device)))
+  const session = await openSession(await UsbTransport.open(device))
+  addSession(session)
+  openFarHalf(session)
+}
+
+// --- The other half, over the cable -------------------------------------------
+
+/** When a half whose firmware did not answer over the cable may be tried again. */
+const cableRetryAt = new Map<string, number>()
+const CABLE_RETRY_MS = 30_000
+const opening = new Set<string>()
+
+/**
+ * Open the other half of a split through this one and the cable between
+ * them, if it is not open already: then it can be set up without a USB
+ * cable of its own. Needs firmware on both halves that passes requests on.
+ */
+export async function openFarHalf(session: Session): Promise<void> {
+  if (session.closed || session.transport.kind === 'cable' || session.info.protocol < PEER_PROTOCOL) return
+  if (role(session) === 'single' || !session.split.connected) return
+  const uid = session.split.peer_uid
+  const key = uid.join(',')
+  if (!uid.some((byte) => byte !== 0) || opening.has(key) || (cableRetryAt.get(key) ?? 0) > Date.now()) return
+  if (app.sessions.some((each) => !each.closed && sameUid(each.info.uid, uid))) return
+  opening.add(key)
+  const transport = new CableTransport(session.client, `${session.transport.label} (over the cable)`)
+  const closeBefore = session.transport.onClose
+  session.transport.onClose = () => {
+    closeBefore()
+    transport.lost()
+  }
+  try {
+    const far = await openSession(transport)
+    if (session.closed || app.sessions.some((each) => !each.closed && sameBoard(each, far))) {
+      await far.client.close().catch(() => {})
+      return
+    }
+    addSession(far, false)
+    pairUp(session, far)
+  } catch {
+    // Firmware on the other half from before it answered over the cable,
+    // or the cable came out.
+    transport.lost()
+    cableRetryAt.set(key, Date.now() + CABLE_RETRY_MS)
+  } finally {
+    opening.delete(key)
+  }
 }
 
 export async function connectUsb(): Promise<void> {

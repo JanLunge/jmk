@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { KnobFinder } from '../../src/lib/collector'
 import { planAddedKey } from '../../src/lib/addkey'
-import { addSession, app, reconcile } from '../../src/lib/app'
+import { addSession, app, openFarHalf, partnerOf, reconcile } from '../../src/lib/app'
 import { chooseLink, findWires } from '../../src/lib/cable'
 import { signatureOf } from '../../src/lib/infer'
 import { DEMOS } from '../../src/lib/demos'
@@ -12,7 +12,8 @@ import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../.
 import { keymapPoster } from '../../src/lib/poster'
 import { layerHex } from '../../src/lib/layers'
 import { gridLayout } from '../../src/lib/layout'
-import { addKey, alignHalves, knobPositions, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { parseDefinition } from '../../src/lib/definition'
+import { addKey, alignHalves, applyDefinition, knobPositions, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
 import { starterAction } from './keys'
 import { advanceVirtualTime, VirtualTransport } from '../../src/lib/transport'
 import { loadBridge } from '../../src/lib/wasm'
@@ -355,6 +356,66 @@ describe('virtual split keyboard', () => {
     advanceVirtualTime(2000)
     expect((await during(right.client.actions(0, 5)))[4]).toEqual(starterAction(1))
     expect((await during(right.client.splitStatus())).sync).toBe('Same')
+  })
+})
+
+describe('the Svalboard keyboard file', () => {
+  it('sets up both halves of a virtual Svalboard so each key types once', { timeout: 20_000 }, async () => {
+    const definition = parseDefinition(readFileSync(new URL('../../../keyboards/svalboard.jmk.json', import.meta.url), 'utf8'))
+    // Every crossing a light-beam sensor, numbered like the positions.
+    const rows = [8, 7, 6, 5, 4]
+    const cols = [14, 13, 12, 11, 10, 9]
+    const wiring = { switches: rows.flatMap((power) => cols.map((out) => ({ Sensor: { power, out } }))), encoders: [] }
+    const transports = [0, 1].map((i) => new VirtualTransport(`Svalboard ${i}`, wiring, 210 + i))
+    // The finger clusters' centre keys conduct at rest.
+    const centres = [1, 2, 3, 4].map((row) => row * 6 + 2)
+    for (const transport of transports) for (const key of centres) transport.setKey(key, true)
+    // The cable runs straight through: GP0 to GP0, GP1 to GP1.
+    VirtualTransport.connect(transports[0], transports[1], [[0, 0], [1, 1]])
+    const [left, right] = [await during(openSession(transports[0])), await during(openSession(transports[1]))]
+    await during(applyDefinition(left, definition, 0))
+    await during(applyDefinition(right, definition, 1))
+    advanceVirtualTime(1500)
+    expect((await during(left.client.splitStatus())).connected).toBe(true)
+    expect([...left.pressed, ...right.pressed]).toEqual([])
+    left.typed.splice(0)
+    advanceVirtualTime(50)
+    expect(keys(left.typed)).toEqual([])
+
+    const tap = (transport: VirtualTransport, key: number, pressed = true) => {
+      transport.setKey(key, pressed)
+      advanceVirtualTime(30)
+      transport.setKey(key, !pressed)
+      advanceVirtualTime(30)
+    }
+    tap(transports[1], 1 * 6 + 3) // right index north: u
+    tap(transports[0], 1 * 6 + 2, false) // left index centre lets go: f
+    tap(transports[0], 4 * 6 + 0) // left pinky south: z
+    tap(transports[1], 0 * 6 + 3) // right thumb pad: space
+    expect(keys(left.typed).filter((pressed) => pressed.length)).toEqual([[0x18], [0x09], [0x1d], [0x2c]])
+
+    // With USB on the left half only, the right one opens over the cable.
+    transports[1].unplug()
+    left.split = await during(left.client.splitStatus())
+    app.sessions.splice(0, app.sessions.length, left)
+    await during(openFarHalf(left))
+    const far = app.sessions.find((each) => each !== left)!
+    expect(far.transport.kind).toBe('cable')
+    expect(far.info.uid).toEqual(right.info.uid)
+    expect(far.hardware.split).toEqual(right.hardware.split)
+    expect(partnerOf(left)).toBe(far)
+    // Its keys show, as it watches them for the app over the cable.
+    transports[1].setKey(0 * 6 + 3, true)
+    await during(new Promise((done) => setTimeout(done, 50)))
+    expect([...far.pressed]).toEqual([30 + 3])
+    transports[1].setKey(0 * 6 + 3, false)
+    // Its setup changes and is saved over the cable.
+    const scan = { ...far.hardware.scan!, settle_us: 120 }
+    await during(setHardware(far, { ...far.hardware, scan }))
+    await during(save(far))
+    transports[1].setUsb(true)
+    const again = await during(openSession(transports[1].again()))
+    expect(again.hardware.scan?.settle_us).toBe(120)
   })
 })
 

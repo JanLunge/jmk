@@ -4,7 +4,7 @@ use jmk_core::keycode as kc;
 use jmk_core::{Action, Basic, MacroStep};
 use jmk_proto::{
     ColorOrder, Contact, DiodeDirection, Effect, EncoderConfig, Error, Event, HardwareConfig, KeyGeometry, Led,
-    LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, SplitConfig, SplitStatus, SplitSync,
+    LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, ScanConfig, SplitConfig, SplitStatus, SplitSync,
 };
 use jmk_sim::{HostEvent, VirtualKeyboard, Wire, Wiring};
 
@@ -147,6 +147,91 @@ fn diode_matrix_scans_in_the_configured_direction() {
     assert_eq!(rig.out(), ["00:"]);
     rig.run(10);
     assert!(rig.out().is_empty());
+}
+
+/// Sensor keys that read closed at rest, like the centre key of a Svalboard
+/// finger cluster, type when they open and stay quiet while they rest.
+#[test]
+fn inverted_keys_type_when_they_open() {
+    let mut rig = Rig::new(wired_2x2());
+    // Key 1 conducts at rest.
+    rig.kb.set_key(1, true);
+    rig.ok(Request::SetHardware(matrix_2x2(DiodeDirection::Col2Row)));
+    rig.set_keys(0, &[kc::A, kc::B, kc::C, kc::D]);
+    rig.run(2);
+    assert_eq!(rig.out(), ["00:05"], "without being told, it reads as held");
+
+    let scan = ScanConfig { inverted: [1].into_iter().collect(), ..Default::default() };
+    rig.ok(Request::SetScan(scan.clone()));
+    rig.run(10);
+    assert_eq!(rig.out(), ["00:"], "told, it is at rest");
+    rig.kb.set_key(1, false);
+    rig.run(2);
+    rig.kb.set_key(0, true);
+    rig.run(2);
+    assert_eq!(rig.out(), ["00:05", "00:05,04"]);
+    rig.kb.set_key(1, true);
+    rig.kb.set_key(0, false);
+    rig.run(10);
+    assert_eq!(rig.out(), ["00:04", "00:"]);
+
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetScan), Response::Scan(scan));
+    rig.run(10);
+    assert!(rig.out().is_empty(), "still at rest after a restart");
+}
+
+/// Rows that switch power to sensor clusters, like the Svalboard's: a
+/// pull-up cannot switch a cluster off, so all of them answer on every row
+/// until the rows not being read are held high.
+#[test]
+fn sensor_rows_held_high_keep_their_clusters_apart() {
+    // Two clusters powered from rows 8 and 7, sharing columns 12 and 13.
+    let wires = [(8, 12), (8, 13), (7, 12), (7, 13)].map(|(power, out)| Wire::Sensor { power, out });
+    let mut rig = Rig::wires(&wires);
+    rig.ok(Request::SetHardware(hardware(MatrixConfig::Matrix { rows: pins(&[8, 7]), cols: pins(&[12, 13]), diodes: DiodeDirection::Col2Row })));
+    rig.set_keys(0, &[kc::A, kc::B, kc::C, kc::D]);
+    rig.kb.set_key(0, true);
+    rig.run(2);
+    assert_eq!(rig.out(), ["00:04", "00:04,06"], "left to the pull-ups, both clusters answer");
+    rig.kb.set_key(0, false);
+    rig.run(10);
+    rig.out();
+
+    rig.ok(Request::SetScan(ScanConfig { drive_idle_high: true, ..Default::default() }));
+    rig.kb.set_key(0, true);
+    rig.run(2);
+    rig.kb.set_key(3, true);
+    rig.run(2);
+    assert_eq!(rig.out(), ["00:04", "00:04,07"]);
+}
+
+#[test]
+fn scan_settings_are_checked() {
+    let mut rig = Rig::new(wired_2x2());
+    let unsorted = ScanConfig { inverted: [3, 1].into_iter().collect(), ..Default::default() };
+    rig.refused(Request::SetScan(unsorted), Error::OutOfRange);
+    let slow = ScanConfig { settle_us: ScanConfig::MAX_SETTLE_US + 1, ..Default::default() };
+    rig.refused(Request::SetScan(slow), Error::OutOfRange);
+    assert_eq!(rig.kb.request(Request::GetScan), Response::Scan(ScanConfig::default()));
+}
+
+/// Keys powered through their row wait the set time for each line.
+#[test]
+fn a_longer_settle_time_waits_longer_per_line() {
+    let waits = |settle_us: u16| {
+        let mut rig = Rig::new(wired_2x2());
+        rig.ok(Request::SetHardware(matrix_2x2(DiodeDirection::Col2Row)));
+        rig.ok(Request::SetScan(ScanConfig { settle_us, ..Default::default() }));
+        let before = rig.kb.pins().settles();
+        rig.run(10);
+        rig.kb.pins().settles() - before
+    };
+    // Two rows: a wait after each pull, then a plain one after the last.
+    // 90 us counts as 3 settles.
+    assert_eq!(waits(0), 10 * 3);
+    assert_eq!(waits(90), 10 * (2 * 3 + 1));
 }
 
 #[test]
@@ -1164,4 +1249,152 @@ fn layer_colors_are_saved() {
     rig.ok(Request::Save);
     rig.kb.reboot();
     assert_eq!(rig.kb.request(Request::GetLayerColors), Response::LayerColors([0, 3, 7, 0, 0, 0, 0, 0].into_iter().collect()));
+}
+
+// --- Requests for the other half, over the cable -----------------------------
+
+/// A request in the bytes it takes over USB, ready for `Request::Peer`.
+fn for_peer(request: &Request) -> Request {
+    let mut buf = [0u8; jmk_proto::MAX_MESSAGE];
+    Request::Peer(postcard::to_slice(request, &mut buf).unwrap().iter().copied().collect())
+}
+
+/// What came back from the other half since the last call.
+fn from_peer(rig: &mut Rig) -> Vec<jmk_proto::DeviceMessage> {
+    rig.events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::Peer(bytes) => Some(postcard::from_bytes(&bytes).expect("the other half sends whole messages")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Pass a request on to the right half and wait for its answer.
+fn ask_right(left: &mut Rig, right: &mut Rig, request: Request) -> Response {
+    left.ok(for_peer(&request));
+    for _ in 0..200 {
+        run_both(left, right, 10);
+        if let Some(jmk_proto::DeviceMessage::Response(response)) = from_peer(left).pop() {
+            return response;
+        }
+    }
+    panic!("no answer from the other half");
+}
+
+#[test]
+fn the_other_half_answers_over_the_cable() {
+    let (mut left, mut right) = split_pair();
+    right.kb.set_usb(false);
+    run_both(&mut left, &mut right, 600);
+    match ask_right(&mut left, &mut right, Request::GetInfo) {
+        Response::Info(info) => assert_eq!(info.uid, [2; 8]),
+        other => panic!("unexpected answer {other:?}"),
+    }
+    // Long answers come in several parts.
+    let layout: jmk_proto::Vec<KeyGeometry, 16> =
+        (0..16).map(|i| KeyGeometry { x: i * 100, y: 0, w: 100, h: 100, r: 0 }).collect();
+    assert_eq!(ask_right(&mut left, &mut right, Request::SetLayout { start: 0, keys: layout.clone() }), Response::Ok);
+    match ask_right(&mut left, &mut right, Request::GetLayout { start: 0 }) {
+        Response::Layout { keys, .. } => assert_eq!(keys, layout),
+        other => panic!("unexpected answer {other:?}"),
+    }
+}
+
+#[test]
+fn the_other_half_can_be_set_up_over_the_cable() {
+    let (mut left, mut right) = split_pair();
+    right.kb.set_usb(false);
+    run_both(&mut left, &mut right, 600);
+    // Swap the halves round: the right one goes first.
+    let link = LinkConfig::Uart { tx: 0, rx: 1 };
+    let first = HardwareConfig { split: SplitConfig::Half { link, offset: 0 }, ..direct(&[2, 3, 4]) };
+    assert_eq!(ask_right(&mut left, &mut right, Request::SetHardware(first)), Response::Ok);
+    assert_eq!(ask_right(&mut left, &mut right, Request::Save), Response::Ok);
+    right.kb.reboot();
+    right.kb.set_usb(false);
+    match right.kb.request(Request::GetHardware) {
+        Response::Hardware(hardware) => assert_eq!(hardware.split.offset(), 0),
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
+#[test]
+fn a_lost_answer_is_asked_for_again_and_the_request_runs_once() {
+    let (mut left, mut right) = split_pair();
+    right.kb.set_usb(false);
+    run_both(&mut left, &mut right, 600);
+    let step = MacroStep::Tap(kc::A);
+    let request = Request::SetMacro { index: 0, start: 0, steps: [step].into_iter().collect() };
+    left.ok(for_peer(&request));
+    // The request gets through (sent on this millisecond, read on the
+    // next), the answer does not.
+    run_both(&mut left, &mut right, 1);
+    right.kb.set_cable(false);
+    run_both(&mut left, &mut right, 40);
+    right.kb.set_cable(true);
+    let mut answers = vec![];
+    for _ in 0..100 {
+        run_both(&mut left, &mut right, 10);
+        answers.extend(from_peer(&mut left));
+    }
+    assert_eq!(answers, [jmk_proto::DeviceMessage::Response(Response::Ok)]);
+    match right.kb.request(Request::GetMacro { index: 0, start: 0 }) {
+        Response::Macro { total, .. } => assert_eq!(total, 1),
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
+#[test]
+fn the_other_half_reports_its_keys_over_the_cable_when_asked() {
+    let (mut left, mut right) = split_pair();
+    right.kb.set_usb(false);
+    run_both(&mut left, &mut right, 600);
+    assert_eq!(ask_right(&mut left, &mut right, Request::WatchKeys(true)), Response::Ok);
+    right.kb.set_key(1, true);
+    run_both(&mut left, &mut right, 50);
+    let keys: Vec<_> = from_peer(&mut left).into_iter().filter_map(|message| match message {
+        jmk_proto::DeviceMessage::Event(Event::Key { pos, pressed }) => Some((pos, pressed)),
+        _ => None,
+    }).collect();
+    assert_eq!(keys, [(4, true)]);
+}
+
+#[test]
+fn what_would_stop_the_cable_is_refused_over_it() {
+    let (mut left, mut right) = split_pair();
+    right.kb.set_usb(false);
+    run_both(&mut left, &mut right, 600);
+    let request = Request::StartProbe(pins(&[2, 3]));
+    assert_eq!(ask_right(&mut left, &mut right, request), Response::Error(Error::Unsupported));
+    assert_eq!(ask_right(&mut left, &mut right, Request::HoldLow(Some(2))), Response::Error(Error::Unsupported));
+    let request = Request::Reboot { bootloader: true };
+    assert_eq!(ask_right(&mut left, &mut right, request), Response::Error(Error::Unsupported));
+    assert!(!right.kb.in_bootloader());
+}
+
+#[test]
+fn without_the_other_half_a_request_for_it_is_refused() {
+    let (mut left, mut right) = split_pair();
+    run_both(&mut left, &mut right, 600);
+    left.kb.set_cable(false);
+    run_both(&mut left, &mut right, 600);
+    left.refused(for_peer(&Request::GetInfo), Error::NotConnected);
+    let mut single = Rig::new(Wiring::direct(&[2]));
+    single.ok(Request::SetHardware(direct(&[2])));
+    single.refused(for_peer(&Request::GetInfo), Error::Unsupported);
+}
+
+#[test]
+fn an_answer_that_never_comes_ends_in_an_error() {
+    let (mut left, mut right) = split_pair();
+    run_both(&mut left, &mut right, 600);
+    left.ok(for_peer(&Request::GetInfo));
+    // The other half goes quiet without the cable coming out.
+    for _ in 0..2000 {
+        left.run(1);
+        right.kb.take_reports();
+    }
+    let answers = from_peer(&mut left);
+    assert_eq!(answers, [jmk_proto::DeviceMessage::Response(Response::Error(Error::NotConnected))]);
 }

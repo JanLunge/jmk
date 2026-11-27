@@ -50,6 +50,8 @@ What has actually run on hardware:
 - one file holds the whole keyboard (wiring, layout, keymap, lights) to back
   it up or set up the next one
 - firmware update from the app in one click, no reset button, both halves of a split
+- the half of a split without a USB cable is set up through the other half
+  and the cable between them
 - virtual keyboards that run the real firmware logic, so you can try all of
   it without hardware
 

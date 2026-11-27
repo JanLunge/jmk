@@ -2,7 +2,7 @@ use embedded_storage::nor_flash::NorFlash;
 use heapless::Vec;
 use jmk_core::{Engine, Millis, Output};
 use jmk_proto::{
-    Contact, Error, Event, HardwareConfig, Info, LightingConfig, MatrixConfig, Mcu, Pin, Request, Response, SplitConfig, SplitStatus, SplitSync,
+    Contact, DeviceMessage, Error, Event, HardwareConfig, Info, LightingConfig, MatrixConfig, Mcu, Pin, Request, Response, ScanConfig, SplitConfig, SplitStatus, SplitSync,
     ACTIONS_PER_CHUNK, LAYOUT_KEYS_PER_CHUNK, MACRO_STEPS_PER_CHUNK, MAX_CONTACTS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, PROTOCOL_VERSION,
 };
@@ -10,6 +10,7 @@ use jmk_proto::{
 use crate::config::{Config, MacroError};
 use crate::lights::Lights;
 use crate::link::{Link, Own, Post, Remote, Split, CHUNK};
+use crate::peer::{self, Peer, Taken};
 use crate::pins::{is_usable, Pins, Pull};
 use crate::probe::Prober;
 use crate::scan::{Change, Scanner};
@@ -21,6 +22,10 @@ use crate::sync::{decide, Side, Verdict};
 const SETTLE_MS: Millis = 400;
 /// How long to wait for a piece of keymap before asking again.
 const RETRY_MS: Millis = 60;
+/// A half asked over the cable to watch keys stops when the other half has
+/// been gone this long: nobody is listening any more. Longer than a restart
+/// of the link takes after a change to the setup.
+const PEER_WATCH_MS: Millis = 1000;
 
 /// A keymap on its way from the other half.
 struct Fetch {
@@ -81,6 +86,12 @@ pub struct Device<'a, P, F> {
     contacts: Vec<Contact, MAX_CONTACTS>,
     /// Set once by a reboot request: true for the bootloader.
     reboot: Option<bool>,
+    /// Requests to and from the other half over the cable.
+    peer: Peer,
+    /// The other half passed on a request to watch keys: send it key events.
+    peer_watch: bool,
+    /// Since when the other half is not heard.
+    peer_lost: Option<Millis>,
 }
 
 impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
@@ -92,7 +103,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             config.reset();
         }
         let mut scanner = Scanner::new();
-        scanner.configure(&config.hardware, &config.more_wiring, &mut pins);
+        scanner.configure(&config.hardware, &config.more_wiring, &config.scan, &mut pins);
         let stored_digest = config.shared_digest();
         // A half first listens for the other one; see `Split::leading`.
         let leading = config.hardware.split == SplitConfig::None;
@@ -121,6 +132,9 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             reported_layers: None,
             contacts: Vec::new(),
             reboot: None,
+            peer: Peer::new(),
+            peer_watch: false,
+            peer_lost: None,
         }
     }
 
@@ -145,7 +159,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     /// `link` leads to the other half; pass `&mut ()` if there is none.
     pub fn poll(&mut self, now: Millis, out: &mut impl Output, link: &mut impl Link, mut event: impl FnMut(Event)) {
         self.now = now;
-        let Self { scanner, config, engine, pins, watch_keys, reported_layers, split, lights, leading, digest, .. } = self;
+        let Self { scanner, config, engine, pins, watch_keys, reported_layers, split, lights, leading, digest, peer_watch, .. } = self;
         let (stored_digest, force) = (self.stored_digest, self.force);
         let (host, uid) = (self.host, self.board.uid);
         lights.tick(&config.lighting, now, pins);
@@ -165,6 +179,8 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
 
                 // While the other half types, this one only reports its keys.
                 let leads = *leading;
+                let watch_peer = *peer_watch;
+                let mut for_peer: Vec<Event, 16> = Vec::new();
                 let mut key = |pos: usize, pressed: bool, own: bool| {
                     if pos >= MAX_KEYS {
                         return;
@@ -178,6 +194,9 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                     }
                     if *watch_keys && (own || leads) {
                         event(Event::Key { pos, pressed });
+                    }
+                    if watch_peer && own {
+                        let _ = for_peer.push(Event::Key { pos, pressed });
                     }
                 };
                 let is_half = hardware.split != SplitConfig::None;
@@ -249,7 +268,9 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                     }
                 }
                 if is_half {
+                    let parts = core::mem::take(&mut post.parts);
                     self.sync_keymap(now, out, link, post);
+                    self.talk_to_peer(now, out, link, parts, for_peer, &mut event);
                 }
                 return;
             }
@@ -260,6 +281,65 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 event(Event::Probe(contacts));
             }
         }
+    }
+
+    /// Serve requests from the other half and pass on what it sends back;
+    /// see [`crate::peer`].
+    fn talk_to_peer(
+        &mut self,
+        now: Millis,
+        out: &mut impl Output,
+        link: &mut impl Link,
+        parts: Vec<peer::Part, 8>,
+        events: Vec<Event, 16>,
+        event: &mut impl FnMut(Event),
+    ) {
+        let connected = self.split.connected(now);
+        if connected {
+            self.peer_lost = None;
+        } else if now - *self.peer_lost.get_or_insert(now) >= PEER_WATCH_MS {
+            self.peer_watch = false;
+            self.peer.forget_events();
+        }
+        for part in &parts {
+            match self.peer.take(now, part) {
+                Taken::Nothing => {}
+                Taken::Request(id, bytes) => {
+                    let answer = self.serve(&bytes, out);
+                    self.peer.answer(now, id, answer);
+                }
+                Taken::Message(bytes) => event(Event::Peer(bytes)),
+            }
+        }
+        if self.peer.given_up(now, connected) {
+            event(Event::Peer(encode(&DeviceMessage::Response(Response::Error(Error::NotConnected)))));
+        }
+        if self.peer_watch {
+            for each in events {
+                self.peer.event(&encode(&DeviceMessage::Event(each)));
+            }
+        }
+        self.peer.send(now, &mut self.split, link);
+    }
+
+    /// Handle a request that came over the cable; returns the answer as it
+    /// would go over USB.
+    fn serve(&mut self, bytes: &[u8], out: &mut impl Output) -> peer::Message {
+        let response = match postcard::from_bytes::<Request>(bytes) {
+            Err(_) => Response::Error(Error::Malformed),
+            // Watching for the other half, not for a computer on this one.
+            Ok(Request::WatchKeys(on)) => {
+                self.peer_watch = on;
+                Response::Ok
+            }
+            // Both would stop this half talking over the cable, and the
+            // bootloader waits for a USB cable this half may not have.
+            Ok(Request::StartProbe(_) | Request::HoldLow(Some(_)) | Request::Reboot { bootloader: true } | Request::Peer(_)) => {
+                Response::Error(Error::Unsupported)
+            }
+            Ok(request) => self.handle(request, out),
+        };
+        encode(&DeviceMessage::Response(response))
     }
 
     /// Bring the two halves' keymaps together; see [`crate::sync`].
@@ -408,6 +488,16 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 uid: self.board.uid,
             })),
             Request::GetHardware => Ok(Response::Hardware(self.config.hardware.clone())),
+            Request::Peer(bytes) => {
+                if self.config.hardware.split == SplitConfig::None {
+                    return Err(Error::Unsupported);
+                }
+                if !self.split.connected(self.now) {
+                    return Err(Error::NotConnected);
+                }
+                self.peer.ask(self.now, bytes);
+                Ok(Response::Ok)
+            }
             Request::SetHardware(hardware) => {
                 validate(&hardware, &self.config.more_wiring, &self.config.lighting, &self.pins)?;
                 self.stop_probe();
@@ -425,6 +515,24 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 self.stop_probe();
                 self.release_matrix_pins();
                 self.config.more_wiring = more;
+                self.restart_scanning(out);
+                Ok(Response::Ok)
+            }
+            Request::GetScan => Ok(Response::Scan(self.config.scan.clone())),
+            Request::SetScan(scan) => {
+                let ascending = scan.inverted.windows(2).all(|pair| pair[0] < pair[1]);
+                let fits = scan.inverted.last().is_none_or(|pos| (*pos as usize) < MAX_KEYS);
+                if !ascending || !fits || scan.settle_us > ScanConfig::MAX_SETTLE_US {
+                    return Err(Error::OutOfRange);
+                }
+                if scan == self.config.scan {
+                    return Ok(Response::Ok);
+                }
+                self.stop_probe();
+                self.release_matrix_pins();
+                self.config.scan = scan;
+                // Keys are read afresh, so start over with the other half
+                // too: it must not keep keys this half reported held.
                 self.restart_scanning(out);
                 Ok(Response::Ok)
             }
@@ -684,7 +792,17 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         self.compared = None;
         self.fetch = None;
         self.sync = SplitSync::Unknown;
-        self.scanner.configure(&self.config.hardware, &self.config.more_wiring, &mut self.pins);
+        self.scanner.configure(&self.config.hardware, &self.config.more_wiring, &self.config.scan, &mut self.pins);
+    }
+}
+
+/// A message as it goes over USB, for the other half. One too long for that
+/// becomes an error.
+fn encode(message: &DeviceMessage) -> peer::Message {
+    let mut buf = [0u8; jmk_proto::MAX_PEER_MESSAGE];
+    match postcard::to_slice(message, &mut buf) {
+        Ok(bytes) => bytes.iter().copied().collect(),
+        Err(_) => encode(&DeviceMessage::Response(Response::Error(Error::Full))),
     }
 }
 

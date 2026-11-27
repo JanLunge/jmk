@@ -130,6 +130,7 @@ fn encode(config: &Config, buf: &mut [u8]) -> Option<usize> {
     put(buf, &mut used, &config.macro_names)?;
     put(buf, &mut used, &config.letter_rows)?;
     put(buf, &mut used, &config.more_wiring)?;
+    put(buf, &mut used, &config.scan)?;
     Some(used)
 }
 
@@ -166,6 +167,7 @@ fn decode(mut bytes: &[u8], config: &mut Config) -> Option<()> {
     }
     config.letter_rows = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
     config.more_wiring = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
+    config.scan = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
     config.hardware = hardware;
     config.layer_count = layer_count;
     config.profiles = profiles;

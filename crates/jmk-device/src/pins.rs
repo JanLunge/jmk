@@ -15,6 +15,9 @@ pub trait Pins {
     fn usable(&self) -> u64;
     fn input(&mut self, pin: Pin, pull: Pull);
     fn drive_low(&mut self, pin: Pin);
+    /// Only for matrix lines the scan configuration asks to hold high; see
+    /// [`jmk_proto::ScanConfig::drive_idle_high`].
+    fn drive_high(&mut self, pin: Pin);
     /// True if the pin reads high.
     fn read(&mut self, pin: Pin) -> bool;
     /// Whether this chip can run a split link as described. Called before a
@@ -36,6 +39,13 @@ pub trait Pins {
     fn reclaim(&mut self) {}
     /// Wait for levels to settle after a pin changed (a few microseconds).
     fn settle(&mut self);
+    /// Wait about this many microseconds. Ports with a timer should say so;
+    /// this stand-in counts in [`settle`](Self::settle)s, assumed to be 30 µs.
+    fn wait_us(&mut self, us: u16) {
+        for _ in 0..us.div_ceil(30) {
+            self.settle();
+        }
+    }
 }
 
 pub(crate) fn is_usable(pins: &impl Pins, pin: Pin) -> bool {

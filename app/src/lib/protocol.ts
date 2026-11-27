@@ -61,11 +61,28 @@ export interface HardwareConfig {
    * the rest (see client.ts), so firmware from before them still reads.
    */
   more?: MatrixConfig[]
+  /** How the switches are read; kept apart by the keyboard like `more`. Missing means the usual. */
+  scan?: ScanConfig
   reserved_pins: Pin[]
   debounce_ms: number
   encoders: EncoderConfig[]
   split: SplitConfig
 }
+
+/**
+ * `inverted`: this board's own switch positions (from 0 on each half) that
+ * read closed at rest and open while pressed, ascending. `settle_us`: wait
+ * after each matrix line changes, 0 for the usual. `drive_idle_high`: hold
+ * the lines not being read high, for rows that switch power to sensors.
+ */
+export interface ScanConfig {
+  inverted: number[]
+  settle_us: number
+  drive_idle_high: boolean
+}
+export const NO_SCAN: ScanConfig = { inverted: [], settle_us: 0, drive_idle_high: false }
+/** The longest settle time the firmware accepts. */
+export const MAX_SETTLE_US = 200
 
 export type ColorOrder = 'Grb' | 'Rgb'
 export type Effect = 'Off' | 'Solid' | 'Breathing' | 'Rainbow' | 'Reactive'
@@ -191,6 +208,10 @@ export type Request =
   | { SetMoreWiring: MatrixConfig[] }
   | { ResolveSplit: { keep_this: boolean } }
   | { SplitAgreed: { digest: number; revision: number } }
+  | 'GetScan'
+  | { SetScan: ScanConfig }
+  /** A request for the other half of a split, in the bytes it takes over USB; its answer comes as a `Peer` event. */
+  | { Peer: number[] }
 
 export type DeviceError =
   | 'Malformed'
@@ -202,6 +223,7 @@ export type DeviceError =
   | 'Full'
   | 'Unsupported'
   | 'Storage'
+  | 'NotConnected'
 
 export type Response =
   | 'Ok'
@@ -221,6 +243,7 @@ export type Response =
   | { MacroName: string }
   | { LetterRows: number[][] }
   | { MoreWiring: MatrixConfig[] }
+  | { Scan: ScanConfig }
 
 export type DeviceEvent =
   | { Key: { pos: number; pressed: boolean } }
@@ -229,12 +252,20 @@ export type DeviceEvent =
   | { Resolved: { pos: number; layer: number } }
   /** Bitmask of the layers now active. */
   | { Layers: number }
+  /** A message from the other half of a split, in the bytes it would send over USB. */
+  | { Peer: number[] }
 export type DeviceMessage = { Response: Response } | { Event: DeviceEvent }
 
 /** What a virtual keyboard's computer would receive. */
 export type HostEvent = { Keyboard: { mods: number; keys: number[] } } | { Consumer: number }
 
-export type Wire = { Ground: Pin } | { Supply: Pin } | { Plain: [Pin, Pin] } | { Diode: { anode: Pin; cathode: Pin } }
+/** `Sensor`: a light-beam key powered unless `power` is driven high, its comparator driving `out` low while closed. */
+export type Wire =
+  | { Ground: Pin }
+  | { Supply: Pin }
+  | { Plain: [Pin, Pin] }
+  | { Diode: { anode: Pin; cathode: Pin } }
+  | { Sensor: { power: Pin; out: Pin } }
 export interface Wiring {
   switches: Wire[]
   encoders: [Pin, Pin][]
@@ -264,6 +295,7 @@ export function describeError(error: DeviceError): string {
       Full: 'The keyboard has no room left for this.',
       Unsupported: 'This chip cannot do that with these pins.',
       Storage: 'Saving to the keyboard failed.',
+      NotConnected: 'The other half does not answer over the cable.',
     }[error]
   }
   if ('UnusablePin' in error) return `Pin ${error.UnusablePin} cannot be used on this chip.`

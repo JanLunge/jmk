@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import KeyboardView from '../components/KeyboardView.vue'
 import TryBox from '../components/TryBox.vue'
-import { attempt, cabled, pairByCable, partnerOf, reconcile, resolveConflict, saveAll, sideOf, toast } from '../lib/app'
+import { attempt, cabled, openFarHalf, pairByCable, partnerOf, reconcile, resolveConflict, saveAll, sideOf, toast } from '../lib/app'
 import { carriedVersion, updateDue, updateFirmware, updating } from '../lib/firmware'
 import { historyOf, redo, startHistory, undo } from '../lib/history'
 import { legend } from '../lib/keycodes'
@@ -144,6 +144,8 @@ async function checkSplit() {
     const status = await props.session.client.splitStatus()
     props.session.split = status
     pairByCable(props.session)
+    // A half without USB of its own opens through this one.
+    openFarHalf(props.session)
     if (props.session.unsaved || saving.value || shownDigest === undefined) shownDigest = status.digest
     else if (status.digest !== shownDigest) {
       // This half fetched the other half's keymap over the cable.

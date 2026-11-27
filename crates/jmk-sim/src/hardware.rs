@@ -16,6 +16,11 @@ pub enum Wire {
     Plain(Pin, Pin),
     /// Conducts from anode to cathode.
     Diode { anode: Pin, cathode: Pin },
+    /// A light-beam key like the Svalboard's: its sensor is powered through
+    /// a transistor that is on unless `power` is driven high (a pull-up is
+    /// too weak to switch it off), and while powered a comparator drives
+    /// `out` low when the key is closed and high when it is open.
+    Sensor { power: Pin, out: Pin },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -23,6 +28,7 @@ enum PinMode {
     Untouched,
     Input(Pull),
     Low,
+    High,
 }
 
 /// The pins of a simulated chip and what is wired to them. Clones share
@@ -112,8 +118,27 @@ impl Pins for SimPins {
         self.0.borrow_mut().modes[pin as usize] = PinMode::Low;
     }
 
+    fn drive_high(&mut self, pin: Pin) {
+        self.0.borrow_mut().modes[pin as usize] = PinMode::High;
+    }
+
     fn read(&mut self, pin: Pin) -> bool {
         let state = self.0.borrow();
+        if state.modes[pin as usize] == PinMode::High {
+            return true;
+        }
+        // Comparators of powered sensors drive their output either way.
+        let powered = |power: Pin| state.modes[power as usize] != PinMode::High;
+        let sensors = || state.switches.iter().filter_map(|(w, closed)| match w {
+            Wire::Sensor { power, out } if *out == pin && powered(*power) => Some(*closed),
+            _ => None,
+        });
+        if sensors().any(|closed| closed) {
+            return false;
+        }
+        if sensors().next().is_some() {
+            return true;
+        }
         let closed = || state.switches.iter().filter(|s| s.1).map(|s| s.0);
         let mut low = [false; 64];
         for (pin, mode) in state.modes.iter().enumerate() {

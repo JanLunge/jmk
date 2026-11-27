@@ -440,7 +440,7 @@ export async function addKey(session: Session, plan: Extract<AddPlan, { ok: true
   })
   const combos = session.combos.map((combo) => ({ ...combo, keys: combo.keys.map(plan.move) }))
   try {
-    if (plan.rewired) await client.setHardware(plan.hardware)
+    if (plan.rewired || plan.hardware !== session.hardware) await client.setHardware(plan.hardware)
     await client.setLayout(layout)
     for (const [index, layer] of layers.entries()) await client.setActions(index, 0, layer)
     if (plan.rewired && combos.length) await client.setCombos(combos)
