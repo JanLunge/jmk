@@ -8,7 +8,7 @@ import { attempt } from '../lib/app'
 import { describeAction, legend } from '../lib/keycodes'
 import type { Action, Combo, HoldTapFlavor, HoldTapProfile } from '../lib/protocol'
 import { LIMITS } from '../lib/protocol'
-import { knobPositions, setCombos, setProfile, type Session } from '../lib/session'
+import { canTuneCombos, knobPositions, setCombos, setProfile, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 type Section = 'hold-tap' | 'combos' | 'macros'
@@ -34,15 +34,40 @@ async function addCombo() {
 }
 
 function patchCombo(change: Partial<Combo>) {
-  const combos = props.session.combos.map((c, i) => (i === comboIndex.value ? { ...c, ...change } : c))
+  const combos = props.session.combos.map((c, i) => {
+    if (i !== comboIndex.value) return c
+    // What is not set is left out, so a plain combo reads as it always did.
+    const { layers, sequence, ...rest } = { ...c, ...change }
+    return { ...rest, ...(layers ? { layers } : {}), ...(sequence ? { sequence } : {}) }
+  })
   return saveCombos(combos)
 }
+
+/** Sequences, chosen layers and more than four keys need firmware that knows them. */
+const tunable = computed(() => canTuneCombos(props.session))
+const keyLimit = computed(() => (tunable.value ? LIMITS.comboKeys : LIMITS.comboKeysBefore))
 
 function toggleComboKey(pos: number) {
   if (!combo.value) return
   const keys = combo.value.keys.includes(pos) ? combo.value.keys.filter((k) => k !== pos) : [...combo.value.keys, pos]
-  if (keys.length <= LIMITS.comboKeys) patchCombo({ keys })
+  if (keys.length <= keyLimit.value) patchCombo({ keys })
 }
+
+// A chord is quick; the keys of a sequence each get time of their own.
+const CHORD_MS = { min: 20, max: 150, step: 5, start: 50 }
+const SEQUENCE_MS = { min: 100, max: 2000, step: 50, start: 500 }
+const timing = computed(() => (combo.value?.sequence ? SEQUENCE_MS : CHORD_MS))
+
+function setSequence(sequence: boolean) {
+  if (!combo.value || !!combo.value.sequence === sequence) return
+  const range = sequence ? SEQUENCE_MS : CHORD_MS
+  const fits = combo.value.timeout_ms >= range.min && combo.value.timeout_ms <= range.max
+  patchCombo({ sequence, timeout_ms: fits ? combo.value.timeout_ms : range.start })
+}
+
+const onLayer = (layer: number) => !!((combo.value?.layers ?? 0) & (1 << layer))
+const toggleComboLayer = (layer: number) => patchCombo({ layers: (combo.value?.layers ?? 0) ^ (1 << layer) })
+const comboName = (c: Combo) => c.keys.map((k) => baseLegend(k)?.main || k).join(c.sequence ? ' → ' : ' + ')
 
 async function removeCombo() {
   await saveCombos(props.session.combos.filter((_, i) => i !== comboIndex.value))
@@ -98,21 +123,42 @@ const macroIndex = ref(0)
         <div class="col scroll">
           <div class="intro">
             <h2>Combos</h2>
-            <p class="muted">Press two to four keys together to get something else, for example J and K for Escape.</p>
+            <p class="muted">Press keys together to get something else, for example J and K for Escape. A combo can also be keys pressed one after the other.</p>
           </div>
           <div class="row wrap">
             <button v-for="(c, index) in session.combos" :key="index" class="btn small" :class="{ primary: comboIndex === index }" @click="comboIndex = index">
-              {{ c.keys.length ? c.keys.map((k) => baseLegend(k)?.main || k).join(' + ') : 'new combo' }}
+              {{ c.keys.length ? comboName(c) : 'new combo' }}
             </button>
             <button class="btn small" :disabled="session.combos.length >= LIMITS.combos" data-test="add-combo" @click="addCombo">+ combo</button>
           </div>
           <template v-if="combo">
-            <p class="muted small">Click the keys that trigger it ({{ combo.keys.length }} of up to {{ LIMITS.comboKeys }}).</p>
+            <div v-if="tunable" class="row wrap">
+              <span class="muted small">Pressed</span>
+              <button class="btn small" :class="{ primary: !combo.sequence }" data-test="combo-together" @click="setSequence(false)">together</button>
+              <button class="btn small" :class="{ primary: combo.sequence }" data-test="combo-sequence" @click="setSequence(true)">one after the other</button>
+            </div>
+            <p v-else class="note">Update the firmware to make a combo of keys pressed one after the other, of more than four keys, or for chosen layers only.</p>
+            <p class="muted small">
+              {{ combo.sequence ? 'Click the keys in the order they are pressed' : 'Click the keys that trigger it' }}
+              ({{ combo.keys.length }} of up to {{ keyLimit }}).
+            </p>
             <KeyboardView :layout="session.layout" :legend="baseLegend" :selected="combo.keys" :pressed="session.pressed" :knobs="knobPositions(session)" interactive data-test="combo-board" @down="toggleComboKey" />
             <p v-if="combo.keys.length < 2" class="note warn">Pick at least two keys, otherwise the combo replaces that key.</p>
-            <label class="field">All keys must go down within {{ combo.timeout_ms }} ms
-              <input type="range" min="20" max="150" step="5" :value="combo.timeout_ms" @change="patchCombo({ timeout_ms: Number(($event.target as HTMLInputElement).value) })" />
+            <p v-if="combo.sequence && combo.keys.length" class="small" data-test="combo-order">Order: {{ comboName(combo) }}</p>
+            <p v-if="combo.sequence" class="note">
+              The first key waits for the rest: pressed on its own, it types only once the time below has passed or another key follows.
+              Start a sequence with a key you do not type with.
+            </p>
+            <label class="field">{{ combo.sequence ? 'Each key must follow the one before within' : 'All keys must go down within' }} {{ combo.timeout_ms }} ms
+              <input type="range" :min="timing.min" :max="timing.max" :step="timing.step" :value="combo.timeout_ms" data-test="combo-time" @change="patchCombo({ timeout_ms: Number(($event.target as HTMLInputElement).value) })" />
             </label>
+            <div v-if="tunable && session.layers.length > 1" class="row wrap">
+              <span class="muted small">Works on</span>
+              <button class="btn small" :class="{ primary: !combo.layers }" data-test="combo-all-layers" @click="patchCombo({ layers: 0 })">every layer</button>
+              <button v-for="(_, layer) in session.layers" :key="layer" class="btn small" :class="{ primary: onLayer(layer) }" :data-test="'combo-layer-' + layer" @click="toggleComboLayer(layer)">
+                Layer {{ layer }}
+              </button>
+            </div>
             <div class="row">
               <span>Result: <strong data-test="combo-result">{{ describeAction(combo.action) }}</strong></span>
               <span class="grow" />

@@ -12,7 +12,7 @@ import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../.
 import { keymapPoster } from '../../src/lib/poster'
 import { layerHex } from '../../src/lib/layers'
 import { gridLayout } from '../../src/lib/layout'
-import { addKey, alignHalves, knobPositions, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { addKey, alignHalves, canTuneCombos, knobPositions, setCombos, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
 import { starterAction } from './keys'
 import { advanceVirtualTime, VirtualTransport } from '../../src/lib/transport'
 import { loadBridge } from '../../src/lib/wasm'
@@ -384,7 +384,10 @@ describe('lights and pictures', () => {
       layers: [layout.map((_, i) => ({ Basic: i === 0 ? { MomentaryLayer: 1 } : { Key: 0x04 + i } })), layout.map(() => 'Transparent' as const)],
       layerColors: [0, 4],
       knobs: [],
-      combos: [{ keys: [1, 2], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 }],
+      combos: [
+        { keys: [1, 2], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 },
+        { keys: [3, 4], action: { Basic: { Key: 0x2b } }, timeout_ms: 500, sequence: true, layers: 0b10 },
+      ],
     }
     for (const mode of ['grid', 'stacked'] as const) {
       const poster = keymapPoster(source, { mode, dark: false })
@@ -392,7 +395,25 @@ describe('lights and pictures', () => {
       expect(poster.svg).toContain('Layer 1')
       expect(poster.svg).toContain('#ef4444')
       expect(poster.svg).toContain('B + C')
+      expect(poster.svg).toContain('D, then E  →  Tab  (layer 1)')
       expect(poster.width).toBeGreaterThan(100)
     }
+  })
+
+  it('a combo keeps its layers and whether it is a sequence', async () => {
+    const { session } = await open('macropad')
+    expect(canTuneCombos(session)).toBe(true)
+    const combos = [
+      { keys: [0, 1, 2, 3, 4, 5], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 },
+      { keys: [2, 1], action: { Basic: { Key: 0x2b } }, timeout_ms: 500, layers: 0b10, sequence: true },
+    ]
+    await during(setCombos(session, combos))
+    // Read back exactly as set: nothing added to the plain one.
+    expect(await during(session.client.combos())).toEqual(combos)
+    // Taking the first away must not leave its options on the second.
+    await during(setCombos(session, [combos[1]]))
+    expect(await during(session.client.combos())).toEqual([combos[1]])
+    await during(setCombos(session, [combos[0]]))
+    expect(await during(session.client.combos())).toEqual([combos[0]])
   })
 })

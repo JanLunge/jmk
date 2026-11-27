@@ -41,7 +41,7 @@ What has actually run on hardware:
   without diodes, a duplex matrix, or a mix of them on one board
 - rotary knobs, split keyboards over a serial cable, RGB underglow and
   per-key lights
-- layers, hold-tap, combos, one-shot modifiers, macros you can record
+- layers, hold-tap, combos (keys together or one after the other, per layer), one-shot modifiers, macros you can record
 - keymap editor: click or drag keys, or just type on your normal keyboard to
   fill in key after key
 - puts QWERTY, Colemak, Colemak-DH or Dvorak on the letter keys in one go

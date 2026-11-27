@@ -75,7 +75,7 @@ impl Default for HoldTapProfile {
     }
 }
 
-pub const MAX_COMBO_KEYS: usize = 4;
+pub const MAX_COMBO_KEYS: usize = 8;
 
 /// Keys that trigger an action when pressed together within `timeout_ms`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +83,20 @@ pub struct Combo {
     pub keys: Vec<u16, MAX_COMBO_KEYS>,
     pub action: Action,
     pub timeout_ms: u16,
+}
+
+/// What can be set for a combo besides its keys and action. Kept apart from
+/// [`Combo`], whose stored form older firmware and saved setups share.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComboOptions {
+    /// The layers the combo works on, one bit each: it does when the highest
+    /// active layer is among them. 0 means every layer.
+    pub layers: u32,
+    /// The keys are pressed one after the other in the order given, each
+    /// within `timeout_ms` of the one before, and may be let go in between.
+    /// Otherwise they are pressed together, in any order, within
+    /// `timeout_ms` of the first.
+    pub sequence: bool,
 }
 
 /// One step of a macro. Steps run a couple of milliseconds apart.
