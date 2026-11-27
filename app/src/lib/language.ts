@@ -6,6 +6,7 @@
 // and which keys a macro uses to type a text.
 
 import { ref, watch } from 'vue'
+import { LAYOUTS, type Layout } from './layouts'
 
 /** The keys whose character depends on the language, row by row as they sit on an ISO keyboard. */
 // prettier-ignore
@@ -16,64 +17,14 @@ const ORDER = [
   0x64, 0x1d, 0x1b, 0x06, 0x19, 0x05, 0x11, 0x10, 0x36, 0x37, 0x38,
 ]
 
-export interface Language {
-  id: string
-  name: string
-  /** An ISO keyboard, with one more key next to the left Shift. */
-  iso: boolean
-  /** What each key of `ORDER` types alone and with Shift. A space stands for nothing. */
-  plain: string
-  shifted: string
-  /** Characters that wait for the next key (accents), so a macro cannot type them in one go. */
-  dead: string
-}
+export type Language = Layout
 
-const rows = (...parts: string[]) => parts.join('')
-
-// Windows and Linux layouts. macOS differs in a few symbols, and on Apple's
-// own ISO keyboards the keys left of 1 and left of Z are swapped.
-export const LANGUAGES: Language[] = [
-  {
-    id: 'us', name: 'English (US)', iso: false, dead: '',
-    plain: rows('`1234567890-=', 'qwertyuiop[]', "asdfghjkl;'\\", '\\zxcvbnm,./'),
-    shifted: rows('~!@#$%^&*()_+', 'QWERTYUIOP{}', 'ASDFGHJKL:"|', '|ZXCVBNM<>?'),
-  },
-  {
-    id: 'uk', name: 'English (UK)', iso: true, dead: '',
-    plain: rows('`1234567890-=', 'qwertyuiop[]', "asdfghjkl;'#", '\\zxcvbnm,./'),
-    shifted: rows('¬!"£$%^&*()_+', 'QWERTYUIOP{}', 'ASDFGHJKL:@~', '|ZXCVBNM<>?'),
-  },
-  {
-    id: 'sv', name: 'Swedish / Finnish', iso: true, dead: '´`¨^',
-    plain: rows('§1234567890+´', 'qwertyuiopå¨', "asdfghjklöä'", '<zxcvbnm,.-'),
-    shifted: rows('½!"#¤%&/()=?`', 'QWERTYUIOPÅ^', 'ASDFGHJKLÖÄ*', '>ZXCVBNM;:_'),
-  },
-  {
-    id: 'da', name: 'Danish', iso: true, dead: '´`¨^',
-    plain: rows('½1234567890+´', 'qwertyuiopå¨', "asdfghjklæø'", '<zxcvbnm,.-'),
-    shifted: rows('§!"#¤%&/()=?`', 'QWERTYUIOPÅ^', 'ASDFGHJKLÆØ*', '>ZXCVBNM;:_'),
-  },
-  {
-    id: 'no', name: 'Norwegian', iso: true, dead: '`¨^',
-    plain: rows('|1234567890+\\', 'qwertyuiopå¨', "asdfghjkløæ'", '<zxcvbnm,.-'),
-    shifted: rows('§!"#¤%&/()=?`', 'QWERTYUIOPÅ^', 'ASDFGHJKLØÆ*', '>ZXCVBNM;:_'),
-  },
-  {
-    id: 'de', name: 'German', iso: true, dead: '^´`',
-    plain: rows('^1234567890ß´', 'qwertzuiopü+', 'asdfghjklöä#', '<yxcvbnm,.-'),
-    shifted: rows('°!"§$%&/()=?`', 'QWERTZUIOPÜ*', "ASDFGHJKLÖÄ'", '>YXCVBNM;:_'),
-  },
-  {
-    id: 'fr', name: 'French', iso: true, dead: '^¨',
-    plain: rows('²&é"\'(-è_çà)=', 'azertyuiop^$', 'qsdfghjklmù*', '<wxcvbn,;:!'),
-    shifted: rows(' 1234567890°+', 'AZERTYUIOP¨£', 'QSDFGHJKLM%µ', '>WXCVBN?./§'),
-  },
-  {
-    id: 'es', name: 'Spanish', iso: true, dead: '`^´¨',
-    plain: rows("º1234567890'¡", 'qwertyuiop`+', 'asdfghjklñ´ç', '<zxcvbnm,.-'),
-    shifted: rows('ª!"·$%&/()=?¿', 'QWERTYUIOP^*', 'ASDFGHJKLÑ¨Ç', '>ZXCVBNM;:_'),
-  },
-]
+/**
+ * Every language on both kinds of computer. The tables come from the keyboard
+ * charts of Unicode CLDR (see scripts/layouts.mjs): Windows and Linux agree
+ * with each other, and macOS puts some characters elsewhere.
+ */
+export const LANGUAGES: Language[] = LAYOUTS
 
 const KEY = 'jmk.language'
 function kept(): string {
@@ -100,19 +51,65 @@ export const language = (): Language => LANGUAGES.find((each) => each.id === lan
 /** The ISO key next to Enter is one key to the computer, whichever of its two codes the keyboard sends. */
 const position = (usage: number) => ORDER.indexOf(usage === 0x32 ? 0x31 : usage)
 
-/** What a key types in a language, alone and with Shift; undefined for keys that are the same everywhere. */
-export function charsOf(usage: number, lang: Language = language()): { plain: string; shifted: string } | undefined {
+const SHIFT_BIT = 0x02
+/** AltGr is the right Alt key; on a Mac it is Option. */
+export const ALTGR_BIT = 0x40
+
+const LAYERS = [
+  ['plain', 0],
+  ['shifted', SHIFT_BIT],
+  ['altgr', ALTGR_BIT],
+  ['altshift', ALTGR_BIT | SHIFT_BIT],
+] as const
+
+/** What the modifiers of a layer are called on the chosen kind of computer. */
+export function heldName(mods: number, lang: Language = language()): string | undefined {
+  const alt = lang.platform === 'mac' ? 'Option' : 'AltGr'
+  return mods === ALTGR_BIT ? alt : mods === (ALTGR_BIT | SHIFT_BIT) ? `Shift+${alt}` : undefined
+}
+
+export interface Chars {
+  plain: string
+  shifted: string
+  altgr: string
+  altshift: string
+}
+
+/** What a key types in a language on each layer; undefined for keys that are the same everywhere. */
+export function charsOf(usage: number, lang: Language = language()): Chars | undefined {
   const at = position(usage)
   if (at < 0 || (usage === 0x32 && !lang.iso)) return undefined
   const clean = (char: string) => (char === ' ' ? '' : char)
-  return { plain: clean(lang.plain[at]), shifted: clean(lang.shifted[at]) }
+  return { plain: clean(lang.plain[at]), shifted: clean(lang.shifted[at]), altgr: clean(lang.altgr[at]), altshift: clean(lang.altshift[at]) }
 }
 
-/** The key, and whether Shift is needed, that types a character in the chosen language. */
-export function keyFor(char: string, lang: Language = language()): { usage: number; shift: boolean } | undefined {
+/** The key, and the modifiers it needs, that types a character in the chosen language. */
+export function keyFor(char: string, lang: Language = language()): { usage: number; mods: number } | undefined {
   if (char === ' ' || lang.dead.includes(char)) return undefined
-  const plain = lang.plain.indexOf(char)
-  if (plain >= 0) return { usage: ORDER[plain], shift: false }
-  const shifted = lang.shifted.indexOf(char)
-  return shifted >= 0 ? { usage: ORDER[shifted], shift: true } : undefined
+  for (const [layer, mods] of LAYERS) {
+    const at = lang[layer].indexOf(char)
+    if (at >= 0) return { usage: ORDER[at], mods }
+  }
+  return undefined
+}
+
+export interface Symbol {
+  char: string
+  usage: number
+  mods: number
+}
+
+/**
+ * Every character of the chosen language that needs Shift, AltGr or both and
+ * is not a letter the keys already show: the ones nobody finds by looking.
+ */
+export function symbols(lang: Language = language()): Symbol[] {
+  const all: Symbol[] = []
+  for (const [layer, mods] of LAYERS.slice(1)) {
+    ;[...lang[layer]].forEach((char, at) => {
+      const capital = char.toLowerCase() !== char && lang.plain[at] === char.toLowerCase()
+      if (char !== ' ' && !capital && !lang.plain.includes(char) && !all.some((each) => each.char === char)) all.push({ char, usage: ORDER[at], mods })
+    })
+  }
+  return all
 }

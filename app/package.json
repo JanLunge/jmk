@@ -18,6 +18,7 @@
     "prebuild": "npm run wasm",
     "pretest": "npm run wasm",
     "pree2e": "npm run build",
+    "layouts": "node scripts/layouts.mjs",
     "firmware": "mkdir -p firmware && cp ../target/jmk-*.uf2 firmware/",
     "pack": "electron-builder --publish never"
   },
