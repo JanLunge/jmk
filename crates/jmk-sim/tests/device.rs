@@ -285,6 +285,69 @@ fn one_board_mixes_a_matrix_with_keys_on_their_own_pins() {
 }
 
 #[test]
+fn a_switch_without_a_diode_in_a_duplex_matrix_is_one_key() {
+    // The first crossing holds one switch without a diode instead of two with.
+    let mut wires = duplex_wires();
+    wires[0] = Wire::Plain(2, 4);
+    wires.remove(4);
+    let mut rig = Rig::wires(&wires);
+    rig.ok(Request::SetHardware(matrix_2x2(DiodeDirection::Both)));
+    rig.set_keys(0, &[kc::A, kc::B, kc::C, kc::D, kc::E, kc::F, 0x0a, 0x0b]);
+    // Read in both directions it closes both positions of its crossing.
+    rig.kb.set_key(0, true);
+    rig.run(3);
+    assert_eq!(rig.out(), ["00:04", "00:04,08"]);
+    rig.kb.set_key(0, false);
+    rig.run(20);
+    rig.out();
+
+    rig.refused(Request::SetDoubles([8].into_iter().collect()), Error::OutOfRange);
+    rig.ok(Request::SetDoubles([4].into_iter().collect()));
+    rig.kb.set_key(0, true);
+    rig.run(3);
+    assert_eq!(rig.out(), ["00:04"]);
+    // The second switch of another crossing still reads.
+    rig.kb.set_key(4, true);
+    rig.run(3);
+    assert_eq!(rig.out(), ["00:04,09"]);
+    for key in [0, 4] {
+        rig.kb.set_key(key, false);
+    }
+    rig.run(20);
+    rig.out();
+
+    // It is kept through a restart, and goes with the wiring it was counted in.
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetDoubles), Response::Doubles([4].into_iter().collect()));
+    rig.kb.set_key(0, true);
+    rig.run(3);
+    assert_eq!(rig.out(), ["00:04"]);
+    rig.ok(Request::SetHardware(matrix_2x2(DiodeDirection::Both)));
+    assert_eq!(rig.kb.request(Request::GetDoubles), Response::Doubles(Default::default()));
+}
+
+#[test]
+fn a_board_reads_a_diode_matrix_and_lone_switches_between_pins_of_their_own() {
+    // A 2x2 matrix with diodes, and six switches without, each between two pins of its own.
+    let lone: Vec<(Pin, Pin)> = (0..6).map(|n| (6 + 2 * n, 7 + 2 * n)).collect();
+    let mut wiring = wired_2x2();
+    wiring.switches.extend(lone.iter().map(|(a, b)| Wire::Plain(*a, *b)));
+    let mut rig = Rig::new(wiring);
+    rig.ok(Request::SetHardware(matrix_2x2(DiodeDirection::Col2Row)));
+    let groups = lone.iter().map(|(a, b)| MatrixConfig::Matrix { rows: pins(&[*a]), cols: pins(&[*b]), diodes: DiodeDirection::Col2Row });
+    rig.ok(Request::SetMoreWiring(groups.collect()));
+    for pos in 0..10u16 {
+        rig.ok(Request::SetActions { layer: 0, pos, actions: [Action::key(kc::A + pos as u8)].into_iter().collect() });
+    }
+    for (key, report) in [(3, "00:07"), (4, "00:07,08"), (9, "00:07,08,0d")] {
+        rig.kb.set_key(key, true);
+        rig.run(3);
+        assert_eq!(rig.out(), [report]);
+    }
+}
+
+#[test]
 fn watch_keys_reports_positions() {
     let mut rig = Rig::new(wired_2x2());
     rig.ok(Request::SetHardware(matrix_2x2(DiodeDirection::Col2Row)));
@@ -374,6 +437,24 @@ fn probe_finds_direct_and_diodeless_switches() {
         Contact::Link { driven: 11, sensed: 10 },
     ];
     assert_eq!(rig.events(), [Event::Probe(expected.into_iter().collect())]);
+}
+
+#[test]
+fn a_switch_without_a_diode_never_shows_one_way_only() {
+    // Whenever in a pass over the pins the switch closes.
+    for delay in 0..20 {
+        let mut rig = Rig::wires(&[Wire::Plain(10, 14)]);
+        rig.ok(Request::StartProbe(pins(&[9, 10, 11, 12, 13, 14, 15])));
+        rig.run(PASS + delay);
+        rig.kb.set_key(0, true);
+        rig.run(PASS);
+        let both = [Contact::Link { driven: 10, sensed: 14 }, Contact::Link { driven: 14, sensed: 10 }];
+        for event in rig.events() {
+            let Event::Probe(contacts) = event else { panic!("unexpected {event:?}") };
+            assert_eq!(contacts.len(), 2, "after {delay} ms: {contacts:?}");
+            assert!(both.iter().all(|link| contacts.contains(link)));
+        }
+    }
 }
 
 #[test]

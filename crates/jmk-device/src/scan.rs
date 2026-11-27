@@ -25,6 +25,8 @@ pub(crate) struct Scanner {
     lockout: [u8; MAX_KEYS],
     /// Scans in a row a held key has read open.
     open: [u8; MAX_KEYS],
+    /// Positions that read a switch a second time and are never reported.
+    skip: [bool; MAX_KEYS],
     encoders: [Encoder; MAX_ENCODERS],
 }
 
@@ -34,13 +36,19 @@ impl Scanner {
             pressed: [false; MAX_KEYS],
             lockout: [0; MAX_KEYS],
             open: [0; MAX_KEYS],
+            skip: [false; MAX_KEYS],
             encoders: [Encoder { last: 0, steps: 0 }; MAX_ENCODERS],
         }
     }
 
     /// Put all scanned pins into their idle state and forget key states.
-    pub fn configure(&mut self, hardware: &HardwareConfig, more: &[MatrixConfig], pins: &mut impl Pins) {
+    pub fn configure(&mut self, hardware: &HardwareConfig, more: &[MatrixConfig], doubles: &[u16], pins: &mut impl Pins) {
         *self = Self::new();
+        for pos in doubles {
+            if let Some(skip) = self.skip.get_mut(*pos as usize) {
+                *skip = true;
+            }
+        }
         idle_pins(hardware, more, pins);
         pins.settle();
         for (state, encoder) in self.encoders.iter_mut().zip(&hardware.encoders) {
@@ -62,7 +70,7 @@ impl Scanner {
     ) {
         let debounce = hardware.debounce_ms;
         let mut update = |pos: usize, raw: bool| {
-            if pos >= MAX_KEYS {
+            if pos >= MAX_KEYS || self.skip[pos] {
                 return;
             }
             if !self.pressed[pos] {

@@ -1,13 +1,13 @@
 // The app's session layer against virtual keyboards, without any UI.
 import { readFileSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { KnobFinder } from '../../src/lib/collector'
+import { KeyCollector, KnobFinder } from '../../src/lib/collector'
 import { planAddedKey } from '../../src/lib/addkey'
 import { addSession, app, reconcile } from '../../src/lib/app'
 import { chooseLink, findWires } from '../../src/lib/cable'
-import { signatureOf } from '../../src/lib/infer'
+import { inferWiring, signatureOf } from '../../src/lib/infer'
 import { DEMOS } from '../../src/lib/demos'
-import type { Contact, HostEvent } from '../../src/lib/protocol'
+import type { Contact, HostEvent, Wire } from '../../src/lib/protocol'
 import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../../src/lib/lighting'
 import { keymapPoster } from '../../src/lib/poster'
 import { layerHex } from '../../src/lib/layers'
@@ -123,6 +123,66 @@ describe('a key that was missed during setup', () => {
     // The same key again is recognised as present.
     const again = planAddedKey(session.hardware, key)
     expect(again.ok && !again.rewired && again.pos === 2).toBe(true)
+  })
+})
+
+describe('a board whose keys are not all wired alike', () => {
+  it('is found key by key and types one key per switch', async () => {
+    // Rows 2 and 3, columns 4 and 5, two switches per crossing with diodes
+    // either way; the last crossing has one switch without a diode instead.
+    // A knob's push switch sits between two pins of its own, also without.
+    const crossings: [number, number][] = [[2, 4], [2, 5], [3, 4]]
+    const switches: Wire[] = [
+      ...crossings.flatMap(([row, col]) => [{ Diode: { anode: col, cathode: row } }, { Diode: { anode: row, cathode: col } }]),
+      { Plain: [3, 5] },
+      { Plain: [8, 9] },
+    ]
+    const transport = new VirtualTransport('Mixed', { switches, encoders: [] }, uid++)
+    const session = await during(openSession(transport))
+
+    let now = 0
+    const collector = new KeyCollector(() => now)
+    session.client.onProbe = (contacts) => collector.update(contacts)
+    await during(session.client.startProbe([2, 3, 4, 5, 8, 9]))
+    const wait = (ms: number) => {
+      advanceVirtualTime(ms)
+      now += ms
+    }
+    wait(600)
+    for (const index of switches.keys()) {
+      transport.setKey(index, true)
+      wait(100)
+      transport.setKey(index, false)
+      wait(100)
+    }
+    await during(session.client.stopProbe())
+    expect(collector.keys).toHaveLength(8)
+
+    const result = inferWiring(collector.keys)
+    if (!result.ok) throw new Error(result.problem)
+    const { matrix, more, doubles, positions } = result.wiring
+    expect(matrix).toEqual({ Matrix: { rows: [2, 3], cols: [4, 5], diodes: 'Both' } })
+    expect(more).toEqual([{ Matrix: { rows: [8], cols: [9], diodes: 'Col2Row' } }])
+    expect(positions).toEqual([0, 4, 1, 5, 2, 6, 3, 8])
+    expect(doubles).toEqual([7])
+
+    const hardware = { matrix, more, doubles, reserved_pins: [], debounce_ms: 5, encoders: [], split: 'None' as const }
+    await during(setHardware(session, hardware))
+    await during(setLayout(session, starterLayout(hardware)))
+    for (let pos = 0; pos < 9; pos++) await during(setAction(session, 0, pos, { Basic: { Key: 4 + pos } }))
+    // The keyboard gives back what it was told.
+    expect(await during(session.client.hardware())).toMatchObject({ more, doubles })
+
+    const typed = session.typed
+    for (const index of [6, 7, 5]) {
+      typed.length = 0
+      transport.setKey(index, true)
+      advanceVirtualTime(20)
+      transport.setKey(index, false)
+      advanceVirtualTime(20)
+      // One key down and up again; the switch without a diode does not also type its crossing's other key.
+      expect(keys(typed)).toEqual([[4 + positions[index]], []])
+    }
   })
 })
 

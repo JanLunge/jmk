@@ -1,7 +1,7 @@
 use heapless::{String, Vec};
 use jmk_core::{Action, Combo, HoldTapFlavor, HoldTapProfile, Keymap, MacroStep};
 use jmk_proto::{
-    HardwareConfig, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
+    Doubles, HardwareConfig, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, MAX_MACRO_NAME, MAX_MACRO_STEPS,
 };
 
@@ -30,6 +30,8 @@ pub struct Config {
     pub letter_rows: LetterRows,
     /// Groups of switches besides `hardware.matrix`.
     pub more_wiring: MoreWiring,
+    /// Positions that read a switch a second time and are not reported.
+    pub doubles: Doubles,
     /// How many times the shared part was saved with a change in it; see
     /// [`crate::sync`].
     pub revision: u32,
@@ -127,6 +129,7 @@ impl Config {
             macro_names: [Self::NO_NAME; MAX_MACROS],
             letter_rows: Self::NO_ROWS,
             more_wiring: Vec::new(),
+            doubles: Vec::new(),
             revision: 0,
             base: None,
         }
@@ -149,6 +152,7 @@ impl Config {
             macro_names,
             letter_rows,
             more_wiring,
+            doubles,
             revision,
             base,
         } = self;
@@ -166,6 +170,7 @@ impl Config {
         macro_names.iter_mut().for_each(|name| name.clear());
         *letter_rows = Self::NO_ROWS;
         more_wiring.clear();
+        doubles.clear();
         *revision = 0;
         *base = None;
     }

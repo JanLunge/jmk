@@ -46,6 +46,7 @@ import { chooseLink, findWires } from '../lib/cable'
 import { KeyCollector, KnobFinder } from '../lib/collector'
 import { acknowledge, muted } from '../lib/sound'
 import { inferWiring, type KeySignature } from '../lib/infer'
+import { moreWiringLimit } from '../lib/client'
 import { bounds, hasKey, NO_KEY, UNIT } from '../lib/layout'
 import { ALPHAS, letterActions, rowLayout, splitRows } from '../lib/starter'
 import LetterRows from '../components/LetterRows.vue'
@@ -511,7 +512,7 @@ function describeKey(half: Session, key: KeySignature): string {
 }
 
 // --- Result ------------------------------------------------------------------
-const results = computed(() => ordered.value.map((half) => ({ half, result: inferWiring(setupOf(half).collector.keys) })))
+const results = computed(() => ordered.value.map((half) => ({ half, result: inferWiring(setupOf(half).collector.keys, moreWiringLimit(half.info.protocol) + 1) })))
 /** The first thing that could not be read, if any. */
 const problem = computed(() => {
   for (const { half, result } of results.value) {
@@ -530,6 +531,7 @@ const plans = computed(() => {
     const hardware: HardwareConfig = {
       matrix: result.wiring.matrix,
       more: result.wiring.more.length ? result.wiring.more : undefined,
+      doubles: result.wiring.doubles.length ? result.wiring.doubles : undefined,
       reserved_pins: [...reserved],
       debounce_ms: 5,
       encoders: [...setupOf(half).encoders],
@@ -763,12 +765,15 @@ const takenPins = computed(() => {
  */
 const stuckPins = computed(() => {
   const ambiguous = new Set(boardId.value === AUTO ? shapes.flatMap((shape) => shape.internal.map((i) => i.pin)) : [])
-  return halves.value.some((half) =>
-    setupOf(half).collector.stuck.some((contact) => {
+  return halves.value.some((half) => {
+    // A knob can rest with a contact closed; once it is found, that is no stuck key.
+    const knobs = new Set(setupOf(half).encoders.flatMap((e) => [e.a, e.b]))
+    return setupOf(half).collector.stuck.some((contact) => {
+      if ('Ground' in contact && knobs.has(contact.Ground)) return false
       const on = 'Ground' in contact ? [contact.Ground] : 'Supply' in contact ? [contact.Supply] : [contact.Link.driven, contact.Link.sensed]
       return on.some((pin) => !ambiguous.has(pin))
-    }),
-  )
+    })
+  })
 })
 
 const canContinue = computed(() => {

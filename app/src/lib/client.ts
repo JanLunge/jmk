@@ -26,6 +26,10 @@ import { bridge } from './wasm'
 const REPLY_TIMEOUT_MS = 3000
 /** Protocol version from which a board can mix wiring styles and scan a duplex matrix. */
 export const MORE_WIRING_PROTOCOL = 9
+/** From which a board has eight groups of switches, not four, and reads a key without a diode in a duplex matrix as one key. */
+export const MANY_GROUPS_PROTOCOL = 11
+/** Groups of switches a keyboard of that protocol version can have besides its first. */
+export const moreWiringLimit = (protocol: number) => (protocol < MORE_WIRING_PROTOCOL ? 0 : protocol < MANY_GROUPS_PROTOCOL ? 3 : LIMITS.moreWiring)
 let nextChannel = 1
 
 export class KeyboardError extends Error {}
@@ -140,26 +144,36 @@ export class KeyboardClient {
     const hardware: HardwareConfig = await this.expect('GetHardware', 'Hardware')
     if (this.protocol < MORE_WIRING_PROTOCOL) return hardware
     const more: MatrixConfig[] = await this.expect('GetMoreWiring', 'MoreWiring')
-    return more.length ? { ...hardware, more } : hardware
+    if (more.length) hardware.more = more
+    if (this.protocol < MANY_GROUPS_PROTOCOL) return hardware
+    const doubles: number[] = await this.expect('GetDoubles', 'Doubles')
+    if (doubles.length) hardware.doubles = doubles
+    return hardware
   }
 
   async setHardware(hardware: HardwareConfig): Promise<void> {
-    const { more = [], ...first } = hardware
+    const { more = [], doubles = [], ...first } = hardware
     const matrix = first.matrix
     const duplex = [matrix, ...more].some((part) => part !== 'None' && 'Matrix' in part && part.Matrix.diodes === 'Both')
+    const tooOld = new KeyboardError("This keyboard's firmware is too old for this wiring. Update the firmware first.")
     if (this.protocol < MORE_WIRING_PROTOCOL) {
-      if (more.length || duplex) throw new KeyboardError("This keyboard's firmware is too old for this wiring. Update the firmware first.")
+      if (more.length || duplex) throw tooOld
       return this.ok({ SetHardware: first })
     }
+    if (more.length > moreWiringLimit(this.protocol) || (doubles.length && this.protocol < MANY_GROUPS_PROTOCOL)) throw tooOld
     // The keyboard checks each part against what it holds, so the old extra
     // groups go first: their pins may be wanted elsewhere now.
     const before: MatrixConfig[] = await this.expect('GetMoreWiring', 'MoreWiring')
+    const doublesBefore: number[] = this.protocol < MANY_GROUPS_PROTOCOL ? [] : await this.expect('GetDoubles', 'Doubles')
     if (before.length) await this.ok({ SetMoreWiring: [] })
     try {
       await this.ok({ SetHardware: first })
       if (more.length) await this.ok({ SetMoreWiring: more })
+      // Last: the keyboard forgets them whenever the wiring is set.
+      if (doubles.length) await this.ok({ SetDoubles: doubles })
     } catch (error) {
       if (before.length) await this.ok({ SetMoreWiring: before }).catch(() => {})
+      if (doublesBefore.length) await this.ok({ SetDoubles: doublesBefore }).catch(() => {})
       throw error
     }
   }

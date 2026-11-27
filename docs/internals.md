@@ -52,8 +52,15 @@ All of this is set at run time; nothing is compiled in.
 - A duplex matrix: two keys per crossing with their diodes pointing opposite
   ways, read once in each direction. Like any duplex matrix it can show a key
   that is not held when four or more are down.
-- Any mix of the above on one board, up to four groups, as long as no pin is
+- Any mix of the above on one board, up to eight groups, as long as no pin is
   in two of them. The groups take their key positions one after the other.
+  Keys that join two pins and share none with the rest (the push switch of a
+  knob on two pins of its own, say) are a matrix of their own, of one row and
+  one column if need be.
+- Keys with and without a diode in one matrix. Read one way, a key without a
+  diode is a key like the others, though ghosting can pass through it. In a
+  duplex matrix it closes both positions of its crossing; the second is
+  listed in `Doubles` and never reported, so it is one key.
 - Rotary knobs, two positions each, after the switches.
 
 A press counts at once and the key is then ignored for the debounce time. A

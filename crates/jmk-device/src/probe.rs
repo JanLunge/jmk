@@ -67,7 +67,20 @@ impl Prober {
                         pins.settle();
                         for sensed in low {
                             if pins.read(sensed) {
-                                let _ = self.found.push(Contact::Link { driven, sensed });
+                                self.note_link(driven, sensed);
+                                // Try the other direction now rather than
+                                // when its turn comes: a switch without a
+                                // diode pressed between the two turns would
+                                // show one way in this pass and look like a
+                                // switch with a diode.
+                                pins.drive_low(sensed);
+                                pins.settle();
+                                let back = !pins.read(driven);
+                                pins.input(sensed, Pull::Up);
+                                pins.settle();
+                                if back {
+                                    self.note_link(sensed, driven);
+                                }
                             } else {
                                 self.fixed |= 1 << sensed;
                                 let _ = self.found.push(Contact::Ground(sensed));
@@ -82,6 +95,13 @@ impl Prober {
         }
         self.step = 0;
         Some(self.found.clone())
+    }
+
+    fn note_link(&mut self, driven: Pin, sensed: Pin) {
+        let link = Contact::Link { driven, sensed };
+        if !self.found.contains(&link) {
+            let _ = self.found.push(link);
+        }
     }
 
     fn is_free(&self, pin: Pin) -> bool {
