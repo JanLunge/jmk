@@ -5,6 +5,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { attempt } from '../lib/app'
 import { describeStep, isModifierUsage, KEY_GROUPS, keyLabel, keyName, textToSteps, usageForCode } from '../lib/keycodes'
+import { language } from '../lib/language'
 import type { MacroStep } from '../lib/protocol'
 import { LIMITS } from '../lib/protocol'
 import { recordingKeys, recordingToSteps, type Stroke, type Timing } from '../lib/recording'
@@ -225,7 +226,7 @@ function chip(step: MacroStep): { kind: 'tap' | 'press' | 'release' | 'wait'; la
             <div class="row wrap">
               <select v-model="newKey" class="input">
                 <optgroup v-for="group in KEY_GROUPS" :key="group.title" :label="group.title">
-                  <option v-for="k in group.keys" :key="k.usage" :value="k.usage">{{ k.name }}</option>
+                  <option v-for="k in group.keys" :key="k.usage" :value="k.usage">{{ keyName(k.usage) }}</option>
                 </optgroup>
               </select>
               <button class="btn small" :title="'Press and release ' + keyName(newKey)" @click="edit([...steps, { Tap: newKey }])">+ tap</button>
@@ -234,7 +235,7 @@ function chip(step: MacroStep): { kind: 'tap' | 'press' | 'release' | 'wait'; la
               <input v-model.number="newDelay" class="input delay" type="number" min="1" max="60000" />
               <button class="btn small" @click="edit([...steps, { DelayMs: clampMs(newDelay) }])">+ wait (ms)</button>
             </div>
-            <p class="muted small">Text is typed as on a US keyboard layout. Other layouts may produce different symbols.</p>
+            <p class="muted small">Text is typed for a computer set to {{ language().name }}, the language chosen in the key picker. Characters that need AltGr or an accent key are left out.</p>
           </div>
         </template>
       </div>
