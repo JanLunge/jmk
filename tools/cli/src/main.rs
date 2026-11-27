@@ -37,6 +37,9 @@ usage: jmk [--device <chip id>] <command>
 
 With more than one keyboard connected, --device says which one, by its chip
 id from `jmk devices`.
+
+With no keyboard connected, flash writes to a Pico that waits in its
+bootloader (a new board, or BOOTSEL held while plugging in).
 ";
 
 type Result<T> = std::result::Result<T, String>;
@@ -352,13 +355,33 @@ fn usb_disks() -> Vec<(String, PathBuf)> {
         .collect()
 }
 
+/// The port of a board that waits in its bootloader with no firmware to
+/// ask: a new one, or one whose BOOTSEL was held. Only when there is
+/// exactly one such drive, so the image cannot go to the wrong board.
+fn waiting_bootloader() -> Option<String> {
+    // What the boot ROMs of the RP2040 and the RP2350 call their drive.
+    const DRIVES: [&str; 2] = ["/dev/disk/by-label/RPI-RP2", "/dev/disk/by-label/RP2350"];
+    let mut waiting = DRIVES.iter().filter_map(|drive| fs::canonicalize(drive).ok());
+    let drive = waiting.next()?;
+    if waiting.next().is_some() {
+        return None;
+    }
+    usb_disks().into_iter().find(|(_, disk)| *disk == drive).map(|(port, _)| port)
+}
+
 fn flash(device: Option<&str>, image: &str) -> Result<()> {
     let image = fs::read(image).map_err(|e| format!("{image}: {e}"))?;
     if image.len() % 512 != 0 || !image.starts_with(b"UF2\n") {
         return Err("not a UF2 file".into());
     }
-    let Found { port, hidraw } = select(device)?;
-    Keyboard::open(&hidraw)?.ok(Request::Reboot { bootloader: true })?;
+    let port = match waiting_bootloader() {
+        Some(port) if device.is_none() && keyboards().is_empty() => port,
+        _ => {
+            let Found { port, hidraw } = select(device)?;
+            Keyboard::open(&hidraw)?.ok(Request::Reboot { bootloader: true })?;
+            port
+        }
+    };
     // The bootloader's disk appears on the port the keyboard was on, so no
     // other disk can be taken for it.
     let (disk, file) = wait_for("the bootloader drive", || {
