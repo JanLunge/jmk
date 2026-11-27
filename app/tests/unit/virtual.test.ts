@@ -12,7 +12,7 @@ import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../.
 import { keymapPoster } from '../../src/lib/poster'
 import { layerHex } from '../../src/lib/layers'
 import { gridLayout } from '../../src/lib/layout'
-import { addKey, alignHalves, knobPositions, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { addKey, alignHalves, canTuneCombos, knobPositions, setCombos, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
 import { starterAction } from './keys'
 import { advanceVirtualTime, VirtualTransport } from '../../src/lib/transport'
 import { loadBridge } from '../../src/lib/wasm'
@@ -234,6 +234,12 @@ describe('the cable between two halves', () => {
     expect(chooseLink([{ a: 0, b: 1 }, { a: 12, b: 0 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false, problem: expect.stringContaining('cannot run a serial connection') })
     // The other chip takes any pins.
     expect(chooseLink([{ a: 2, b: 7 }, { a: 3, b: 9 }], 'Nrf52840', 'Nrf52840')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 9, rx: 7 } })
+    // An RP2350 has a serial port on more pins than an RP2040, and takes turns on one wire as well.
+    expect(chooseLink([{ a: 2, b: 3 }, { a: 3, b: 2 }], 'Rp2350', 'Rp2350')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 2, rx: 3 } })
+    expect(chooseLink([{ a: 2, b: 3 }, { a: 3, b: 2 }], 'Rp2040', 'Rp2040')).toMatchObject({ ok: false })
+    expect(chooseLink([{ a: 2, b: 5 }, { a: 3, b: 4 }], 'Rp2350', 'Rp2040')).toEqual({ ok: true, a: { tx: 2, rx: 3 }, b: { tx: 4, rx: 5 } })
+    expect(chooseLink([{ a: 2, b: 4 }, { a: 3, b: 6 }], 'Rp2350', 'Rp2350')).toMatchObject({ ok: false, problem: expect.stringContaining('An RP2350 also') })
+    expect(chooseLink([{ a: 0, b: 1 }], 'Rp2350', 'Rp2350')).toMatchObject({ ok: false, problem: expect.stringContaining('update the firmware') })
     // Spare wires are skipped until a pair fits.
     expect(chooseLink([{ a: 2, b: 3 }, { a: 4, b: 9 }, { a: 5, b: 8 }], 'Rp2040', 'Rp2040')).toEqual({ ok: true, a: { tx: 4, rx: 5 }, b: { tx: 8, rx: 9 } })
   })
@@ -444,7 +450,10 @@ describe('lights and pictures', () => {
       layers: [layout.map((_, i) => ({ Basic: i === 0 ? { MomentaryLayer: 1 } : { Key: 0x04 + i } })), layout.map(() => 'Transparent' as const)],
       layerColors: [0, 4],
       knobs: [],
-      combos: [{ keys: [1, 2], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 }],
+      combos: [
+        { keys: [1, 2], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 },
+        { keys: [3, 4], action: { Basic: { Key: 0x2b } }, timeout_ms: 500, sequence: true, layers: 0b10 },
+      ],
     }
     for (const mode of ['grid', 'stacked'] as const) {
       const poster = keymapPoster(source, { mode, dark: false })
@@ -452,7 +461,25 @@ describe('lights and pictures', () => {
       expect(poster.svg).toContain('Layer 1')
       expect(poster.svg).toContain('#ef4444')
       expect(poster.svg).toContain('B + C')
+      expect(poster.svg).toContain('D, then E  →  Tab  (layer 1)')
       expect(poster.width).toBeGreaterThan(100)
     }
+  })
+
+  it('a combo keeps its layers and whether it is a sequence', async () => {
+    const { session } = await open('macropad')
+    expect(canTuneCombos(session)).toBe(true)
+    const combos = [
+      { keys: [0, 1, 2, 3, 4, 5], action: { Basic: { Key: 0x29 } }, timeout_ms: 50 },
+      { keys: [2, 1], action: { Basic: { Key: 0x2b } }, timeout_ms: 500, layers: 0b10, sequence: true },
+    ]
+    await during(setCombos(session, combos))
+    // Read back exactly as set: nothing added to the plain one.
+    expect(await during(session.client.combos())).toEqual(combos)
+    // Taking the first away must not leave its options on the second.
+    await during(setCombos(session, [combos[1]]))
+    expect(await during(session.client.combos())).toEqual([combos[1]])
+    await during(setCombos(session, [combos[0]]))
+    expect(await during(session.client.combos())).toEqual([combos[0]])
   })
 })

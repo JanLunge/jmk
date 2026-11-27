@@ -1,5 +1,5 @@
 use heapless::{String, Vec};
-use jmk_core::{Action, Combo, HoldTapFlavor, HoldTapProfile, Keymap, MacroStep};
+use jmk_core::{Action, Combo, ComboOptions, HoldTapFlavor, HoldTapProfile, Keymap, MacroStep};
 use jmk_proto::{
     Doubles, HardwareConfig, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, MAX_MACRO_NAME, MAX_MACRO_STEPS,
@@ -15,6 +15,9 @@ pub struct Config {
     pub actions: [[Action; MAX_KEYS]; MAX_LAYERS],
     pub profiles: [HoldTapProfile; MAX_HOLD_TAP_PROFILES],
     pub combos: Vec<Combo, MAX_COMBOS>,
+    /// Layers and kind of each combo, by its index. May be shorter than
+    /// `combos`: the rest have the defaults.
+    pub combo_options: Vec<ComboOptions, MAX_COMBOS>,
     pub meta: Meta,
     pub layout: Vec<KeyGeometry, MAX_KEYS>,
     /// The steps of all macros, one macro after the other.
@@ -63,13 +66,18 @@ impl serde::Serialize for Shared<'_> {
         }
         // Only when there are any, so that a keymap without named macros reads
         // the same as on firmware from before macros had names.
-        let rows = config.letter_rows.iter().any(|row| !row.is_empty());
+        let options = config.combo_options.iter().any(|options| *options != ComboOptions::default());
+        let rows = options || config.letter_rows.iter().any(|row| !row.is_empty());
         if rows || config.macro_names.iter().any(|name| !name.is_empty()) {
             parts.serialize_element(&config.macro_names)?;
         }
         // Likewise the letter rows, which came after the names.
         if rows {
             parts.serialize_element(&config.letter_rows)?;
+        }
+        // And the combo options, which came after the rows.
+        if options {
+            parts.serialize_element(&config.combo_options)?;
         }
         parts.end()
     }
@@ -120,6 +128,7 @@ impl Config {
             actions: [[Action::Transparent; MAX_KEYS]; MAX_LAYERS],
             profiles: [Self::DEFAULT_PROFILE; MAX_HOLD_TAP_PROFILES],
             combos: Vec::new(),
+            combo_options: Vec::new(),
             meta: Self::EMPTY_META,
             layout: Vec::new(),
             macro_steps: Vec::new(),
@@ -143,6 +152,7 @@ impl Config {
             actions,
             profiles,
             combos,
+            combo_options,
             meta,
             layout,
             macro_steps,
@@ -161,6 +171,7 @@ impl Config {
         actions.iter_mut().flatten().for_each(|a| *a = Action::Transparent);
         *profiles = [Self::DEFAULT_PROFILE; MAX_HOLD_TAP_PROFILES];
         combos.clear();
+        combo_options.clear();
         *meta = Self::EMPTY_META;
         layout.clear();
         macro_steps.clear();
@@ -232,6 +243,7 @@ impl Config {
             self.macro_names = take(&mut bytes)?;
         }
         self.letter_rows = if bytes.is_empty() { Self::NO_ROWS } else { take(&mut bytes)? };
+        self.combo_options = if bytes.is_empty() { Vec::new() } else { take(&mut bytes)? };
         bytes.is_empty().then_some(())
     }
 
@@ -300,6 +312,10 @@ impl Keymap for Config {
 
     fn combos(&self) -> &[Combo] {
         &self.combos
+    }
+
+    fn combo_options(&self) -> &[ComboOptions] {
+        &self.combo_options
     }
 
     fn macro_steps(&self, index: u8) -> &[MacroStep] {

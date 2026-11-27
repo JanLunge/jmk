@@ -37,7 +37,7 @@ import BoardThumb from '../components/BoardThumb.vue'
 import SetupGuide from '../components/SetupGuide.vue'
 import MatrixExplainer from '../components/MatrixExplainer.vue'
 import { app, attempt, benchOf, pairUp, partnerOf, relink, toast } from '../lib/app'
-import { boardsFor, findBoard, genericBoard, pinLabel, pinsOfAnyShape, shapeFromPins, wirablePins } from '../lib/boards'
+import { boardsFor, chipLabel, findBoard, genericBoard, pinLabel, pinsOfAnyShape, shapeFromPins, wirablePins } from '../lib/boards'
 import { desktop, type BootDrive } from '../lib/desktop'
 import { localPositions, parseDefinition, positionCount as definitionPositions, type Definition } from '../lib/definition'
 import { arrivals as allArrivals, bootDrives, installArrival, installOnBoard, updateDue, updateFirmware } from '../lib/firmware'
@@ -98,7 +98,7 @@ const boardOf = (session: Session) => findBoard(resolvedId.value, session.info.m
 const reachable = (session: Session) =>
   boardId.value === AUTO ? pinsOfAnyShape(session.info.mcu, session.info.usable_pins) : wirablePins(boardOf(session), session.info.usable_pins)
 const board = computed(() => boardOf(props.session))
-const boardName = computed(() => (boardId.value === AUTO && !settledShape.value ? `${info.mcu === 'Nrf52840' ? 'nRF52840' : 'RP2040'} controller` : board.value.name))
+const boardName = computed(() => (boardId.value === AUTO && !settledShape.value ? `${chipLabel(info.mcu)} controller` : board.value.name))
 const reserved = reactive(new Set<Pin>(props.session.hardware.reserved_pins))
 
 function toggleReserved(pin: Pin) {
@@ -702,7 +702,7 @@ async function pickBackup(event: Event) {
   if (!file) return
   try {
     const chosen = parseDefinition(await file.text())
-    if (chosen.mcu !== info.mcu) throw new Error(`This file is for a ${chosen.mcu === 'Nrf52840' ? 'nRF52840' : 'RP2040'} controller.`)
+    if (chosen.mcu !== info.mcu) throw new Error(`This file is for a ${chipLabel(chosen.mcu)} controller.`)
     if (chosen.halves.length < halves.value.length) throw new Error('This file is for a keyboard in one piece, but two halves are being set up.')
     backup.value = chosen
   } catch (error) {

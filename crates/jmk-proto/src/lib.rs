@@ -7,11 +7,11 @@
 pub mod frame;
 
 pub use heapless::{String, Vec};
-use jmk_core::{Action, Combo, HoldTapProfile, MacroStep};
+use jmk_core::{Action, Combo, ComboOptions, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours;
-/// 11 more groups of switches and [`Request::SetDoubles`].
+/// 11 combo options, more groups of switches and [`Request::SetDoubles`].
 pub const PROTOCOL_VERSION: u16 = 11;
 
 /// What runs on the keyboard, as the app compares it with the firmware it
@@ -474,6 +474,12 @@ pub enum Request {
     /// The groups of switches after the first. Checked together with the
     /// rest of the hardware configuration: no pin may appear twice.
     SetMoreWiring(MoreWiring),
+    GetComboOptions,
+    /// The layers each combo works on and whether it is a sequence, by the
+    /// index of the combo. Send it after [`Request::SetCombos`], which drops
+    /// the options of combos that are no longer there. Combos without an
+    /// entry have the defaults.
+    SetComboOptions(Vec<ComboOptions, MAX_COMBOS>),
     GetDoubles,
     /// Positions that read a switch a second time and are not reported.
     /// Setting the wiring empties the list, so send it after the wiring.
@@ -502,6 +508,7 @@ pub enum Response {
     MacroName(String<MAX_MACRO_NAME>),
     LetterRows(LetterRows),
     MoreWiring(MoreWiring),
+    ComboOptions(Vec<ComboOptions, MAX_COMBOS>),
     Doubles(Doubles),
 }
 

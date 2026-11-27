@@ -6,7 +6,7 @@ export interface BootDrive {
   path: string
   /** What the board calls itself, e.g. "Raspberry Pi RP2". */
   model: string
-  /** The chip, where the drive's description tells: 'rp2040', 'nrf52840' or ''. */
+  /** The chip, where the drive's description tells: 'rp2040', 'rp2350', 'nrf52840' or ''. */
   mcu: string
 }
 

@@ -12,6 +12,10 @@ const PAGE: u32 = 256;
 fn family_id(name: &str) -> Option<u32> {
     match name {
         "rp2040" => Some(0xE48B_FF56),
+        // "rp2350-arm-s": a program for the Arm cores in secure mode, which is
+        // what the firmware's image definition says too. The boot ROM of an
+        // RP2350 refuses the RP2040 family.
+        "rp2350" => Some(0xE48B_FF59),
         "nrf52840" => Some(0xADA5_2840),
         _ => None,
     }
@@ -20,7 +24,7 @@ fn family_id(name: &str) -> Option<u32> {
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let [_, family, input, output] = args.as_slice() else {
-        eprintln!("usage: jmk-uf2 <rp2040|nrf52840> <firmware.elf> <firmware.uf2>");
+        eprintln!("usage: jmk-uf2 <rp2040|rp2350|nrf52840> <firmware.elf> <firmware.uf2>");
         return ExitCode::FAILURE;
     };
     let Some(family) = family_id(family) else {

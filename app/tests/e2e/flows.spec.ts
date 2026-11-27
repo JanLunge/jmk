@@ -388,6 +388,29 @@ test('macros and combos', async ({ page }) => {
   await expect(typed(page)).toHaveText('Hi!zb')
 })
 
+test('a combo of keys pressed one after the other', async ({ page }) => {
+  await openDemo(page, 'macropad')
+  await runWizard(page)
+  await page.click('[data-test=nav-behaviours]')
+  await page.click('[data-test=section-combos]')
+  await page.click('[data-test=add-combo]')
+  await page.click('[data-test=combo-sequence]')
+  // Picked in the order they are pressed: the third key, then the second.
+  await page.locator('[data-test=combo-board] [data-pos="2"]').dispatchEvent('pointerdown')
+  await page.locator('[data-test=combo-board] [data-pos="1"]').dispatchEvent('pointerdown')
+  await expect(page.locator('[data-test=combo-order]')).toHaveText('Order: C → B')
+  await page.click('.picker [data-usage="29"]') // Z
+
+  await page.click('[data-test=nav-keymap]')
+  await tap(page, 2)
+  await tap(page, 1)
+  await expect(typed(page)).toHaveText('z')
+  // The other way round they are two keys; the one that starts the sequence waits a moment.
+  await tap(page, 1)
+  await tap(page, 2)
+  await expect(typed(page)).toHaveText('zbc')
+})
+
 test('a macro is named and recorded right in the keymap', async ({ page }) => {
   await openDemo(page, 'macropad')
   await runWizard(page)

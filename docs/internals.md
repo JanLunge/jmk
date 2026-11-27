@@ -13,7 +13,8 @@ how to run it, see the [README](../README.md).
 | `crates/jmk-sim` | Simulated wiring, flash and cable; virtual keyboards. |
 | `crates/jmk-wasm` | The above compiled for the configurator. |
 | `crates/jmk-embassy` | What the ports share: USB interfaces, queues, main loop, split cable. |
-| `firmware/rp2040` | The RP2040 port (Embassy). |
+| `firmware/rp2040` | The RP2040 port (Embassy). Its `src` is also the RP2350 port's. |
+| `firmware/rp2350` | The RP2350 port: the target, the memory layout and the features that pick the chip. No code of its own. Not yet run on a board. |
 | `firmware/nrf52840` | The nRF52840 port with Bluetooth. Experimental. |
 | `app/` | POG, the configurator. See its README. |
 | `tools/cli` | `jmk`, a command-line client for the protocol (Linux). |
@@ -37,7 +38,7 @@ pin low while the other half's detection watches, and the app first rules out
 pins tied to supply voltage.
 
 A cable usually has a data wire for each direction, on pins a UART can use.
-One with a single data wire works too, on the RP2040 and on any pin: the
+One with a single data wire works too, on the RP2040 and RP2350 and on any pin: the
 halves take turns on it (`LinkConfig::Wire`, `wire` in
 `firmware/rp2040/src/link.rs`). Nobody drives that wire high, so two halves
 talking at once garble a message but cannot harm the pins; each waits for
@@ -74,14 +75,44 @@ release counts once the key has read open for the whole debounce time
 ```
 
 There is no hosted CI; this script is the gate. It needs the Rust targets
-`wasm32-unknown-unknown`, `thumbv6m-none-eabi` and `thumbv7em-none-eabihf`,
+`wasm32-unknown-unknown`, `thumbv6m-none-eabi`, `thumbv8m.main-none-eabihf`
+and `thumbv7em-none-eabihf`,
 Node.js, and libclang for the nRF52840 build. It leaves the firmware images
-in `target/` (`jmk-rp2040.uf2`, `jmk-nrf52840.uf2`). Hold BOOTSEL while
+in `target/` (`jmk-rp2040.uf2`, `jmk-rp2350.uf2`, `jmk-nrf52840.uf2`). Hold BOOTSEL while
 plugging the board in and copy the file to the drive that appears. A board
 already running JMK is updated
 with `cargo run -p jmk-cli -- flash target/jmk-rp2040.uf2` or from the app.
 The image assumes 2 MB of flash and keeps the saved configuration in the
 last 32 KiB.
+
+## RP2040 and RP2350
+
+Both are built from `firmware/rp2040/src`. `firmware/rp2350` is a package
+without code: its `Cargo.toml` names that `src` as its program and turns on
+the feature `rp235x`, which marks the few places where the chips differ:
+
+- the chip the firmware reports, and where its serial number comes from
+  (the flash chip on the RP2040, the chip itself on the RP2350);
+- the pins a UART can use for the split cable: the RP2350 has more
+  (`ports` in `link.rs`, and the same lists in `app/src/lib/cable.ts`);
+- the name of the GPIO function in the pin registers.
+
+What a build needs besides is in its own folder: the target
+(`.cargo/config.toml`) and the memory layout (`memory.x`). An RP2350 has no
+second-stage boot loader in its image; a small block after the vector table
+tells the boot ROM what the image is, and `embassy-rp` supplies it.
+
+The RP2350 image also uses 2 MB of flash only, with the saved configuration
+in the last 32 KiB of those. That fits every RP2350: the RP2354 has 2 MB
+built in, and on a board with a larger flash chip (the Pico 2 has 4 MB) the
+rest stays unused. Its UF2 file carries the family `rp2350-arm-s`; the boot
+ROM refuses the RP2040's.
+
+The default feature `rp235xa` is for the package with 30 GPIOs (RP2350A,
+RP2354A), and the image the app carries is that one. `--no-default-features
+--features rp235xb` builds for the one with 48 (RP2350B, RP2354B). There a
+cable with a single data wire is limited to GPIO 0 to 31, and the app does
+not know that yet, nor does it carry that image.
 
 ## Protocol stability
 

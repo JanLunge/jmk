@@ -72,7 +72,6 @@ async fn send(pio: Peri<'_, PIO0>, channel: &mut dma::Channel<'_>, pin: Option<P
     let Some(pin) = pin else { return core::future::pending().await };
     let Pio { mut common, mut sm0, .. } = Pio::new(pio, Irqs);
 
-    // The driver wants pin types, the configuration has a number.
     macro_rules! claim {
         ($($number:literal $name:ident),*) => {
             match pin {
@@ -83,12 +82,7 @@ async fn send(pio: Peri<'_, PIO0>, channel: &mut dma::Channel<'_>, pin: Option<P
             }
         };
     }
-    let out = claim!(
-        0 PIN_0, 1 PIN_1, 2 PIN_2, 3 PIN_3, 4 PIN_4, 5 PIN_5, 6 PIN_6, 7 PIN_7, 8 PIN_8, 9 PIN_9,
-        10 PIN_10, 11 PIN_11, 12 PIN_12, 13 PIN_13, 14 PIN_14, 15 PIN_15, 16 PIN_16, 17 PIN_17, 18 PIN_18,
-        19 PIN_19, 20 PIN_20, 21 PIN_21, 22 PIN_22, 23 PIN_23, 24 PIN_24, 25 PIN_25, 26 PIN_26, 27 PIN_27,
-        28 PIN_28, 29 PIN_29
-    );
+    let out = crate::pins::each_gpio!(claim);
 
     // One bit: high for T1, the data bit for T2, low for T3.
     let mut asm: Assembler<32> = Assembler::new_with_side_set(SideSet::new(false, 1, false));

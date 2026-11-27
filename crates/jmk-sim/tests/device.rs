@@ -1237,6 +1237,42 @@ fn letter_rows_are_saved_and_follow_to_the_other_half() {
 }
 
 #[test]
+fn combo_options_are_saved_and_follow_to_the_other_half() {
+    use jmk_core::{Action, Combo, ComboOptions};
+    let combo = |keys: &[u16]| Combo { keys: keys.iter().copied().collect(), action: Action::key(0x29), timeout_ms: 50 };
+    let set = |layers: u32, sequence: bool| Request::SetComboOptions([ComboOptions { layers, sequence }].into_iter().collect());
+    let got = |layers: u32, sequence: bool| Response::ComboOptions([ComboOptions { layers, sequence }].into_iter().collect());
+    let mut rig = Rig::wires(&[Wire::Ground(2)]);
+    rig.ok(Request::SetHardware(direct(&[2])));
+    assert_eq!(rig.kb.request(Request::GetComboOptions), Response::ComboOptions(Default::default()));
+    // Options need a combo to belong to.
+    assert_eq!(rig.kb.request(set(0b10, true)), Response::Error(Error::OutOfRange));
+
+    // A combo of more keys than firmware before the options could hold.
+    rig.ok(Request::SetCombos([combo(&[0, 1, 2, 3, 4, 5, 6, 7])].into_iter().collect()));
+    // Without options the keymap reads the same as before they existed.
+    let plain = split_status(&mut rig).digest;
+    rig.ok(set(0b10, true));
+    assert_ne!(split_status(&mut rig).digest, plain);
+    rig.ok(set(0, false));
+    assert_eq!(split_status(&mut rig).digest, plain);
+    rig.ok(set(0b10, true));
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetComboOptions), got(0b10, true));
+    // Taking the combo away takes its options along.
+    rig.ok(Request::SetCombos(Default::default()));
+    assert_eq!(rig.kb.request(Request::GetComboOptions), Response::ComboOptions(Default::default()));
+
+    let (mut left, mut right) = saved_pair();
+    left.ok(Request::SetCombos([combo(&[0, 1])].into_iter().collect()));
+    left.ok(set(0b100, true));
+    left.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(right.kb.request(Request::GetComboOptions), got(0b100, true));
+}
+
+#[test]
 fn layer_colors_are_saved() {
     let mut rig = Rig::wires(&[Wire::Ground(2)]);
     rig.ok(Request::SetHardware(direct(&[2])));

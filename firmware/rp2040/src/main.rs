@@ -1,8 +1,13 @@
-//! JMK on the RP2040: USB keyboard plus the configurator channel.
+//! JMK on the RP2040 and the RP2350: USB keyboard plus the configurator
+//! channel.
 //!
 //! All keyboard behaviour lives in `jmk-device`, and what Embassy ports have
 //! in common in `jmk-embassy`. This file only connects them to the chip:
 //! GPIO by number, flash, USB and the clock.
+//!
+//! `firmware/rp2350` builds this same code with its feature `rp235x` (and
+//! `rp235xb` for the package with 48 GPIOs); the few places where the chips
+//! differ are marked with it.
 #![no_std]
 #![no_main]
 
@@ -29,6 +34,8 @@ bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
 });
 
+/// The part of the flash this firmware uses, on both chips; a larger flash
+/// chip is left alone beyond it.
 const FLASH_SIZE: usize = 2 * 1024 * 1024;
 /// Must match the space left free at the end of FLASH in memory.x.
 const STORAGE_OFFSET: u32 = FLASH_SIZE as u32 - STORAGE_SIZE;
@@ -44,12 +51,21 @@ async fn main(_spawner: Spawner) {
     let config_queues = ConfigQueues::new();
     let link_queues = jmk_embassy::link::Queues::new();
 
-    let mut flash: Flash<'_, FLASH, Blocking, FLASH_SIZE> = Flash::new_blocking(p.FLASH);
+    #[cfg(not(feature = "rp235x"))]
+    let (mcu, mut flash) = (Mcu::Rp2040, Flash::<'_, FLASH, Blocking, FLASH_SIZE>::new_blocking(p.FLASH));
+    #[cfg(feature = "rp235x")]
+    let (mcu, flash) = (Mcu::Rp2350, Flash::<'_, FLASH, Blocking, FLASH_SIZE>::new_blocking(p.FLASH));
     let mut uid = [0u8; 8];
     // Left at zero if the flash chip does not report an ID.
+    #[cfg(not(feature = "rp235x"))]
     let _ = flash.blocking_unique_id(&mut uid);
+    // The RP2350 carries a number of its own, written at the factory.
+    #[cfg(feature = "rp235x")]
+    if let Ok(id) = embassy_rp::otp::get_chipid() {
+        uid = id.to_be_bytes();
+    }
     let storage = Storage::new(flash, STORAGE_OFFSET, STORAGE_BUF.take());
-    let board = Board { mcu: Mcu::Rp2040, firmware: jmk_proto::FIRMWARE_VERSION, uid };
+    let board = Board { mcu, firmware: jmk_proto::FIRMWARE_VERSION, uid };
     let mut device = Device::new(board, pins::RpPins::new(), storage, CONFIG.take());
     let wiring = jmk_embassy::wiring::Wiring::new();
 

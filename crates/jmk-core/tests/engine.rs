@@ -1,10 +1,11 @@
 use jmk_core::keycode::{self as kc, mods};
-use jmk_core::{Action, Basic, Combo, Engine, HoldTapFlavor, HoldTapProfile, KeyboardReport, Keymap, MacroStep, Output};
+use jmk_core::{Action, Basic, Combo, ComboOptions, Engine, HoldTapFlavor, HoldTapProfile, KeyboardReport, Keymap, MacroStep, Output};
 
 struct Map {
     layers: Vec<Vec<Action>>,
     profile: HoldTapProfile,
     combos: Vec<Combo>,
+    combo_options: Vec<ComboOptions>,
     macros: Vec<Vec<MacroStep>>,
 }
 
@@ -23,6 +24,9 @@ impl Keymap for Map {
     }
     fn combos(&self) -> &[Combo] {
         &self.combos
+    }
+    fn combo_options(&self) -> &[ComboOptions] {
+        &self.combo_options
     }
 }
 
@@ -51,7 +55,7 @@ struct Rig {
 
 impl Rig {
     fn new(layers: Vec<Vec<Action>>) -> Self {
-        let map = Map { layers, profile: HoldTapProfile::default(), combos: vec![], macros: vec![] };
+        let map = Map { layers, profile: HoldTapProfile::default(), combos: vec![], combo_options: vec![], macros: vec![] };
         Rig { map, engine: Engine::new(), log: Log::default() }
     }
     fn flavor(mut self, flavor: HoldTapFlavor) -> Self {
@@ -374,6 +378,136 @@ fn combo_can_be_a_hold_tap() {
     rig.tick(210);
     rig.press(2, 220);
     assert_eq!(rig.out(), ["02:", "02:05"]);
+}
+
+#[test]
+fn shorter_combo_fires_when_a_key_is_let_go_early() {
+    let mut rig = Rig::new(vec![vec![key(kc::J), key(kc::K), key(kc::A)]]);
+    rig.map.combos = vec![combo(&[0, 1], key(kc::ESCAPE)), combo(&[0, 1, 2], key(kc::TAB))];
+    rig.press(0, 0);
+    rig.press(1, 10);
+    rig.release(0, 20);
+    rig.release(1, 30);
+    assert_eq!(rig.out(), ["00:29", "00:"]);
+}
+
+#[test]
+fn combo_of_eight_keys() {
+    let mut rig = Rig::new(vec![(0..9).map(|i| key(kc::A + i)).collect()]);
+    rig.map.combos = vec![combo(&[0, 1, 2, 3, 4, 5, 6, 7], key(kc::ESCAPE))];
+    for pos in 0..7 {
+        rig.press(pos, pos as u64);
+    }
+    assert!(rig.out().is_empty());
+    rig.press(7, 7);
+    assert_eq!(rig.out(), ["00:29"]);
+    for pos in 0..8 {
+        rig.release(pos, 20);
+    }
+    assert_eq!(rig.out(), ["00:"]);
+}
+
+const SEQUENCE: ComboOptions = ComboOptions { layers: 0, sequence: true };
+
+fn sequence(keys: &[u16], action: Action) -> Combo {
+    Combo { keys: keys.iter().copied().collect(), action, timeout_ms: 300 }
+}
+
+#[test]
+fn sequence_of_taps_fires_in_order_only() {
+    let mut rig = Rig::new(vec![vec![key(kc::J), key(kc::K), key(kc::A)]]);
+    rig.map.combos = vec![sequence(&[0, 1, 2], key(kc::ESCAPE))];
+    rig.map.combo_options = vec![SEQUENCE];
+
+    // Tapped one after the other, far slower than a chord allows.
+    rig.press(0, 0);
+    rig.release(0, 50);
+    rig.press(1, 200);
+    rig.release(1, 250);
+    assert!(rig.out().is_empty());
+    rig.press(2, 400);
+    assert_eq!(rig.out(), ["00:29"]);
+    rig.release(2, 450);
+    assert_eq!(rig.out(), ["00:"]);
+
+    // Out of order: the keys type as they are.
+    rig.press(1, 1000);
+    rig.release(1, 1010);
+    rig.press(0, 1020);
+    rig.press(2, 1030);
+    assert_eq!(rig.out(), ["00:0e", "00:", "00:0d", "00:0d,04"]);
+}
+
+#[test]
+fn sequence_given_up_types_what_was_pressed() {
+    let mut rig = Rig::new(vec![vec![key(kc::J), key(kc::K), key(kc::A)]]);
+    rig.map.combos = vec![sequence(&[0, 1, 2], key(kc::ESCAPE))];
+    rig.map.combo_options = vec![SEQUENCE];
+
+    // Too slow: the time runs from the key before.
+    rig.press(0, 0);
+    rig.release(0, 50);
+    rig.press(1, 200);
+    rig.release(1, 250);
+    assert_eq!(rig.engine.next_deadline(&rig.map), Some(500));
+    rig.tick(500);
+    assert_eq!(rig.out(), ["00:0d", "00:", "00:0e", "00:"]);
+
+    // Another key in between.
+    rig.press(0, 1000);
+    rig.release(0, 1010);
+    rig.press(2, 1020);
+    assert_eq!(rig.out(), ["00:0d", "00:", "00:04"]);
+}
+
+#[test]
+fn shorter_sequence_fires_as_a_tap_when_the_longer_times_out() {
+    let mut rig = Rig::new(vec![vec![key(kc::J), key(kc::K), key(kc::A)]]);
+    rig.map.combos = vec![sequence(&[0, 1], key(kc::ESCAPE)), sequence(&[0, 1, 2], key(kc::TAB))];
+    rig.map.combo_options = vec![SEQUENCE, SEQUENCE];
+    rig.press(0, 0);
+    rig.release(0, 10);
+    rig.press(1, 20);
+    rig.release(1, 30);
+    assert!(rig.out().is_empty());
+    rig.tick(320);
+    assert_eq!(rig.out(), ["00:29", "00:"]);
+}
+
+#[test]
+fn sequence_may_press_a_key_twice() {
+    let mut rig = Rig::new(vec![vec![key(kc::J), key(kc::K)]]);
+    rig.map.combos = vec![sequence(&[0, 0], key(kc::ESCAPE))];
+    rig.map.combo_options = vec![SEQUENCE];
+    rig.press(0, 0);
+    rig.release(0, 10);
+    rig.press(0, 100);
+    assert_eq!(rig.out(), ["00:29"]);
+    rig.release(0, 110);
+    assert_eq!(rig.out(), ["00:"]);
+}
+
+#[test]
+fn combo_on_one_layer_only() {
+    let mut rig = Rig::new(vec![
+        vec![key(kc::J), key(kc::K), basic(Basic::MomentaryLayer(1))],
+        vec![key(kc::N1), key(kc::N1 + 1), Action::Transparent],
+    ]);
+    rig.map.combos = vec![combo(&[0, 1], key(kc::ESCAPE))];
+    rig.map.combo_options = vec![ComboOptions { layers: 0b10, sequence: false }];
+
+    // On layer 0 the keys are not held back at all.
+    rig.press(0, 0);
+    rig.press(1, 10);
+    assert_eq!(rig.out(), ["00:0d", "00:0d,0e"]);
+    rig.release(0, 20);
+    rig.release(1, 30);
+    rig.out();
+
+    rig.press(2, 100);
+    rig.press(0, 110);
+    rig.press(1, 120);
+    assert_eq!(rig.out(), ["00:29"]);
 }
 
 #[test]
