@@ -29,6 +29,12 @@ const keyCount = computed(() => props.session.layout.filter(hasKey).length - kno
 const isHalf = computed(() => role(props.session) !== 'single')
 const other = computed(() => (sideOf(props.session) === 'left' ? 'right' : 'left'))
 const partnerOpen = computed(() => !!partner.value && !partner.value.closed)
+/** The half whose lights the lighting tab sets up. The one without USB is reached over the cable. */
+const litId = ref(props.session.id)
+const lit = computed(() => (partnerOpen.value && partner.value!.id === litId.value ? partner.value! : props.session))
+const lightHalves = computed(() =>
+  isHalf.value && partnerOpen.value ? [props.session, partner.value!].map((half) => ({ id: half.id, side: sideOf(half) })).sort((a) => (a.side === 'left' ? -1 : 1)) : [],
+)
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // Every change is written to the keyboard's flash by itself, a moment after
@@ -62,6 +68,8 @@ async function saveNow() {
   }
 }
 watch(() => props.session.edits, saveSoon)
+// The other half's lights are set up from here too.
+watch(() => partner.value?.edits, saveSoon)
 
 /** After a save this half's keymap is the one this editor shows. */
 async function noteSaved() {
@@ -372,7 +380,7 @@ onBeforeUnmount(() => {
         <KeymapTab v-if="tab === 'keymap'" :session="session" />
         <LayoutTab v-else-if="tab === 'layout'" :session="session" />
         <BehaviorsTab v-else-if="tab === 'behaviours'" :session="session" />
-        <LightingTab v-else-if="tab === 'lighting'" :session="session" />
+        <LightingTab v-else-if="tab === 'lighting'" :key="lit.id" :session="lit" :main="session" :halves="lightHalves" @half="litId = $event" />
         <ShareTab v-else-if="tab === 'share'" :session="session" />
         <div v-else class="hardware-wrap scroll">
           <HardwareTab :session="session" />
