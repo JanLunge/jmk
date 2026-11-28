@@ -73,6 +73,7 @@ fn show(event: &HostEvent) -> String {
             format!("{mods:02x}:{}", keys.join(","))
         }
         HostEvent::Consumer(usage) => format!("consumer {usage:x}"),
+        HostEvent::Mouse { buttons, x, y, wheel, pan } => format!("mouse {buttons} {x},{y} {wheel},{pan}"),
     }
 }
 

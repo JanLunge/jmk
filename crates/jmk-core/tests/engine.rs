@@ -1,5 +1,7 @@
 use jmk_core::keycode::{self as kc, mods};
-use jmk_core::{Action, Basic, Combo, ComboOptions, Engine, HoldTapFlavor, HoldTapProfile, KeyboardReport, Keymap, MacroStep, Output};
+use jmk_core::{
+    Action, Basic, Combo, ComboOptions, Engine, HoldTapFlavor, HoldTapProfile, KeyboardReport, Keymap, MacroStep, MouseReport, Output,
+};
 
 struct Map {
     layers: Vec<Vec<Action>>,
@@ -582,4 +584,10 @@ fn a_layer_is_on_while_the_layers_it_goes_with_are_held_together() {
         rig.release(first, 0);
         assert_eq!(typed(&mut rig), "00:04");
     }
+}
+
+#[test]
+fn mouse_report_layout() {
+    let report = MouseReport { buttons: 5, x: -2, y: 300, wheel: -1, pan: 3 };
+    assert_eq!(report.bytes(), [5, 0xFE, 0xFF, 0x2C, 0x01, 0xFF, 3]);
 }

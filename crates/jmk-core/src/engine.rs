@@ -49,6 +49,34 @@ pub trait Output {
     fn consumer(&mut self, _usage: u16) {}
     /// A [`Basic::Custom`] action was pressed or released.
     fn custom(&mut self, _id: u16, _pressed: bool) {}
+    /// Mouse buttons changed or the cursor moved.
+    fn mouse(&mut self, _report: &MouseReport) {}
+}
+
+/// One mouse report: the buttons held and the movement since the last one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseReport {
+    /// One bit each: bit 0 is the left button, then right, middle, back,
+    /// forward.
+    pub buttons: u8,
+    /// Right is positive.
+    pub x: i16,
+    /// Down is positive.
+    pub y: i16,
+    /// Up is positive.
+    pub wheel: i8,
+    /// Right is positive.
+    pub pan: i8,
+}
+
+impl MouseReport {
+    /// As the USB and Bluetooth descriptors lay it out: buttons, X and Y
+    /// little-endian, wheel, pan.
+    pub fn bytes(&self) -> [u8; 7] {
+        let [x0, x1] = self.x.to_le_bytes();
+        let [y0, y1] = self.y.to_le_bytes();
+        [self.buttons, x0, x1, y0, y1, self.wheel as u8, self.pan as u8]
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

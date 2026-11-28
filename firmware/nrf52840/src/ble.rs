@@ -5,7 +5,7 @@
 //! stored bond.
 
 use embassy_futures::join::join;
-use embassy_futures::select::{select, select3, Either};
+use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_time::{Duration, Timer};
 use jmk_embassy::queue::HidQueues;
 use jmk_embassy::usb::{report_map, MANUFACTURER, PID, PRODUCT, REPORT_MAP_SIZE, VID};
@@ -22,6 +22,7 @@ const BONDS_MAX: usize = crate::bonds::PROFILES + 1;
 
 const KEYBOARD_REPORT_ID: u8 = 1;
 const CONSUMER_REPORT_ID: u8 = 2;
+const MOUSE_REPORT_ID: u8 = 3;
 const INPUT_REPORT: u8 = 1;
 const OUTPUT_REPORT: u8 = 2;
 
@@ -32,7 +33,7 @@ pub fn connected() -> bool {
     CONNECTED.load(core::sync::atomic::Ordering::Relaxed)
 }
 
-static REPORT_MAP: [u8; REPORT_MAP_SIZE] = report_map(KEYBOARD_REPORT_ID, CONSUMER_REPORT_ID);
+static REPORT_MAP: [u8; REPORT_MAP_SIZE] = report_map(KEYBOARD_REPORT_ID, CONSUMER_REPORT_ID, MOUSE_REPORT_ID);
 
 /// HID version 1.11, no country, remote wake and normally connectable.
 const HID_INFORMATION: [u8; 4] = [0x11, 0x01, 0x00, 0x03];
@@ -71,6 +72,9 @@ struct HidService {
     #[descriptor(uuid = descriptors::REPORT_REFERENCE, read, value = [CONSUMER_REPORT_ID, INPUT_REPORT])]
     #[characteristic(uuid = characteristic::REPORT, read, notify, permissions(encrypted))]
     consumer_input: [u8; 2],
+    #[descriptor(uuid = descriptors::REPORT_REFERENCE, read, value = [MOUSE_REPORT_ID, INPUT_REPORT])]
+    #[characteristic(uuid = characteristic::REPORT, read, notify, permissions(encrypted))]
+    mouse_input: [u8; 7],
 }
 
 #[gatt_service(uuid = service::BATTERY)]
@@ -207,12 +211,15 @@ async fn handle_events<C: Controller>(
 /// subscribed; the next report carries the complete state again.
 async fn send_reports(server: &Server<'_>, connection: &GattConnection<'_, '_, DefaultPacketPool>, reports: &HidQueues) {
     loop {
-        match select(reports.keyboard.receive(), reports.consumer.receive()).await {
-            Either::First(report) => {
+        match select3(reports.keyboard.receive(), reports.consumer.receive(), reports.mouse.receive()).await {
+            Either3::First(report) => {
                 let _ = server.hid.keyboard_input.notify(connection, &report, true).await;
             }
-            Either::Second(usage) => {
+            Either3::Second(usage) => {
                 let _ = server.hid.consumer_input.notify(connection, &usage.to_le_bytes(), true).await;
+            }
+            Either3::Third(report) => {
+                let _ = server.hid.mouse_input.notify(connection, &report, true).await;
             }
         }
     }

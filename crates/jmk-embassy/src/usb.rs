@@ -1,5 +1,5 @@
-//! The USB side every port presents: a boot keyboard, consumer control and
-//! the vendor channel for the configurator.
+//! The USB side every port presents: a boot keyboard, consumer control, the
+//! vendor channel for the configurator and a mouse.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -36,6 +36,68 @@ const CONSUMER_DESCRIPTOR: &[u8] = &[
     0xC0,
 ];
 
+/// Five buttons, X and Y as 16 bits, wheel, horizontal wheel (AC Pan). Not
+/// the boot mouse: that has 8-bit X and Y only. Some computers keep a
+/// device's descriptor once read, so change it only with good reason.
+///
+/// One item per line, named as in the USB HID 1.11 specification (§6.2.2,
+/// https://www.usb.org/sites/default/files/hid1_11.pdf); the usages are from
+/// the HID Usage Tables (https://www.usb.org/sites/default/files/hut1_7.pdf).
+/// Each item is a prefix byte, then 0 to 2 bytes of data, little-endian.
+/// The report it describes is [`jmk_core::MouseReport::bytes`].
+const MOUSE_DESCRIPTOR: &[u8] = &[
+    0x05, 0x01, // Usage Page (Generic Desktop)
+    0x09, 0x02, // Usage (Mouse)
+    0xA1, 0x01, // Collection (Application)
+    0x09, 0x01, //   Usage (Pointer)
+    0xA1, 0x00, //   Collection (Physical)
+    //
+    // Byte 0: buttons 1 to 5, one bit each, then 3 bits of padding.
+    0x05, 0x09, //     Usage Page (Button)
+    0x19, 0x01, //     Usage Minimum (Button 1)
+    0x29, 0x05, //     Usage Maximum (Button 5)
+    0x15, 0x00, //     Logical Minimum (0)
+    0x25, 0x01, //     Logical Maximum (1)
+    0x95, 0x05, //     Report Count (5)
+    0x75, 0x01, //     Report Size (1 bit)
+    0x81, 0x02, //     Input (Data, Variable, Absolute)
+    0x95, 0x01, //     Report Count (1)
+    0x75, 0x03, //     Report Size (3 bits)
+    0x81, 0x01, //     Input (Constant): padding
+    //
+    // Bytes 1 to 4: X, then Y, 16 bits each, movement since the last report.
+    0x05, 0x01, //     Usage Page (Generic Desktop)
+    0x09, 0x30, //     Usage (X)
+    0x09, 0x31, //     Usage (Y)
+    0x16, 0x01, 0x80, //     Logical Minimum (-32767)
+    0x26, 0xFF, 0x7F, //     Logical Maximum (32767)
+    0x75, 0x10, //     Report Size (16 bits)
+    0x95, 0x02, //     Report Count (2)
+    0x81, 0x06, //     Input (Data, Variable, Relative)
+    //
+    // Byte 5: the wheel, steps since the last report, up is positive.
+    0x09, 0x38, //     Usage (Wheel)
+    0x15, 0x81, //     Logical Minimum (-127)
+    0x25, 0x7F, //     Logical Maximum (127)
+    0x75, 0x08, //     Report Size (8 bits)
+    0x95, 0x01, //     Report Count (1)
+    0x81, 0x06, //     Input (Data, Variable, Relative)
+    //
+    // Byte 6: horizontal scrolling, right is positive.
+    0x05, 0x0C, //     Usage Page (Consumer)
+    0x0A, 0x38, 0x02, //     Usage (AC Pan, 0x0238)
+    0x15, 0x81, //     Logical Minimum (-127)
+    0x25, 0x7F, //     Logical Maximum (127)
+    0x75, 0x08, //     Report Size (8 bits)
+    0x95, 0x01, //     Report Count (1)
+    0x81, 0x06, //     Input (Data, Variable, Relative)
+    //
+    0xC0, //   End Collection (Physical)
+    0xC0, // End Collection (Application)
+];
+/// Bytes in a mouse report, see [`jmk_core::MouseReport::bytes`].
+const MOUSE_REPORT_SIZE: usize = 7;
+
 /// Vendor-defined 64-byte reports in both directions for the configurator.
 const CONFIG_DESCRIPTOR: &[u8] = &[
     0x06, 0x4A, 0xFF, 0x09, 0x01, 0xA1, 0x01, // Vendor page 0xFF4A, usage 1, Application
@@ -48,22 +110,41 @@ const CONFIG_DESCRIPTOR: &[u8] = &[
 /// Where a collection's own items start: after usage page, usage and the
 /// collection opener.
 const COLLECTION_HEADER: usize = 6;
-pub const REPORT_MAP_SIZE: usize = KEYBOARD_DESCRIPTOR.len() + CONSUMER_DESCRIPTOR.len() + 4;
 
-/// The keyboard and consumer descriptors as one report map with report IDs,
-/// for transports that carry all reports in one HID device (Bluetooth).
-pub const fn report_map(keyboard_id: u8, consumer_id: u8) -> [u8; REPORT_MAP_SIZE] {
+/// The descriptors a report map joins, in the order of `report_map`'s IDs.
+const REPORT_MAP_PARTS: [&[u8]; 3] = [KEYBOARD_DESCRIPTOR, CONSUMER_DESCRIPTOR, MOUSE_DESCRIPTOR];
+/// Prefix of a Report ID item with one byte of data (HID 1.11, §6.2.2.7).
+const REPORT_ID_PREFIX: u8 = 0x85;
+/// The Report ID item `report_map` puts into each descriptor: the prefix,
+/// then the ID.
+const REPORT_ID_ITEM: usize = 2;
+/// Every descriptor in `REPORT_MAP_PARTS`, each with its Report ID item.
+pub const REPORT_MAP_SIZE: usize = {
+    let mut size = 0;
+    let mut part = 0;
+    while part < REPORT_MAP_PARTS.len() {
+        size += REPORT_MAP_PARTS[part].len() + REPORT_ID_ITEM;
+        part += 1;
+    }
+    size
+};
+
+/// The keyboard, consumer and mouse descriptors as one report map with
+/// report IDs, for transports that carry all reports in one HID device
+/// (Bluetooth).
+pub const fn report_map(keyboard_id: u8, consumer_id: u8, mouse_id: u8) -> [u8; REPORT_MAP_SIZE] {
+    let ids = [keyboard_id, consumer_id, mouse_id];
     let mut map = [0; REPORT_MAP_SIZE];
     let mut at = 0;
     let mut part = 0;
-    while part < 2 {
-        let (descriptor, id) = if part == 0 { (KEYBOARD_DESCRIPTOR, keyboard_id) } else { (CONSUMER_DESCRIPTOR, consumer_id) };
+    while part < REPORT_MAP_PARTS.len() {
+        let (descriptor, id) = (REPORT_MAP_PARTS[part], ids[part]);
         let mut i = 0;
         while i < descriptor.len() {
             if i == COLLECTION_HEADER {
-                map[at] = 0x85; // Report ID
+                map[at] = REPORT_ID_PREFIX;
                 map[at + 1] = id;
-                at += 2;
+                at += REPORT_ID_ITEM;
             }
             map[at] = descriptor[i];
             at += 1;
@@ -129,11 +210,13 @@ pub struct Usb<D: Driver<'static>> {
     keyboard: Keyboard<D>,
     consumer: Consumer<D>,
     config: ConfigChannel<D>,
+    mouse: Mouse<D>,
 }
 
 struct Keyboard<D: Driver<'static>>(HidReaderWriter<'static, D, 1, 8>);
 struct Consumer<D: Driver<'static>>(HidWriter<'static, D, 2>);
 struct ConfigChannel<D: Driver<'static>>(HidReaderWriter<'static, D, REPORT_SIZE, REPORT_SIZE>);
+struct Mouse<D: Driver<'static>>(HidWriter<'static, D, MOUSE_REPORT_SIZE>);
 
 impl<D: Driver<'static>> Usb<D> {
     /// Must be called at most once.
@@ -144,6 +227,7 @@ impl<D: Driver<'static>> Usb<D> {
         static KEYBOARD_STATE: StaticCell<State> = StaticCell::new();
         static CONSUMER_STATE: StaticCell<State> = StaticCell::new();
         static CONFIG_STATE: StaticCell<State> = StaticCell::new();
+        static MOUSE_STATE: StaticCell<State> = StaticCell::new();
         static BUS_STATE: StaticCell<BusState> = StaticCell::new();
 
         let mut config = Config::new(VID, PID);
@@ -164,7 +248,8 @@ impl<D: Driver<'static>> Usb<D> {
         // The order is part of what a computer is told: on Linux the udev
         // rule (app/linux/70-jmk-keyboard.rules) lets programs of the user
         // at the third interface, the settings channel, and at no other.
-        // A new interface goes after these three.
+        // A new interface goes after these three; the mouse is the first
+        // that did.
         let keyboard = HidReaderWriter::new(
             &mut builder,
             KEYBOARD_STATE.init(State::new()),
@@ -202,19 +287,33 @@ impl<D: Driver<'static>> Usb<D> {
             },
         );
 
+        let mouse = HidWriter::new(
+            &mut builder,
+            MOUSE_STATE.init(State::new()),
+            HidConfig {
+                report_descriptor: MOUSE_DESCRIPTOR,
+                request_handler: None,
+                poll_ms: 1,
+                max_packet_size: 8,
+                hid_subclass: HidSubclass::No,
+                hid_boot_protocol: HidBootProtocol::None,
+            },
+        );
+
         Usb {
             device: builder.build(),
             keyboard: Keyboard(keyboard),
             consumer: Consumer(consumer),
             config: ConfigChannel(config),
+            mouse: Mouse(mouse),
         }
     }
 
-    /// Run the bus and all three interfaces, forever.
+    /// Run the bus and all four interfaces, forever.
     pub async fn run(mut self, hid: &HidQueues, config: &ConfigQueues) {
         join(
             join(self.device.run(), self.config.run(config)),
-            join(self.keyboard.run(hid), self.consumer.run(hid)),
+            join(join(self.keyboard.run(hid), self.consumer.run(hid)), self.mouse.run(hid)),
         )
         .await;
     }
@@ -255,6 +354,16 @@ impl<D: Driver<'static>> Consumer<D> {
     }
 }
 
+impl<D: Driver<'static>> Mouse<D> {
+    /// Send queued mouse reports to the host.
+    async fn run(mut self, queues: &HidQueues) {
+        loop {
+            let report = queues.mouse.receive().await;
+            let _ = self.0.write(&report).await;
+        }
+    }
+}
+
 impl<D: Driver<'static>> ConfigChannel<D> {
     /// Move configurator frames between the host and the two queues.
     async fn run(self, queues: &ConfigQueues) {
@@ -284,11 +393,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn report_map_is_both_descriptors_with_report_ids() {
-        let map = report_map(1, 2);
-        let keyboard_end = KEYBOARD_DESCRIPTOR.len() + 2;
-        let (keyboard, consumer) = map.split_at(keyboard_end);
-        for (part, descriptor, id) in [(keyboard, KEYBOARD_DESCRIPTOR, 1), (consumer, CONSUMER_DESCRIPTOR, 2)] {
+    fn report_map_is_all_descriptors_with_report_ids() {
+        let map = report_map(1, 2, 3);
+        let (keyboard, rest) = map.split_at(KEYBOARD_DESCRIPTOR.len() + 2);
+        let (consumer, mouse) = rest.split_at(CONSUMER_DESCRIPTOR.len() + 2);
+        for (part, descriptor, id) in [(keyboard, KEYBOARD_DESCRIPTOR, 1), (consumer, CONSUMER_DESCRIPTOR, 2), (mouse, MOUSE_DESCRIPTOR, 3)] {
             assert_eq!(part[..COLLECTION_HEADER], descriptor[..COLLECTION_HEADER]);
             assert_eq!(part[COLLECTION_HEADER..COLLECTION_HEADER + 2], [0x85, id]);
             assert_eq!(part[COLLECTION_HEADER + 2..], descriptor[COLLECTION_HEADER..]);

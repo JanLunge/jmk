@@ -169,6 +169,8 @@ const typed = computed(() => {
       if (event.Consumer) out.push('♪')
       continue
     }
+    // Nothing sends mouse reports yet.
+    if ('Mouse' in event) continue
     const before = previous.get(half) ?? []
     const fresh = event.Keyboard.keys.filter((k) => !before.includes(k))
     previous.set(half, event.Keyboard.keys)
