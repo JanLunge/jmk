@@ -13,6 +13,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --port 4173 --strictPort",
     "start": "npm run build && electron .",
+    "start:fw": "../scripts/wasm.sh && ../scripts/firmware.sh && npm start",
     "test": "vitest run",
     "e2e": "playwright test",
     "prebuild": "npm run wasm",
