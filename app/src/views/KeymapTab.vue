@@ -463,8 +463,8 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
       <KeymapOverview v-if="view === 'all'" :session="session" />
 
       <template v-else>
-        <!-- One keyboard for both: arranging it puts it on a grid, in a box, and nothing moves. -->
-        <div ref="board" class="board" :class="{ boxed: arranger }" :title="arranger ? '' : 'Drag a key onto another to swap them. Shift-click or drag across keys to change several at once.'" @pointerdown="bandDown">
+        <!-- One keyboard for both: arranging it puts it on a grid, and nothing moves. -->
+        <div ref="board" class="board" :class="{ gridded: arranger }" :title="arranger ? '' : 'Drag a key onto another to swap them. Shift-click or drag across keys to change several at once.'" @pointerdown="bandDown">
           <KeyboardView
             :layout="arranger?.draft ?? session.layout"
             :frame="arranger?.frame"
@@ -791,22 +791,17 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
   justify-content: center;
   gap: 10px;
   padding: 4px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  transition:
-    background 0.2s,
-    border-color 0.2s;
 }
 
-/* Arranging: the grid under the keys runs to the edge of this box. */
-.board.boxed {
+/* Arranging: the grid under the keys is all that tells it apart. It runs out towards the edges, with no box around it. */
+.board.gridded {
   overflow: hidden;
-  border-color: var(--line);
-  background: var(--panel);
+  mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent), linear-gradient(transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-composite: intersect;
 }
 
-.board.boxed :deep(.key),
-.board.boxed :deep(.half) {
+.board.gridded :deep(.key),
+.board.gridded :deep(.half) {
   cursor: grab;
 }
 

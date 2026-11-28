@@ -34,7 +34,7 @@ const props = withDefaults(
     maxUnit?: number
     /** The part of the picture to show, when it must hold still while keys are moved. Otherwise what the keys cover. */
     frame?: Bounds
-    /** Draw the keys on a grid of key units, for arranging them. It runs past the edge of the picture; the box around clips it. */
+    /** Draw the keys on a grid of key units, for arranging them. It runs past the edge of the picture; what is around clips it. */
     grid?: boolean
   }>(),
   { maxUnit: 62 },
