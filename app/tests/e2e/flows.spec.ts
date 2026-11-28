@@ -219,6 +219,20 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
   await page.click('[data-test=reverse-0]')
   await page.click('[data-test=knob-cw-0]')
   await expect(typed(page)).toHaveText(before! + before![1])
+
+  // The knob is also a switch: on key 3 it is drawn as one round key, turned and pressed.
+  await page.click('[data-test=nav-layout]')
+  await page.locator('[data-test=layout-canvas] [data-pos="3"]').dispatchEvent('pointerdown')
+  await page.dispatchEvent('body', 'pointerup')
+  await page.selectOption('[data-test=knob-on-key]', '4')
+  await expect(page.locator('[data-test=layout-canvas] [data-pos="4"]')).toHaveCount(0)
+  await page.click('[data-test=nav-keymap]')
+  await expect(page.locator('[data-test=keymap-board] .key[data-pos="3"]')).toHaveCount(0)
+  await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos]')).toHaveCount(3)
+  await assign(page, 3, 4) // pressing the knob: A
+  await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos="3"]')).toContainText('A')
+  await saved(page)
+  if (process.env.SHOTS) await page.locator('[data-test=keymap-board]').screenshot({ path: `${process.env.SHOTS}/knob-on-key.png` })
 })
 
 const splitStatus = (page: Page) => page.locator('[data-test=split-status]')

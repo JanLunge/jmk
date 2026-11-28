@@ -4,7 +4,7 @@
 import { computed, ref } from 'vue'
 import { carriesKey } from '../lib/drag'
 import type { Legend } from '../lib/keycodes'
-import { bounds, hasKey } from '../lib/layout'
+import { bounds, hasKey, knobKey } from '../lib/layout'
 import type { KeyGeometry } from '../lib/protocol'
 
 const props = withDefaults(
@@ -62,11 +62,14 @@ const viewBox = computed(() => `${box.value.x - PAD} ${box.value.y - PAD} ${box.
 const maxWidth = computed(() => ((box.value.w + 2 * PAD) / 100) * props.maxUnit)
 
 const isKnob = (pos: number) => !!props.knobs?.includes(pos)
+/** Per knob in the picture, the switch it sits on (-1: none). */
+const presses = computed(() => new Map((props.knobs ?? []).map((pos) => [pos, knobKey(props.layout, props.knobs!, pos)])))
+const underKnob = computed(() => new Set(presses.value.values()))
 
 const keys = computed(() =>
   props.layout
     .map((key, pos) => ({ key, pos }))
-    .filter(({ key, pos }) => hasKey(key) && !isKnob(pos))
+    .filter(({ key, pos }) => hasKey(key) && !isKnob(pos) && !underKnob.value.has(pos))
     .map(({ key, pos }) => {
       const legend = props.legend?.(pos)
       return {
@@ -88,17 +91,25 @@ const dials = computed(() =>
       const cx = key.x + key.w / 2
       const cy = key.y + key.h / 2
       const r = Math.min(key.w, key.h) / 2 - 5
+      const press = presses.value.get(pos)!
       return {
         pos,
         cx,
         cy,
         r,
         transform: `rotate(${key.r / 10} ${cx} ${cy})`,
-        // Left half turns one way, right half the other.
-        halves: [
-          { pos, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 0 ${cx} ${cy + r} Z`, x: cx - r / 2, arrow: '⟲' },
-          { pos: pos + 1, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 1 ${cx} ${cy + r} Z`, x: cx + r / 2, arrow: '⟳' },
-        ].map((half) => ({ ...half, text: props.legend?.(half.pos)?.main ?? '' })),
+        // Left turns one way, right the other. A knob on a switch keeps its lower half for the press.
+        halves: (press < 0
+          ? [
+              { pos, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 0 ${cx} ${cy + r} Z`, x: cx - r / 2, y: cy + 6, arrow: '⟲' },
+              { pos: pos + 1, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 1 ${cx} ${cy + r} Z`, x: cx + r / 2, y: cy + 6, arrow: '⟳' },
+            ]
+          : [
+              { pos, d: `M ${cx} ${cy} H ${cx - r} A ${r} ${r} 0 0 1 ${cx} ${cy - r} Z`, x: cx - r * 0.45, y: cy - r * 0.18, arrow: '⟲' },
+              { pos: pos + 1, d: `M ${cx} ${cy} V ${cy - r} A ${r} ${r} 0 0 1 ${cx + r} ${cy} Z`, x: cx + r * 0.45, y: cy - r * 0.18, arrow: '⟳' },
+              { pos: press, d: `M ${cx - r} ${cy} A ${r} ${r} 0 0 0 ${cx + r} ${cy} Z`, x: cx, y: cy + r * 0.5, arrow: '' },
+            ]
+        ).map((half) => ({ ...half, text: props.legend?.(half.pos)?.main ?? '', room: half.arrow ? r - 8 : 1.5 * r })),
       }
     }),
 )
@@ -176,8 +187,8 @@ function fontSize(text: string, width: number): number {
         @pointerup="interactive && emit('up', half.pos, $event)"
       >
         <path :d="half.d" />
-        <text class="arrow" :x="half.x" :y="dial.cy - dial.r / 2.4">{{ half.arrow }}</text>
-        <text class="main" :x="half.x" :y="dial.cy + 6" :font-size="Math.max(11, Math.min(18, (dial.r - 8) / Math.max(half.text.length, 1) / 0.6))">
+        <text class="arrow" :x="half.x" :y="half.y - dial.r / 2.4 - 6">{{ half.arrow }}</text>
+        <text class="main" :x="half.x" :y="half.y" :font-size="Math.max(11, Math.min(18, half.room / Math.max(half.text.length, 1) / 0.6))">
           {{ half.text }}
         </text>
       </g>
