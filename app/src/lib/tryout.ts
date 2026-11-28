@@ -5,9 +5,12 @@ import { nextTick } from 'vue'
 import { ReportReader, type Stroke } from './keyfeed'
 import { clearLog, logLoseHeld, logPress, logRelease, newKeyLog, type KeyLog } from './keylog'
 import { onHostEvent } from './session'
+import { clearSpeed, newSpeed, speedChar, type Speed } from './speed'
 
 export interface Tryout {
   log: KeyLog
+  /** How fast the characters came. */
+  speed: Speed
   /** What a virtual keyboard typed into the field in the header. */
   text: string
   /** The typing test is open. */
@@ -16,12 +19,13 @@ export interface Tryout {
   hear?: (stroke: Stroke, at: number) => void
 }
 
-export const newTryout = (): Tryout => ({ log: newKeyLog(), text: '', expanded: false })
+export const newTryout = (): Tryout => ({ log: newKeyLog(), speed: newSpeed(), text: '', expanded: false })
 
 /** A key went down or up at `at`. `typing`: what it types goes into the field's text, as a virtual keyboard has no field of the computer's to type into. */
 export function takeStroke(tryout: Tryout, stroke: Stroke, at: number, typing = false): void {
   if (stroke.down) logPress(tryout.log, stroke.key, stroke.label, at)
   else logRelease(tryout.log, stroke.key, at)
+  if (stroke.down && stroke.kind === 'char') speedChar(tryout.speed, at)
   if (typing && stroke.down && !tryout.expanded) {
     if (stroke.kind === 'backspace') tryout.text = stroke.word ? tryout.text.replace(/\S*\s*$/, '') : [...tryout.text].slice(0, -1).join('')
     else if (stroke.text) tryout.text = (tryout.text + stroke.text).slice(-400)
@@ -47,6 +51,7 @@ export function setExpanded(tryout: Tryout, on: boolean): void {
 export function clearTryout(tryout: Tryout): void {
   tryout.text = ''
   clearLog(tryout.log)
+  clearSpeed(tryout.speed)
 }
 
 export const loseHeld = (tryout: Tryout) => logLoseHeld(tryout.log)

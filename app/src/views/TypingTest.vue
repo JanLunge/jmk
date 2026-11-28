@@ -295,7 +295,9 @@ const hint = computed(() => {
         </div>
 
         <div v-if="free" ref="page" class="free mono" data-test="test-free">
-          <p><span v-if="!test.typed[0]" class="ghost">Type anything.</span>{{ test.typed[0] }}<i class="caret inline" /></p>
+          <!-- Empty, it reads as a placeholder does: the caret stands at the start, and the first character takes the hint's place. -->
+          <p v-if="!test.typed[0]"><i class="caret inline lead" /><span class="ghost">Type anything.</span></p>
+          <p v-else>{{ test.typed[0] }}<i class="caret inline" /></p>
         </div>
         <div v-else class="window" data-test="test-words">
           <div ref="lines" class="lines mono" :style="{ transform: `translateY(${-scrolled}px)` }">
@@ -554,6 +556,12 @@ kbd {
   height: 1.15em;
   margin-left: 1px;
   vertical-align: text-bottom;
+}
+
+/* Before the hint, taking no room: what is typed starts exactly where the hint did. */
+.caret.lead {
+  margin-left: 0;
+  margin-right: -2.5px;
 }
 
 @keyframes blink {

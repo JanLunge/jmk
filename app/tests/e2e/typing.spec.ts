@@ -209,6 +209,27 @@ test("the computer's own keyboard, as a real keyboard types: the field, its log 
   await page.keyboard.press('Escape')
   await expect(page.locator('[data-test=scratch-log]')).toHaveCount(0)
 
+  // The corner of the field says how fast the last stretch of typing was; a click tells more.
+  await expect(page.locator('[data-test=scratch-speed]')).toBeDisabled()
+  await page.click('[data-test=scratch-text]')
+  await page.keyboard.type('hello there', { delay: 60 })
+  // Typed by a machine it is fast; how fast depends on how the keys before it fall into the burst.
+  const speed = Number((await page.locator('[data-test=scratch-speed] strong').textContent()) ?? '')
+  expect(speed).toBeGreaterThan(20)
+  expect(speed).toBeLessThan(260)
+  // The keys line up from the left in the order they came.
+  const strip = (await page.locator('[data-test=scratch-keys]').boundingBox())!
+  const firstKey = (await page.locator('[data-test=scratch-keys] .key').first().boundingBox())!
+  expect(firstKey.x - strip.x).toBeLessThan(20)
+  await page.click('[data-test=scratch-speed]')
+  await expect(page.locator('[data-test=scratch-speed-panel]')).toBeVisible()
+  await expect(page.locator('[data-test=speed-last]')).toHaveText(String(speed))
+  await expect(page.locator('[data-test=speed-best]')).toHaveText(String(speed))
+  // Start to end has the pauses in it, so it is never the faster one.
+  expect(Number(await page.locator('[data-test=speed-overall]').textContent())).toBeLessThanOrEqual(speed)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('[data-test=scratch-speed-panel]')).toHaveCount(0)
+
   await page.click('[data-test=scratch-expand]')
   await page.click('[data-test=test-mode-0]')
   await expect(page.locator('[data-test=test-input]')).toBeFocused()
