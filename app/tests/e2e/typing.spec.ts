@@ -91,6 +91,8 @@ test('a timed typing test on a virtual keyboard: words, mistakes, the result and
   const wrong = second[0] === 'q' ? 'w' : 'q'
   await type(page, wrong)
   await expect(page.locator('[data-test=test-words] [data-word="1"] .letter.bad')).toHaveCount(1)
+  // Under it, small: the key that was pressed in its place.
+  await expect(page.locator('[data-test=test-words] [data-word="1"] [data-test=test-was]')).toHaveText(wrong)
   await tap(page, BKSP, 50)
   await expect(page.locator('[data-test=test-words] [data-word="1"] .letter.bad')).toHaveCount(0)
   await type(page, second + ' ')

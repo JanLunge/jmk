@@ -115,17 +115,23 @@ onBeforeUnmount(() => {
 })
 
 // --- The words ---------------------------------------------------------------------
+/** Keys that print nothing to see, as their signs. */
+const SHOWN: Record<string, string> = { ' ': '␣', '\t': '⇥', '\n': '⏎', '\u00a0': '␣' }
 const current = computed(() => test.value.typed.length - 1)
 const words = computed(() => {
   const { words, typed } = test.value
   return words.slice(0, typed.length + 45).map((word, index) => {
     const got = typed[index] ?? ''
     const past = index < current.value
-    const letters: { char: string; state: 'ok' | 'bad' | 'extra' | 'missed' | 'todo' }[] = []
+    // `was`: the key that came in a letter's place, shown small under it.
+    const letters: { char: string; state: 'ok' | 'bad' | 'extra' | 'missed' | 'todo'; was?: string }[] = []
     for (let at = 0; at < Math.max(word.length, got.length); at++) {
       if (at >= word.length) letters.push({ char: got[at], state: 'extra' })
+      // A word left early: Space came where its next letter was due.
+      else if (at === got.length && past) letters.push({ char: word[at], state: 'bad', was: SHOWN[' '] })
       else if (at >= got.length) letters.push({ char: word[at], state: past ? 'missed' : 'todo' })
-      else letters.push({ char: word[at], state: got[at] === word[at] ? 'ok' : 'bad' })
+      else if (got[at] === word[at]) letters.push({ char: word[at], state: 'ok' })
+      else letters.push({ char: word[at], state: 'bad', was: SHOWN[got[at]] ?? got[at] })
     }
     return { index, letters, wrong: past && got !== word }
   })
@@ -303,7 +309,7 @@ const hint = computed(() => {
           <div ref="lines" class="lines mono" :style="{ transform: `translateY(${-scrolled}px)` }">
             <i v-if="caret.shown" class="caret" :style="{ transform: `translate(${caret.x}px, ${caret.y}px)` }" />
             <span v-for="word in words" :key="word.index" class="word" :class="{ current: word.index === current, wrong: word.wrong }" :data-word="word.index">
-              <span v-for="(letter, at) in word.letters" :key="at" class="letter" :class="letter.state">{{ letter.char }}</span>
+              <span v-for="(letter, at) in word.letters" :key="at" class="letter" :class="letter.state">{{ letter.char }}<small v-if="letter.was" class="was" aria-hidden="true" data-test="test-was">{{ letter.was }}</small></span>
             </span>
           </div>
         </div>
@@ -524,6 +530,24 @@ kbd {
 
 .letter.bad {
   color: var(--danger);
+}
+
+.letter.bad {
+  position: relative;
+}
+
+/* What was pressed instead, small and quiet under the letter that was due. */
+.was {
+  position: absolute;
+  left: 50%;
+  /* Below the line that marks a wrong word, in the gap before the next row of words. */
+  top: calc(var(--pitch) * 0.83);
+  transform: translateX(-50%);
+  font-size: 0.46em;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--muted);
+  pointer-events: none;
 }
 
 .letter.extra {
