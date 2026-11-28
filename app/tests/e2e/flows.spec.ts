@@ -221,19 +221,22 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
   await expect(typed(page)).toHaveText(before! + before![1])
 
   // The knob is also a switch: on key 3 it is drawn as one round key, turned and pressed.
+  // Slowly when filmed, so that each state can be seen.
+  const pause = () => page.waitForTimeout(process.env.SHOTS ? 1500 : 0)
   await page.click('[data-test=nav-layout]')
+  await pause()
   await page.locator('[data-test=layout-canvas] [data-pos="3"]').dispatchEvent('pointerdown')
   await page.dispatchEvent('body', 'pointerup')
+  await pause()
   await page.selectOption('[data-test=knob-on-key]', '4')
   await expect(page.locator('[data-test=layout-canvas] [data-pos="4"]')).toHaveCount(0)
+  await pause()
   await page.click('[data-test=nav-keymap]')
   await expect(page.locator('[data-test=keymap-board] .key[data-pos="3"]')).toHaveCount(0)
   await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos]')).toHaveCount(3)
   // The turns are small tabs on the key; with the knob selected they grow, to be easy to hit.
   const part = (pos: number) => page.locator(`[data-test=keymap-board] [data-knob="4"] [data-pos="${pos}"]`)
   const small = (await part(5).boundingBox())!
-  // Slowly when filmed, so that each state can be seen.
-  const pause = () => page.waitForTimeout(process.env.SHOTS ? 1500 : 0)
   await pause()
   await assign(page, 3, 4) // pressing the knob: A
   await expect(part(3)).toContainText('A')

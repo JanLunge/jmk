@@ -386,10 +386,10 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
           </label>
         </div>
         <label v-if="knobs.length && selection.size === 1 && !isKnob([...selection][0])" class="field">
-          Knob on this key
+          Knob on this key (pressing the knob is this key)
           <select class="input" data-test="knob-on-key" :value="knobOn([...selection][0]) ?? ''" @change="setKnob([...selection][0], ($event.target as HTMLSelectElement).value === '' ? undefined : Number(($event.target as HTMLSelectElement).value))">
             <option value="">none</option>
-            <option v-for="(knob, index) in knobs" :key="knob" :value="knob">knob {{ index + 1 }}: turning it, and pressing it is this key</option>
+            <option v-for="(knob, index) in knobs" :key="knob" :value="knob">knob {{ index + 1 }}</option>
           </select>
         </label>
         <div class="row">
@@ -525,8 +525,13 @@ text {
 
 .fields {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
+}
+
+/* A number box is as wide as its column, not as wide as it likes. */
+.fields .input {
+  width: 100%;
 }
 
 .tools {
