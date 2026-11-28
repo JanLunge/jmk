@@ -13,6 +13,8 @@ export interface Keymap {
   macroNames?: string[]
   /** A colour number per layer (see layers.ts). */
   layerColors?: number[]
+  /** Per layer: the layers, one bit each, that turn it on while all of them are on. */
+  layersWith?: number[]
 }
 
 export interface Definition {

@@ -21,6 +21,7 @@ const poster = computed(() =>
       layout: props.session.layout,
       layers: props.session.layers,
       layerColors: props.session.layerColors,
+      layersWith: props.session.layersWith,
       knobs: knobPositions(props.session),
       combos: props.session.combos,
     },
@@ -61,7 +62,7 @@ function saveSvg() {
     <div class="paper scroll" :class="{ dark }" data-test="poster" v-html="poster.svg" />
     <p class="muted small">
       <template v-if="mode === 'stacked'">The base layer is in the middle of each key; the other layers sit around it in their colours.</template>
-      <template v-else>Faint keys are see-through: they do what the layer below says.</template>
+      <template v-else>Faint keys are see-through: they do what the base layer says, or a layer theirs is on together with.</template>
       The saved picture is what you see here.
     </p>
   </div>

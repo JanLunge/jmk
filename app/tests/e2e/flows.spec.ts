@@ -962,6 +962,24 @@ test('keymap: drag from the picker, swap keys, colour a layer, see all layers', 
   const download = page.waitForEvent('download')
   await page.click('[data-test=save-png]')
   expect((await download).suggestedFilename()).toMatch(/-keymap\.png$/)
+
+  // A layer that is on while two others are held together.
+  await page.click('[data-test=all-layers]')
+  await page.click('[data-test=add-layer]')
+  await page.click('[data-test=add-layer]')
+  await expect(page.locator('[data-test=layer-3]')).toHaveClass(/on/)
+  await page.click('[data-test=layer-3]')
+  await page.click('[data-test=join-1]')
+  await page.click('[data-test=join-2]')
+  await expect(page.locator('[data-test=join-2]')).toHaveClass(/primary/)
+  await page.click('[data-test=layer-0]')
+  await page.click('[data-test=tab-layers]')
+  await page.dragAndDrop('[data-test=layer-hold-2]', '[data-test=keymap-board] [data-pos="4"]')
+  await hold(page, 5)
+  await expect(page.locator('[data-test=layer-1]')).toHaveClass(/live/)
+  await expect(page.locator('[data-test=layer-3]')).not.toHaveClass(/live/)
+  await hold(page, 4)
+  await expect(page.locator('[data-test=layer-3]')).toHaveClass(/live/)
 })
 
 test('setup: one keyboard in one piece is guided through, and its controller works itself out', async ({ page }) => {

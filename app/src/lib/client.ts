@@ -224,6 +224,9 @@ export class KeyboardClient {
   identifyLed = (led: number | null) => this.ok({ IdentifyLed: led })
   indicators = (): Promise<Indicators> => this.expect('GetIndicators', 'Indicators')
   setIndicators = (indicators: Indicators) => this.ok({ SetIndicators: indicators })
+  layersWith = (): Promise<number[]> => this.expect('GetLayersWith', 'LayersWith')
+  /** The keyboard wants one number for each layer it could hold. */
+  setLayersWith = (masks: number[]) => this.shared({ SetLayersWith: [...Array(8).keys()].map((layer) => masks[layer] ?? 0) })
   layerColors = (): Promise<number[]> => this.expect('GetLayerColors', 'LayerColors')
   setLayerColors = (colors: number[]) => this.shared({ SetLayerColors: colors })
   macroName = (index: number): Promise<string> => this.expect({ GetMacroName: { index } }, 'MacroName')
