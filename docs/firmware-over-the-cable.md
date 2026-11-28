@@ -1,7 +1,7 @@
 # Plan: firmware updates over the cable
 
 Status: idea, not started. Builds on settings over the cable (`Request::Peer`,
-protocol 13, see [internals.md](internals.md)).
+protocol 16, see [internals.md](internals.md)).
 
 ## Goal
 

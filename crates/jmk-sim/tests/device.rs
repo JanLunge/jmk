@@ -3,8 +3,9 @@
 use jmk_core::keycode as kc;
 use jmk_core::{Action, Basic, MacroStep};
 use jmk_proto::{
-    ColorOrder, Contact, DiodeDirection, Effect, EncoderConfig, Error, Event, HardwareConfig, KeyGeometry, Led,
-    LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, ScanConfig, SplitConfig, SplitStatus, SplitSync,
+    ColorOrder, Contact, DiodeDirection, Effect, EncoderConfig, Error, Event, HardwareConfig, Indicator, Indicators, KeyGeometry,
+    Led, LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, ScanConfig, Shows, SplitConfig, SplitStatus,
+    SplitSync,
 };
 use jmk_sim::{HostEvent, VirtualKeyboard, Wire, Wiring};
 
@@ -1273,6 +1274,125 @@ fn lighting_is_saved_and_a_save_from_before_lighting_still_loads() {
 }
 
 #[test]
+fn what_the_lights_show_follows_to_the_other_half() {
+    let (mut left, mut right) = saved_pair();
+    for half in [&mut left, &mut right] {
+        half.ok(Request::SetLighting(lighting(Effect::Off, Effect::Off)));
+        half.ok(Request::Save);
+    }
+    run_both(&mut left, &mut right, 1000);
+    let mut wanted = lighting(Effect::Breathing, Effect::Solid);
+    // The chain is each half's own: this one has a light fewer.
+    wanted.leds.pop();
+    left.ok(Request::SetLighting(wanted.clone()));
+    left.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    let Response::Lighting(got) = right.kb.request(Request::GetLighting) else { panic!() };
+    assert_eq!((got.keys, got.underglow), (wanted.keys, wanted.underglow));
+    assert_eq!(got.leds.len(), 3);
+    assert_eq!((split_status(&mut left).sync, split_status(&mut right).sync), (SplitSync::Same, SplitSync::Same));
+}
+
+#[test]
+fn the_lights_of_both_halves_answer_to_keys_of_either_and_move_as_one() {
+    let (mut left, mut right) = saved_pair();
+    // The right half has been running for half a breath longer.
+    right.kb.advance(1160);
+    let mut slow = lighting(Effect::Breathing, Effect::Reactive);
+    slow.keys.speed = 10;
+    for half in [&mut left, &mut right] {
+        half.ok(Request::SetLighting(slow.clone()));
+    }
+    for _ in 0..5 {
+        run_both(&mut left, &mut right, 300);
+        let level = |rig: &Rig| rig.kb.pins().lights()[0][1] as i32;
+        assert!((level(&left) - level(&right)).abs() <= 4, "breathing in step: {} and {}", level(&left), level(&right));
+    }
+
+    // A key of the half that types lights the other half's underglow too,
+    // and the other way round.
+    for (typed_on_left, key) in [(true, 0), (false, 1)] {
+        run_both(&mut left, &mut right, 700);
+        assert_eq!((left.kb.pins().lights()[2], right.kb.pins().lights()[2]), ([0; 3], [0; 3]));
+        if typed_on_left { &mut left } else { &mut right }.kb.set_key(key, true);
+        run_both(&mut left, &mut right, 60);
+        assert_ne!(left.kb.pins().lights()[2], [0; 3]);
+        assert_ne!(right.kb.pins().lights()[2], [0; 3]);
+        if typed_on_left { &mut left } else { &mut right }.kb.set_key(key, false);
+    }
+}
+
+fn indicators(pin: Option<Pin>, list: &[Indicator]) -> Indicators {
+    Indicators { pin, active_low: false, list: list.iter().copied().collect() }
+}
+
+#[test]
+fn a_light_shows_caps_lock_or_a_layer_instead_of_its_effect() {
+    let mut rig = Rig::wires(&[Wire::Ground(2), Wire::Ground(3)]);
+    rig.ok(Request::SetHardware(HardwareConfig { reserved_pins: pins(&[25]), ..direct(&[2, 3]) }));
+    rig.ok(Request::SetLayerCount(2));
+    rig.ok(Request::SetActions { layer: 0, pos: 0, actions: [Action::Basic(Basic::MomentaryLayer(1))].into_iter().collect() });
+    rig.ok(Request::SetLighting(lighting(Effect::Solid, Effect::Off)));
+    // The first light of the chain turns blue with caps lock; the board's
+    // own light, on a reserved pin, is on while layer 1 is.
+    let caps = Indicator { led: 0, shows: Shows::CapsLock, hue: 172, sat: 255 };
+    let layer = Indicator { led: Indicator::BOARD, shows: Shows::Layer(1), hue: 0, sat: 0 };
+    let wanted = indicators(Some(25), &[caps, layer]);
+    rig.ok(Request::SetIndicators(wanted.clone()));
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights()[0], [0, 255, 0]);
+    assert!(!rig.kb.pins().drives_high(25));
+
+    rig.kb.set_locks(0b010);
+    rig.kb.set_key(0, true);
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights()[..2], [[0, 0, 255], [0, 255, 0]]);
+    assert!(rig.kb.pins().drives_high(25));
+    rig.kb.set_locks(0);
+    rig.kb.set_key(0, false);
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights()[0], [0, 255, 0]);
+    assert!(!rig.kb.pins().drives_high(25));
+
+    // A light that is lit by a low pin; it is saved with the rest.
+    rig.ok(Request::SetIndicators(Indicators { active_low: true, ..wanted.clone() }));
+    rig.run(30);
+    assert!(rig.kb.pins().drives_high(25));
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetIndicators), Response::Indicators(Indicators { active_low: true, ..wanted }));
+
+    // Its pin cannot be a key's or the chain's, and is never probed.
+    rig.refused(Request::SetIndicators(indicators(Some(3), &[])), Error::DuplicatePin(3));
+    rig.refused(Request::SetIndicators(indicators(Some(9), &[])), Error::DuplicatePin(9));
+    rig.refused(Request::StartProbe(pins(&[24, 25])), Error::ReservedPin(25));
+}
+
+#[test]
+fn the_half_that_does_not_type_shows_the_layers_and_locks_of_the_one_that_does() {
+    let (mut left, mut right) = saved_pair();
+    for half in [&mut left, &mut right] {
+        half.ok(Request::SetLayerCount(2));
+        half.ok(Request::SetActions { layer: 0, pos: 0, actions: [Action::Basic(Basic::MomentaryLayer(1))].into_iter().collect() });
+    }
+    let on_layer = Indicator { led: Indicator::BOARD, shows: Shows::Layer(1), hue: 0, sat: 0 };
+    let on_caps = Indicator { led: Indicator::BOARD, shows: Shows::CapsLock, hue: 0, sat: 0 };
+    right.ok(Request::SetIndicators(indicators(Some(20), &[on_layer, on_caps])));
+    run_both(&mut left, &mut right, 600);
+    assert!(!right.kb.pins().drives_high(20));
+
+    left.kb.set_key(0, true);
+    run_both(&mut left, &mut right, 40);
+    assert!(right.kb.pins().drives_high(20), "the layer held on the other half");
+    left.kb.set_key(0, false);
+    run_both(&mut left, &mut right, 40);
+    assert!(!right.kb.pins().drives_high(20));
+    left.kb.set_locks(0b010);
+    run_both(&mut left, &mut right, 40);
+    assert!(right.kb.pins().drives_high(20), "caps lock, which only the typing half hears of");
+}
+
+#[test]
 fn macro_names_are_saved_and_follow_to_the_other_half() {
     let mut rig = Rig::wires(&[Wire::Ground(2)]);
     rig.ok(Request::SetHardware(direct(&[2])));
@@ -1355,6 +1475,39 @@ fn combo_options_are_saved_and_follow_to_the_other_half() {
     left.ok(Request::Save);
     run_both(&mut left, &mut right, 1500);
     assert_eq!(right.kb.request(Request::GetComboOptions), got(0b100, true));
+}
+
+#[test]
+fn layers_that_go_with_others_are_saved_and_follow_to_the_other_half() {
+    let (mut left, mut right) = saved_pair();
+    let with = [0, 0, 0, 0b110, 0, 0, 0, 0];
+    for half in [&mut left, &mut right] {
+        half.ok(Request::SetLayerCount(4));
+        half.ok(Request::SetActions {
+            layer: 0,
+            pos: 0,
+            actions: [Action::Basic(Basic::MomentaryLayer(1)), Action::Basic(Basic::MomentaryLayer(2))].into_iter().collect(),
+        });
+        half.ok(Request::SetActions { layer: 3, pos: 3, actions: [Action::key(kc::Z)].into_iter().collect() });
+        half.ok(Request::Save);
+    }
+    run_both(&mut left, &mut right, 1000);
+    left.ok(Request::SetLayersWith(with));
+    left.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(right.kb.request(Request::GetLayersWith), Response::LayersWith(with));
+    right.kb.reboot();
+    assert_eq!(right.kb.request(Request::GetLayersWith), Response::LayersWith(with));
+    run_both(&mut left, &mut right, 600);
+
+    // Both layer keys on the left half, the key on the right.
+    left.out();
+    left.kb.set_key(0, true);
+    left.kb.set_key(1, true);
+    run_both(&mut left, &mut right, 10);
+    right.kb.set_key(0, true);
+    run_both(&mut left, &mut right, 10);
+    assert_eq!(left.out(), ["00:1d"]);
 }
 
 #[test]

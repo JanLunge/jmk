@@ -19,6 +19,7 @@ import type {
   Info,
   Pin,
   KeyGeometry,
+  Indicators,
   LightingConfig,
   MacroStep,
   Meta,
@@ -42,6 +43,8 @@ export interface Session {
   layers: Action[][]
   /** A colour number per layer; 0 where none was chosen. */
   layerColors: number[]
+  /** Per layer: the layers, one bit each, that turn it on while all of them are on; 0 for none. */
+  layersWith: number[]
   profiles: HoldTapProfile[]
   combos: Combo[]
   macros: MacroStep[][]
@@ -51,6 +54,8 @@ export interface Session {
   letterRows: number[][]
   split: SplitStatus
   lighting: LightingConfig
+  /** Lights that show caps lock or a layer. */
+  indicators: Indicators
   /** The light pin the firmware started with; before protocol 9 a change needs a restart. */
   bootLightPin: Pin | null
   /** A virtual keyboard's lights as they shine right now, in chain order. */
@@ -158,6 +163,26 @@ export function setLighting(session: Session, lighting: LightingConfig): Promise
   return sendNewest(session, 'lighting', () => session.client.setLighting(lighting))
 }
 
+/** Protocol version from which a layer can be on while others are. */
+export const LAYERS_WITH_PROTOCOL = 14
+export const canJoinLayers = (session: Session) => session.info.protocol >= LAYERS_WITH_PROTOCOL
+
+/** Say which layers, one bit each, turn `layer` on while all of them are on; 0 for none. */
+export function setLayerWith(session: Session, layer: number, mask: number): Promise<void> {
+  const masks = session.layers.map((_, index) => (index === layer ? mask : (session.layersWith[index] ?? 0)))
+  session.layersWith = masks
+  return sendNewest(session, 'layersWith', () => session.client.setLayersWith(masks))
+}
+
+/** Protocol version from which a light can show caps lock or a layer. */
+export const INDICATOR_PROTOCOL = 13
+export const canIndicate = (session: Session) => session.info.protocol >= INDICATOR_PROTOCOL
+
+export function setIndicators(session: Session, indicators: Indicators): Promise<void> {
+  session.indicators = indicators
+  return sendNewest(session, 'indicators', () => session.client.setIndicators(indicators))
+}
+
 /** Give a layer a colour number (see layers.ts). Firmware from before layer colours keeps it only until the app closes. */
 export function setLayerColor(session: Session, layer: number, color: number): Promise<void> {
   const colors = [...Array(session.layers.length).keys()].map((index) => (index === layer ? color : (session.layerColors[index] ?? 0)))
@@ -256,6 +281,7 @@ export async function openSession(transport: Transport, demo?: DemoHalf): Promis
     layout: [],
     layers: [],
     layerColors: [],
+    layersWith: [],
     profiles: [],
     combos: [],
     macros: [],
@@ -263,6 +289,7 @@ export async function openSession(transport: Transport, demo?: DemoHalf): Promis
     letterRows: [[], [], []],
     split: { ...NO_SPLIT },
     lighting: noLighting(),
+    indicators: { pin: null, active_low: false, list: [] },
     bootLightPin: null,
     lights: [],
     pressed: new Set<number>(),
@@ -338,7 +365,9 @@ export async function refresh(session: Session): Promise<void> {
   session.macroNames = names
   session.letterRows = canKeepLetterRows(session) ? await client.letterRows() : [[], [], []]
   session.lighting = canLight(session) ? await client.lighting() : noLighting()
+  if (canIndicate(session)) session.indicators = await client.indicators()
   if (canColorLayers(session)) session.layerColors = await client.layerColors()
+  if (canJoinLayers(session)) session.layersWith = await client.layersWith()
   session.pressed.clear()
   session.usedLayer.clear()
   for (const listener of listeners) listener(session, 'reset')
@@ -515,6 +544,7 @@ export function exportKeymap(session: Session): Keymap {
       combos: session.combos,
       macros: session.macros,
       layerColors: session.layerColors.slice(0, session.layers.length),
+      layersWith: session.layers.map((_, layer) => session.layersWith[layer] ?? 0),
       macroNames: [...Array(LIMITS.macros).keys()].map((index) => session.macroNames[index] ?? ''),
     }),
   )
@@ -529,6 +559,7 @@ export async function applyKeymap(session: Session, keymap: Keymap): Promise<voi
   await client.setCombos(keymap.combos.slice(0, LIMITS.combos))
   for (let index = 0; index < LIMITS.macros; index++) await client.setMacro(index, keymap.macros[index] ?? [])
   if (canColorLayers(session)) await client.setLayerColors((keymap.layerColors ?? []).slice(0, session.info.max_layers))
+  if (canJoinLayers(session)) await client.setLayersWith(keymap.layersWith ?? [])
   if (canNameMacros(session)) for (let index = 0; index < LIMITS.macros; index++) await client.setMacroName(index, fitName(keymap.macroNames?.[index] ?? ''))
   touch(session, 'reset')
 }
@@ -596,11 +627,19 @@ export function knobSpot(layout: KeyGeometry[]): KeyGeometry {
   return { x: Math.round(box.x + taken * UNIT * 1.25), y, w: UNIT, h: UNIT, r: 0 }
 }
 
-/** What both halves of a split must agree on, as text to compare. */
-function sharedPart(session: Session): string {
+/** Protocol version from which both halves of a split show the same on their lights. */
+export const SHARED_LIGHTS_PROTOCOL = 12
+export const sharesLights = (session: Session) => session.info.protocol >= SHARED_LIGHTS_PROTOCOL
+
+/** What both halves of a split must agree on, as text to compare. `lights`: what their lights show is part of it. */
+function sharedPart(session: Session, lights: boolean): string {
   const keymap = exportKeymap(session)
   // No colour chosen and colour 0 are the same thing.
-  const part = [session.layout, { ...keymap, layerColors: keymap.layers.map((_, layer) => keymap.layerColors?.[layer] ?? 0) }]
+  const part = [
+    session.layout,
+    { ...keymap, layerColors: keymap.layers.map((_, layer) => keymap.layerColors?.[layer] ?? 0) },
+    lights ? [session.lighting.keys, session.lighting.underglow] : [],
+  ]
   // What was read from a keyboard and what was made here list their fields in different orders.
   const sorted = (_: string, value: unknown) =>
     value && typeof value === 'object' && !Array.isArray(value)
@@ -629,10 +668,12 @@ export async function alignHalves(from: Session, to: Session): Promise<boolean> 
       await setHardware(second, { ...second.hardware, split: { Half: { ...split.Half, offset } } })
       changed = true
     }
-    if (sharedPart(from) !== sharedPart(to)) {
+    const lights = sharesLights(from) && sharesLights(to)
+    if (sharedPart(from, lights) !== sharedPart(to, lights)) {
       await to.client.setLayout(from.layout)
       await applyKeymap(to, exportKeymap(from))
       await refresh(to)
+      if (lights) await setLighting(to, { ...to.lighting, keys: from.lighting.keys, underglow: from.lighting.underglow })
       touch(to, 'reset')
       changed = true
     }

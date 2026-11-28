@@ -19,13 +19,15 @@ enum Knows {
     ComboOptions,
 }
 
-const SAVES: [(&str, &[u8], Knows, bool); 5] = [
+const SAVES: [(&str, &[u8], Knows, bool); 6] = [
     ("the first firmware", include_bytes!("saves/protocol-1.bin"), Knows::Basics, false),
     ("0.2.0", include_bytes!("saves/0.2.0.bin"), Knows::Basics, false),
     ("0.3.0 (POG 2.0.0)", include_bytes!("saves/0.3.0.bin"), Knows::Names, false),
     ("0.4.0 (POG 2.1.0)", include_bytes!("saves/0.4.0.bin"), Knows::ComboOptions, false),
     // Only on boards used for development; it had scan settings but no combo options.
     ("0.5.0", include_bytes!("saves/0.5.0.bin"), Knows::Names, true),
+    // Also only there; the scan settings came right after the doubles.
+    ("0.5.2", include_bytes!("saves/0.5.2.bin"), Knows::ComboOptions, true),
 ];
 
 fn board() -> VirtualKeyboard {
@@ -102,6 +104,8 @@ fn saves_of_every_earlier_firmware_load_whole() {
         let expected = if scans { scan() } else { ScanConfig::default() };
         assert_eq!(kb.request(Request::GetScan), Response::Scan(expected), "scan settings after a save from {version}");
         assert_eq!(kb.request(Request::GetDoubles), Response::Doubles(Default::default()), "doubles after a save from {version}");
+        assert_eq!(kb.request(Request::GetIndicators), Response::Indicators(Default::default()), "indicator lights after a save from {version}");
+        assert_eq!(kb.request(Request::GetLayersWith), Response::LayersWith(Default::default()), "layers on with others after a save from {version}");
 
         // Saved again by this firmware, it still reads the same.
         assert_eq!(kb.request(Request::Save), Response::Ok);

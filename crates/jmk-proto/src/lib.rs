@@ -11,14 +11,15 @@ use jmk_core::{Action, Combo, ComboOptions, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours;
-/// 11 combo options, more groups of switches and [`Request::SetDoubles`];
-/// 12 [`Request::SetScan`]; 13 [`Request::Peer`].
-pub const PROTOCOL_VERSION: u16 = 13;
+/// 11 combo options, more groups of switches and [`Request::SetDoubles`]; from 12 the
+/// halves of a split share what their lights show; 13 lights that show a state;
+/// 14 layers that are on while others are; 15 [`Request::SetScan`]; 16 [`Request::Peer`].
+pub const PROTOCOL_VERSION: u16 = 16;
 
 /// What runs on the keyboard, as the app compares it with the firmware it
 /// carries to offer an update. Count it up with every change to the firmware
 /// that a keyboard should get, also one that leaves the protocol alone.
-pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 5, 2);
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 5, 3);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -50,6 +51,8 @@ pub const LAYOUT_KEYS_PER_CHUNK: usize = 16;
 pub const MAX_NAME: usize = 32;
 /// Lights on one chain.
 pub const MAX_LEDS: usize = 120;
+/// Lights that show a state.
+pub const MAX_INDICATORS: usize = 8;
 /// Actions per keymap read/write message.
 pub const ACTIONS_PER_CHUNK: usize = 16;
 /// Largest serialised message in either direction.
@@ -313,7 +316,8 @@ pub struct LightingConfig {
     /// more current than the USB port gives.
     pub limit: u8,
     pub leds: Vec<Led, MAX_LEDS>,
-    /// The lights under keys.
+    /// The lights under keys. What the two zones show is the same on both
+    /// halves of a split; the rest is each half's own.
     pub keys: LightZone,
     pub underglow: LightZone,
 }
@@ -334,6 +338,48 @@ impl Default for LightingConfig {
         Self::NONE
     }
 }
+
+/// A state of the keyboard that a light can show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Shows {
+    CapsLock,
+    NumLock,
+    ScrollLock,
+    /// This layer is on.
+    Layer(u8),
+}
+
+/// A light that shows a state: while the state is on it has this colour
+/// instead of its zone's effect. Of several for one light the last one whose
+/// state is on decides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Indicator {
+    /// Its place on the chain, or [`Indicator::BOARD`] for the plain light,
+    /// which is simply on.
+    pub led: u8,
+    pub shows: Shows,
+    pub hue: u8,
+    pub sat: u8,
+}
+
+impl Indicator {
+    pub const BOARD: u8 = 255;
+}
+
+/// Lights that show a state. Each half of a split has its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Indicators {
+    /// A plain light on a pin of its own, as most controller boards carry
+    /// one. May be a reserved pin.
+    pub pin: Option<Pin>,
+    /// It lights when the pin is low.
+    pub active_low: bool,
+    pub list: Vec<Indicator, MAX_INDICATORS>,
+}
+
+/// By the number of the layer: the layers, one bit each, that turn it on
+/// while all of them are on. 0 for a layer without such a rule.
+pub type LayersWith = [u8; MAX_LAYERS];
 
 /// Where a key sits on the keyboard, for drawing it. Units are hundredths of
 /// a standard key width; rotation is in tenths of a degree around the key's
@@ -517,6 +563,10 @@ pub enum Request {
     /// Positions that read a switch a second time and are not reported.
     /// Setting the wiring empties the list, so send it after the wiring.
     SetDoubles(Doubles),
+    GetIndicators,
+    SetIndicators(Indicators),
+    GetLayersWith,
+    SetLayersWith(LayersWith),
     GetScan,
     /// How the switches are read. Takes effect at once.
     SetScan(ScanConfig),
@@ -555,6 +605,8 @@ pub enum Response {
     MoreWiring(MoreWiring),
     ComboOptions(Vec<ComboOptions, MAX_COMBOS>),
     Doubles(Doubles),
+    Indicators(Indicators),
+    LayersWith(LayersWith),
     Scan(ScanConfig),
 }
 

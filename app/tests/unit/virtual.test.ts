@@ -10,10 +10,10 @@ import { DEMOS } from '../../src/lib/demos'
 import type { Contact, HostEvent, Wire } from '../../src/lib/protocol'
 import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../../src/lib/lighting'
 import { keymapPoster } from '../../src/lib/poster'
-import { layerHex } from '../../src/lib/layers'
+import { layerHex, onWith } from '../../src/lib/layers'
 import { gridLayout } from '../../src/lib/layout'
 import { parseDefinition } from '../../src/lib/definition'
-import { addKey, alignHalves, applyDefinition, canTuneCombos, knobPositions, setCombos, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { addKey, alignHalves, applyDefinition, canTuneCombos, knobPositions, setCombos, needsRestart, save, setIndicators, setLayerWith, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
 import { starterAction } from './keys'
 import { advanceVirtualTime, VirtualTransport } from '../../src/lib/transport'
 import { loadBridge } from '../../src/lib/wasm'
@@ -45,6 +45,16 @@ async function during<T>(work: Promise<T>): Promise<T> {
 }
 
 const keys = (typed: HostEvent[]) => typed.flatMap((e) => ('Keyboard' in e ? [e.Keyboard.keys] : []))
+
+describe('a see-through key', () => {
+  it('falls to the layers that are on with its own, not to every layer below', () => {
+    // Layer 2 is reached on its own: only the base is under it.
+    expect(onWith([], 2)).toEqual([2, 0])
+    // Layer 3 is on while 1 and 2 are; layer 4 while 3 is, and so with all of them.
+    expect(onWith([0, 0, 0, 0b110, 0b1000], 3)).toEqual([3, 2, 1, 0])
+    expect(onWith([0, 0, 0, 0b110, 0b1000], 4)).toEqual([4, 3, 2, 1, 0])
+  })
+})
 
 describe('virtual macro pad', () => {
   it('types through layers set from the app', async () => {
@@ -318,6 +328,34 @@ describe('lights', () => {
 
     // A pin in use for keys is refused.
     await expect(during(session.client.setLighting({ ...session.lighting, pin: 3 }))).rejects.toThrow('used twice')
+
+    // Layer 3 is on while layers 1 and 2 are; the keyboard reports it as active.
+    await during(setLayerCount(session, 4))
+    await during(setLayerWith(session, 3, 0b110))
+    expect((await during(session.client.layersWith()))[3]).toBe(0b110)
+    await during(setAction(session, 0, 0, { Basic: { MomentaryLayer: 1 } }))
+    await during(setAction(session, 0, 1, { Basic: { MomentaryLayer: 2 } }))
+    transport.setKey(0, true)
+    transport.setKey(1, true)
+    advanceVirtualTime(40)
+    expect(session.activeLayers).toBe(0b1111)
+    transport.setKey(0, false)
+    transport.setKey(1, false)
+    advanceVirtualTime(40)
+    expect(session.activeLayers).toBe(1)
+
+    // A light of the chain that turns blue while layer 1 is on; it comes back with a fresh read.
+    const indicators = { pin: 25, active_low: false, list: [{ led: 1, shows: { Layer: 1 }, hue: 172, sat: 255 }] }
+    await during(setLayerCount(session, 2))
+    await during(setAction(session, 0, 0, { Basic: { MomentaryLayer: 1 } }))
+    await during(setIndicators(session, indicators))
+    expect(await during(session.client.indicators())).toEqual(indicators)
+    transport.setKey(0, true)
+    advanceVirtualTime(40)
+    expect(session.lights[1]).toEqual([0, 0, 255])
+    transport.setKey(0, false)
+    advanceVirtualTime(40)
+    expect(session.lights[1]).toEqual([0, 0, 0])
     transport.close()
   })
 
@@ -397,6 +435,13 @@ describe('virtual split keyboard', () => {
     const [onLeft, onRight] = [await during(left.client.splitStatus()), await during(right.client.splitStatus())]
     expect(onLeft.sync).toBe('Same')
     expect([onRight.revision, onRight.digest]).toEqual([onLeft.revision, onLeft.digest])
+
+    // So does what the lights show; the chain stays each half's own.
+    const glow = { effect: 'Solid' as const, hue: 40, sat: 255, val: 200, speed: 0 }
+    await during(setLighting(left, { ...left.lighting, underglow: glow }))
+    await during(save(left))
+    advanceVirtualTime(2000)
+    expect((await during(right.client.lighting())).underglow).toEqual(glow)
 
     // Without the cable, both on USB, the app brings the older half up to date.
     left.setup = right.setup = false

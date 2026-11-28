@@ -7,6 +7,7 @@ struct Map {
     combos: Vec<Combo>,
     combo_options: Vec<ComboOptions>,
     macros: Vec<Vec<MacroStep>>,
+    layers_with: Vec<u8>,
 }
 
 impl Keymap for Map {
@@ -27,6 +28,9 @@ impl Keymap for Map {
     }
     fn combo_options(&self) -> &[ComboOptions] {
         &self.combo_options
+    }
+    fn layers_with(&self) -> &[u8] {
+        &self.layers_with
     }
 }
 
@@ -55,7 +59,7 @@ struct Rig {
 
 impl Rig {
     fn new(layers: Vec<Vec<Action>>) -> Self {
-        let map = Map { layers, profile: HoldTapProfile::default(), combos: vec![], combo_options: vec![], macros: vec![] };
+        let map = Map { layers, profile: HoldTapProfile::default(), combos: vec![], combo_options: vec![], macros: vec![], layers_with: vec![] };
         Rig { map, engine: Engine::new(), log: Log::default() }
     }
     fn flavor(mut self, flavor: HoldTapFlavor) -> Self {
@@ -145,10 +149,10 @@ fn toggle_and_to_layer() {
     tap(&mut rig, 1);
     assert_eq!(rig.out(), ["00:05", "00:", "00:04", "00:"]);
     tap(&mut rig, 2);
-    assert_eq!(rig.engine.active_layers(), 0b101);
+    assert_eq!(rig.engine.active_layers(&rig.map), 0b101);
     tap(&mut rig, 1);
     tap(&mut rig, 0);
-    assert_eq!(rig.engine.active_layers(), 0b001);
+    assert_eq!(rig.engine.active_layers(&rig.map), 0b001);
     assert_eq!(rig.out(), ["00:06", "00:"]);
 }
 
@@ -549,4 +553,33 @@ fn macro_types_its_steps_in_order() {
     rig.press(1, 200);
     rig.tick(200);
     assert_eq!(rig.out(), ["00:1d", "02:1d"]);
+}
+
+#[test]
+fn a_layer_is_on_while_the_layers_it_goes_with_are_held_together() {
+    let hold = |layer| basic(Basic::MomentaryLayer(layer));
+    let mut rig = Rig::new(vec![
+        vec![hold(1), hold(2), key(kc::A)],
+        vec![Action::Transparent, Action::Transparent, key(kc::B)],
+        vec![Action::Transparent, Action::Transparent, key(kc::C)],
+        vec![Action::Transparent, Action::Transparent, key(kc::D)],
+    ]);
+    rig.map.layers_with = vec![0, 0, 0, 0b110];
+    let mut typed = |rig: &mut Rig| {
+        rig.press(2, 0);
+        rig.release(2, 0);
+        rig.out().remove(0)
+    };
+    // In whichever order the two are pressed.
+    for (first, second, alone) in [(0, 1, "00:05"), (1, 0, "00:06")] {
+        rig.press(first, 0);
+        assert_eq!(typed(&mut rig), alone);
+        rig.press(second, 0);
+        assert_eq!(rig.engine.active_layers(&rig.map), 0b1111);
+        assert_eq!(typed(&mut rig), "00:07");
+        rig.release(second, 0);
+        assert_eq!(typed(&mut rig), alone);
+        rig.release(first, 0);
+        assert_eq!(typed(&mut rig), "00:04");
+    }
 }

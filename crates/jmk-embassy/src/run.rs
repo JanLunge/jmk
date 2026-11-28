@@ -58,6 +58,7 @@ pub async fn run<P: Pins, F: NorFlash>(
             Either::Second(()) => {
                 let now = Instant::now();
                 device.set_host(host());
+                device.set_locks(crate::usb::locks());
                 device.poll(now.as_millis(), &mut out, &mut link, |event| send(&DeviceMessage::Event(event)));
                 if let Some((at, bootloader)) = reboot_at {
                     if now >= at {

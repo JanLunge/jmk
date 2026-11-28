@@ -180,6 +180,11 @@ impl VirtualKeyboard {
         self.encoder_phase[encoder] = phase;
     }
 
+    /// The computer says which lock keys are on (bit 0 num, 1 caps, 2 scroll).
+    pub fn set_locks(&mut self, locks: u8) {
+        self.device.set_locks(locks);
+    }
+
     /// Let simulated time pass.
     pub fn advance(&mut self, ms: u64) {
         for _ in 0..ms {

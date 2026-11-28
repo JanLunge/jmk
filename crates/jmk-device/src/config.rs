@@ -1,7 +1,7 @@
 use heapless::{String, Vec};
 use jmk_core::{Action, Combo, ComboOptions, HoldTapFlavor, HoldTapProfile, Keymap, MacroStep};
 use jmk_proto::{
-    Doubles, HardwareConfig, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, ScanConfig, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
+    Doubles, HardwareConfig, Indicators, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, ScanConfig, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, MAX_MACRO_NAME, MAX_MACRO_STEPS,
 };
 
@@ -35,6 +35,9 @@ pub struct Config {
     pub more_wiring: MoreWiring,
     /// Positions that read a switch a second time and are not reported.
     pub doubles: Doubles,
+    pub indicators: Indicators,
+    /// The layers that turn each layer on while they are on together.
+    pub layers_with: [u8; MAX_LAYERS],
     /// Which switches read the other way round, and how long lines settle.
     pub scan: ScanConfig,
     /// How many times the shared part was saved with a change in it; see
@@ -45,8 +48,8 @@ pub struct Config {
 }
 
 /// The part both halves of a split hold alike: the keyboard's name, keymap,
-/// behaviours, macros, key shapes and layer colours. The wiring, the lights
-/// and the controller's name are each half's own.
+/// behaviours, layers, macros, key shapes, layer colours and what the lights show.
+/// The wiring, the light chain and the controller's name are each half's own.
 struct Shared<'a>(&'a Config);
 
 impl serde::Serialize for Shared<'_> {
@@ -68,7 +71,10 @@ impl serde::Serialize for Shared<'_> {
         }
         // Only when there are any, so that a keymap without named macros reads
         // the same as on firmware from before macros had names.
-        let options = config.combo_options.iter().any(|options| *options != ComboOptions::default());
+        let lights = (config.lighting.keys, config.lighting.underglow);
+        let with = config.layers_with != [0; MAX_LAYERS];
+        let lit = with || lights != Default::default();
+        let options = lit || config.combo_options.iter().any(|options| *options != ComboOptions::default());
         let rows = options || config.letter_rows.iter().any(|row| !row.is_empty());
         if rows || config.macro_names.iter().any(|name| !name.is_empty()) {
             parts.serialize_element(&config.macro_names)?;
@@ -80,6 +86,14 @@ impl serde::Serialize for Shared<'_> {
         // And the combo options, which came after the rows.
         if options {
             parts.serialize_element(&config.combo_options)?;
+        }
+        // And what the lights show, which came after the options.
+        if lit {
+            parts.serialize_element(&lights)?;
+        }
+        // And the layers that turn others on, which came after the lights.
+        if with {
+            parts.serialize_element(&config.layers_with)?;
         }
         parts.end()
     }
@@ -141,6 +155,8 @@ impl Config {
             letter_rows: Self::NO_ROWS,
             more_wiring: Vec::new(),
             doubles: Vec::new(),
+            indicators: Indicators { pin: None, active_low: false, list: Vec::new() },
+            layers_with: [0; MAX_LAYERS],
             scan: ScanConfig { inverted: Vec::new(), settle_us: 0, drive_idle_high: false },
             revision: 0,
             base: None,
@@ -166,6 +182,8 @@ impl Config {
             letter_rows,
             more_wiring,
             doubles,
+            indicators,
+            layers_with,
             scan,
             revision,
             base,
@@ -186,6 +204,8 @@ impl Config {
         *letter_rows = Self::NO_ROWS;
         more_wiring.clear();
         doubles.clear();
+        *indicators = Self::new().indicators;
+        *layers_with = [0; MAX_LAYERS];
         *scan = ScanConfig::default();
         *revision = 0;
         *base = None;
@@ -249,6 +269,8 @@ impl Config {
         }
         self.letter_rows = if bytes.is_empty() { Self::NO_ROWS } else { take(&mut bytes)? };
         self.combo_options = if bytes.is_empty() { Vec::new() } else { take(&mut bytes)? };
+        (self.lighting.keys, self.lighting.underglow) = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
+        self.layers_with = if bytes.is_empty() { [0; MAX_LAYERS] } else { take(&mut bytes)? };
         bytes.is_empty().then_some(())
     }
 
@@ -321,6 +343,10 @@ impl Keymap for Config {
 
     fn combo_options(&self) -> &[ComboOptions] {
         &self.combo_options
+    }
+
+    fn layers_with(&self) -> &[u8] {
+        &self.layers_with
     }
 
     fn macro_steps(&self, index: u8) -> &[MacroStep] {

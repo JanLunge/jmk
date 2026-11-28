@@ -130,6 +130,26 @@ export interface LightingConfig {
   underglow: LightZone
 }
 
+/** A state of the keyboard that a light can show. */
+export type Shows = 'CapsLock' | 'NumLock' | 'ScrollLock' | { Layer: number }
+
+/** While its state is on, light `led` of the chain has this colour instead of its effect. `led` 255 is the plain light. */
+export interface Indicator {
+  led: number
+  shows: Shows
+  hue: number
+  sat: number
+}
+export const PLAIN_LIGHT = 255
+
+export interface Indicators {
+  /** A plain light on a pin of its own, like the one on most controller boards. */
+  pin: Pin | null
+  /** It lights when the pin is low. */
+  active_low: boolean
+  list: Indicator[]
+}
+
 /** Hundredths of a key unit; rotation in tenths of a degree. w = 0 marks a position without a key. */
 export interface KeyGeometry {
   x: number
@@ -226,6 +246,11 @@ export type Request =
   | { SetComboOptions: ComboOptions[] }
   | 'GetDoubles'
   | { SetDoubles: number[] }
+  | 'GetLayersWith'
+  /** Per layer: the layers, one bit each, that turn it on while all of them are on. */
+  | { SetLayersWith: number[] }
+  | 'GetIndicators'
+  | { SetIndicators: Indicators }
   | { ResolveSplit: { keep_this: boolean } }
   | { SplitAgreed: { digest: number; revision: number } }
   | 'GetScan'
@@ -265,6 +290,8 @@ export type Response =
   | { MoreWiring: MatrixConfig[] }
   | { ComboOptions: ComboOptions[] }
   | { Doubles: number[] }
+  | { Indicators: Indicators }
+  | { LayersWith: number[] }
   | { Scan: ScanConfig }
 
 export type DeviceEvent =
@@ -312,6 +339,7 @@ export const LIMITS = {
   nameLength: 32,
   macroNameLength: 16,
   leds: 120,
+  indicators: 8,
 }
 
 export function describeError(error: DeviceError): string {

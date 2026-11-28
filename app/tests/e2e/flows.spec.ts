@@ -886,6 +886,15 @@ test('lights: switched on, placed one by one and given an effect per group', asy
   await page.click('[data-test=effect-underglow-Solid]')
   await saved(page)
   await expect(bulbs.nth(5)).not.toHaveAttribute('data-color', '#000000')
+
+  // A light can show caps lock instead, and so can a plain light on a pin of its own.
+  await page.click('[data-test=indicator-add]')
+  await expect(page.locator('[data-test=indicator]')).toHaveCount(1)
+  await page.selectOption('[data-test=indicator-pin]', { index: 1 })
+  await expect(page.locator('[data-test=indicator-low]')).toBeVisible()
+  await page.selectOption('[data-test=indicator-led]', { label: 'Plain light' })
+  await saved(page)
+  await expect(page.locator('[data-test=indicator-led]')).toHaveValue('255')
 })
 
 test('split keyboard: finding the keys again covers both halves', async ({ page }) => {
@@ -957,6 +966,24 @@ test('keymap: drag from the picker, swap keys, colour a layer, see all layers', 
   const download = page.waitForEvent('download')
   await page.click('[data-test=save-png]')
   expect((await download).suggestedFilename()).toMatch(/-keymap\.png$/)
+
+  // A layer that is on while two others are held together.
+  await page.click('[data-test=all-layers]')
+  await page.click('[data-test=add-layer]')
+  await page.click('[data-test=add-layer]')
+  await expect(page.locator('[data-test=layer-3]')).toHaveClass(/on/)
+  await page.click('[data-test=layer-3]')
+  await page.click('[data-test=join-1]')
+  await page.click('[data-test=join-2]')
+  await expect(page.locator('[data-test=join-2]')).toHaveClass(/primary/)
+  await page.click('[data-test=layer-0]')
+  await page.click('[data-test=tab-layers]')
+  await page.dragAndDrop('[data-test=layer-hold-2]', '[data-test=keymap-board] [data-pos="4"]')
+  await hold(page, 5)
+  await expect(page.locator('[data-test=layer-1]')).toHaveClass(/live/)
+  await expect(page.locator('[data-test=layer-3]')).not.toHaveClass(/live/)
+  await hold(page, 4)
+  await expect(page.locator('[data-test=layer-3]')).toHaveClass(/live/)
 })
 
 test('setup: one keyboard in one piece is guided through, and its controller works itself out', async ({ page }) => {

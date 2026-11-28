@@ -13,6 +13,7 @@ import {
   onChange,
   setCombos,
   setLayerColor,
+  setLayerWith,
   setLayerCount,
   setLayout,
   setLetterRows,
@@ -29,6 +30,7 @@ interface Snapshot {
   layout: KeyGeometry[]
   layers: Action[][]
   layerColors: number[]
+  layersWith: number[]
   profiles: HoldTapProfile[]
   combos: Combo[]
   macros: MacroStep[][]
@@ -65,8 +67,8 @@ function of(session: Session): History {
 const text = (value: unknown) => JSON.stringify(value)
 
 function take(session: Session): Snapshot {
-  const { layout, layers, layerColors, profiles, combos, macros, macroNames, letterRows, lighting } = session
-  return JSON.parse(text({ layout, layers, layerColors, profiles, combos, macros, macroNames, letterRows, lighting }))
+  const { layout, layers, layerColors, layersWith, profiles, combos, macros, macroNames, letterRows, lighting } = session
+  return JSON.parse(text({ layout, layers, layerColors, layersWith, profiles, combos, macros, macroNames, letterRows, lighting }))
 }
 
 function show(history: History) {
@@ -139,6 +141,9 @@ async function restore(session: Session, to: Snapshot): Promise<void> {
   }
   for (const [index, color] of to.layers.map((_, layer) => to.layerColors[layer] ?? 0).entries()) {
     if ((session.layerColors[index] ?? 0) !== color) await setLayerColor(session, index, color)
+  }
+  for (const index of to.layers.keys()) {
+    if ((session.layersWith[index] ?? 0) !== (to.layersWith[index] ?? 0)) await setLayerWith(session, index, to.layersWith[index] ?? 0)
   }
   for (const [index, profile] of to.profiles.entries()) {
     if (text(session.profiles[index]) !== text(profile)) await setProfile(session, index, profile)

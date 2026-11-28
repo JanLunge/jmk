@@ -28,3 +28,17 @@ export function layerHex(colors: number[], layer: number): string | undefined {
 }
 
 export const layerColor = (session: Session, layer: number) => layerHex(session.layerColors, layer)
+
+/**
+ * The layers that are on when `layer` is the highest one on, highest first:
+ * itself, the layers that turn it on together (and what turns those on), and
+ * the base. A see-through key falls to the first of them that has a key.
+ */
+export function onWith(layersWith: number[], layer: number): number[] {
+  let mask = 1 | (1 << layer)
+  for (let before = 0; before !== mask; ) {
+    before = mask
+    for (let at = 1; at <= layer; at++) if ((mask >> at) & 1) mask |= layersWith[at] ?? 0
+  }
+  return [...Array(layer + 1).keys()].reverse().filter((at) => (mask >> at) & 1)
+}

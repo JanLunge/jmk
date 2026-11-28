@@ -11,6 +11,7 @@ import type {
   HoldTapProfile,
   Info,
   KeyGeometry,
+  Indicators,
   LightingConfig,
   MacroStep,
   MatrixConfig,
@@ -36,9 +37,9 @@ export const moreWiringLimit = (protocol: number) => (protocol < MORE_WIRING_PRO
 export const isUsualScan = (scan: ScanConfig) => !scan.inverted.length && !scan.settle_us && !scan.drive_idle_high
 
 /** Firmware that can read keys the other way round and wait longer between lines. */
-export const SCAN_PROTOCOL = 12
+export const SCAN_PROTOCOL = 15
 /** Firmware that passes requests on to the other half over the cable. */
-export const PEER_PROTOCOL = 13
+export const PEER_PROTOCOL = 16
 let nextChannel = 1
 
 export class KeyboardError extends Error {}
@@ -237,6 +238,11 @@ export class KeyboardClient {
   lighting = (): Promise<LightingConfig> => this.expect('GetLighting', 'Lighting')
   setLighting = (lighting: LightingConfig) => this.ok({ SetLighting: lighting })
   identifyLed = (led: number | null) => this.ok({ IdentifyLed: led })
+  indicators = (): Promise<Indicators> => this.expect('GetIndicators', 'Indicators')
+  setIndicators = (indicators: Indicators) => this.ok({ SetIndicators: indicators })
+  layersWith = (): Promise<number[]> => this.expect('GetLayersWith', 'LayersWith')
+  /** The keyboard wants one number for each layer it could hold. */
+  setLayersWith = (masks: number[]) => this.shared({ SetLayersWith: [...Array(8).keys()].map((layer) => masks[layer] ?? 0) })
   layerColors = (): Promise<number[]> => this.expect('GetLayerColors', 'LayerColors')
   setLayerColors = (colors: number[]) => this.shared({ SetLayerColors: colors })
   macroName = (index: number): Promise<string> => this.expect({ GetMacroName: { index } }, 'MacroName')

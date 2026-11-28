@@ -8,14 +8,16 @@ import { findBoard, pinLabel, wirablePins } from '../lib/boards'
 import { legend } from '../lib/keycodes'
 import { bounds } from '../lib/layout'
 import { drawnAt, fromWire, hexToHueSat, lightMode, placeAtKey, ring, shown, underKeys, zoneHex, zonePreview, type LightMode } from '../lib/lighting'
-import type { Effect, Led, LightingConfig, LightZone, Pin } from '../lib/protocol'
-import { LIMITS, UNDERGLOW } from '../lib/protocol'
-import { linkPins, canLight, followsPins, knobPositions, needsRestart, restart, save, setLighting, type Session } from '../lib/session'
+import type { Effect, Indicator, Indicators, Led, LightingConfig, LightZone, Pin, Shows } from '../lib/protocol'
+import { LIMITS, PLAIN_LIGHT, UNDERGLOW } from '../lib/protocol'
+import { linkPins, canIndicate, canLight, followsPins, knobPositions, needsRestart, restart, role, save, setIndicators, setLighting, sharesLights, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 
 const lighting = computed(() => props.session.lighting)
 const board = computed(() => findBoard(props.session.meta.controller, props.session.info.mcu, props.session.info.usable_pins))
+/** One half of a split whose lights go with the other half's. */
+const half = computed(() => role(props.session) !== 'single' && sharesLights(props.session))
 const change = (patch: Partial<LightingConfig>) => attempt(() => setLighting(props.session, { ...lighting.value, ...patch }))
 
 // --- The chain ---------------------------------------------------------------
@@ -25,6 +27,7 @@ const freePins = computed(() => {
   const taken = new Set<Pin>([...reserved_pins, ...encoders.flatMap((e) => [e.a, e.b]), ...wiringParts(props.session.hardware).flatMap(partPins)])
   const link = linkPins(props.session.hardware)
   if (link) [link.tx, link.rx].forEach((pin) => taken.add(pin))
+  if (indicators.value.pin !== null) taken.add(indicators.value.pin)
   return wirablePins(board.value, props.session.info.usable_pins).filter((pin) => !taken.has(pin))
 })
 const pinDraft = ref<Pin | null>(lighting.value.pin ?? null)
@@ -35,8 +38,11 @@ async function turnOn() {
   if (pinDraft.value === null) return
   const count = Math.max(1, Math.min(LIMITS.leds, Math.round(countDraft.value)))
   const zone: LightZone = { effect: 'Rainbow', hue: 0, sat: 255, val: 255, speed: 60 }
+  // The other half of a split may have said what the lights show already.
+  const { keys, underglow } = lighting.value
+  const zones = keys.effect !== 'Off' || underglow.effect !== 'Off' ? {} : { keys: { ...zone }, underglow: { ...zone } }
   const done = await attempt(async () => {
-    await setLighting(props.session, { ...lighting.value, pin: pinDraft.value, leds: ring(props.session.layout, count), keys: { ...zone }, underglow: { ...zone } })
+    await setLighting(props.session, { ...lighting.value, pin: pinDraft.value, leds: ring(props.session.layout, count), ...zones })
     return true
   })
   if (done) await saveAndRestart()
@@ -187,6 +193,38 @@ const MODES: { id: LightMode; name: string; hint: string }[] = [
 const patchZone = (id: 'keys' | 'underglow', patch: Partial<LightZone>) => change({ [id]: { ...lighting.value[id], ...patch } })
 const number = (event: Event) => Number((event.target as HTMLInputElement).value)
 
+// --- Lights that show a state ---------------------------------------------------------
+const indicators = computed(() => props.session.indicators)
+const indicate = (patch: Partial<Indicators>) => attempt(() => setIndicators(props.session, { ...indicators.value, ...patch }))
+/** For the plain light: the board's own first, then every pin nothing else uses. */
+const plainPins = computed(() => {
+  const own = board.value.internal.filter((part) => part.use.includes('LED')).map((part) => part.pin)
+  const free = freePins.value.filter((pin) => pin !== lighting.value.pin)
+  return [...new Set([...own, ...(indicators.value.pin === null ? [] : [indicators.value.pin]), ...free])].map((pin) => ({
+    pin,
+    name: own.includes(pin) ? `On the board (${pinLabel(board.value, pin)})` : pinLabel(board.value, pin),
+  }))
+})
+const indicatorLights = computed(() => [
+  ...(indicators.value.pin === null ? [] : [{ led: PLAIN_LIGHT, name: 'Plain light' }]),
+  ...lighting.value.leds.map((_, index) => ({ led: index, name: `Light ${index + 1}` })),
+])
+const STATES = computed<{ shows: Shows; name: string }[]>(() => [
+  { shows: 'CapsLock', name: 'Caps lock' },
+  { shows: 'NumLock', name: 'Num lock' },
+  { shows: 'ScrollLock', name: 'Scroll lock' },
+  // Layer 0 is always on.
+  ...props.session.layers.slice(1).map((_, index) => ({ shows: { Layer: index + 1 }, name: `Layer ${index + 1}` })),
+])
+function setPlainPin(event: Event) {
+  const value = (event.target as HTMLSelectElement).value
+  const pin = value === '' ? null : Number(value)
+  return indicate({ pin, list: indicators.value.list.filter((rule) => pin !== null || rule.led !== PLAIN_LIGHT) })
+}
+const setIndicator = (index: number, patch: Partial<Indicator>) =>
+  indicate({ list: indicators.value.list.map((rule, at) => (at === index ? { ...rule, ...patch } : rule)) })
+const addIndicator = () => indicate({ list: [...indicators.value.list, { led: indicatorLights.value[0].led, shows: 'CapsLock', hue: 0, sat: 0 }] })
+
 /** Rough current at full white, to explain the power limit: 60 mA per light. */
 const peakMa = computed(() => Math.round((lighting.value.leds.length * 60 * lighting.value.limit) / 255))
 /** Older firmware only looks at the pin when it starts. */
@@ -229,6 +267,7 @@ const chainSummary = computed(() => {
         <div>
           <h2>Lights</h2>
           <p class="muted small">For a chain of addressable RGB lights (WS2812, SK6812) on one data wire.</p>
+          <p v-if="half" class="muted small" data-test="light-half">These are the lights of the half that is plugged in. Plug in the other half to set up its own.</p>
         </div>
         <div class="fields">
           <label class="field">Data pin
@@ -292,6 +331,8 @@ const chainSummary = computed(() => {
           </div>
         </section>
 
+        <p v-if="half" class="muted small" data-test="light-shared">Both halves show the same once this is saved.</p>
+
         <!-- The wiring: set once, then folded away -->
         <section class="chain col" :class="{ open: showChain }">
           <button class="chain-head row" data-test="chain-toggle" @click="chainOpen = !showChain">
@@ -349,6 +390,34 @@ const chainSummary = computed(() => {
           </div>
         </section>
       </template>
+
+      <section v-if="canIndicate(session)" class="zone col" data-test="indicators">
+        <header class="row"><h3 class="grow">Indicators</h3></header>
+        <p class="muted small">A light can show caps lock or a layer instead of its effect.</p>
+        <label class="field">Plain light
+          <select class="input" :value="indicators.pin ?? ''" data-test="indicator-pin" title="A light of one colour on a pin of its own, like the one most controller boards carry" @change="setPlainPin">
+            <option value="">None</option>
+            <option v-for="option in plainPins" :key="option.pin" :value="option.pin">{{ option.name }}</option>
+          </select>
+        </label>
+        <label v-if="indicators.pin !== null" class="row check" title="Tick this if the light is on when it should be off">
+          <input type="checkbox" :checked="indicators.active_low" data-test="indicator-low" @change="indicate({ active_low: !indicators.active_low })" />
+          It lights when the pin is low
+        </label>
+        <div v-for="(rule, index) in indicators.list" :key="index" class="row rule" data-test="indicator">
+          <select class="input grow" :value="JSON.stringify(rule.shows)" data-test="indicator-shows" @change="setIndicator(index, { shows: JSON.parse(($event.target as HTMLSelectElement).value) })">
+            <option v-for="state in STATES" :key="state.name" :value="JSON.stringify(state.shows)">{{ state.name }}</option>
+          </select>
+          <select class="input grow" :value="rule.led" data-test="indicator-led" @change="setIndicator(index, { led: number($event) })">
+            <option v-for="light in indicatorLights" :key="light.led" :value="light.led">{{ light.name }}</option>
+          </select>
+          <input v-if="rule.led !== PLAIN_LIGHT" type="color" :value="zoneHex(rule)" title="Its colour while this is on" @input="setIndicator(index, hexToHueSat(($event.target as HTMLInputElement).value))" />
+          <button class="btn small ghost" title="Remove" @click="indicate({ list: indicators.list.filter((_, at) => at !== index) })">×</button>
+        </div>
+        <button class="btn small" :disabled="!indicatorLights.length || indicators.list.length >= LIMITS.indicators" :title="indicatorLights.length ? '' : 'Choose a plain light or set up a chain first'" data-test="indicator-add" @click="addIndicator">
+          Add an indicator
+        </button>
+      </section>
     </aside>
   </div>
 </template>
@@ -414,6 +483,15 @@ const chainSummary = computed(() => {
 .zone h3 {
   margin: 0;
   font-size: 0.95rem;
+}
+
+.rule {
+  gap: 6px;
+  align-items: center;
+}
+
+.rule .input {
+  min-width: 0;
 }
 
 .swatch {

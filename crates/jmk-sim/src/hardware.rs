@@ -93,6 +93,11 @@ impl SimPins {
         std::mem::take(&mut state.lights_fresh).then(|| state.lights.clone())
     }
 
+    /// Whether the firmware drives this pin high, as it does for a plain light.
+    pub fn drives_high(&self, pin: Pin) -> bool {
+        self.0.borrow().modes[pin as usize] == PinMode::High
+    }
+
     /// How often the firmware waited for levels to settle.
     pub fn settles(&self) -> usize {
         self.0.borrow().settles
