@@ -3,6 +3,10 @@
 <h4 align="center">
 Keyboard firmware you configure after flashing, and the app that does it
 </h4>
+<p align="center">
+<a href="https://pogv2.janlunge.de">Website</a> ·
+<a href="https://github.com/JanLunge/jmk/releases/latest">Download</a>
+</p>
 
 > **Built with a lot of AI help.** I design this, decide what goes in and test
 > it on my own keyboards, but most of the code was written with AI coding
@@ -89,6 +93,13 @@ cargo run -p jmk-uf2 -- rp2350 \
     firmware/rp2350/target/thumbv8m.main-none-eabihf/release/jmk-rp2350 target/jmk-rp2350.uf2
 (cd app && npm run firmware)
 ```
+
+# Linux
+
+POG finds the keyboard only once Linux lets it. The desktop app offers to
+arrange that when you plug a keyboard in. By hand: save
+[this file](https://raw.githubusercontent.com/JanLunge/jmk/main/app/linux/70-jmk-keyboard.rules)
+into `/etc/udev/rules.d/` and plug the keyboard in again.
 
 `./scripts/check.sh` runs every test and builds all firmwares. There is no
 hosted CI yet, that script is it.

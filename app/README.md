@@ -30,7 +30,12 @@ JMK_DESKTOP=1 xvfb-run -a npx playwright test desktop   # the desktop shell
 
 Add `JMK_REAL=1` to the last command with a JMK keyboard attached to also
 check that the desktop app reads it. On Linux the user needs access to the
-keyboard's hidraw device; a udev rule for USB ID 1209:0001 does that.
+keyboard's hidraw device; the udev rule in `linux/` does that (see "Linux" in
+the main README). The desktop app installs it on request, through `pkexec`.
+
+The e2e tests start their own preview server on port 4173 and refuse to run
+against one that is already there, since that may be another checkout's
+build. `E2E_PORT=4273 npm run e2e` uses another port.
 
 The desktop app started with `npm run start` can be inspected while it runs:
 it listens for DevTools on `http://127.0.0.1:9333` (`POG_CDP_PORT` picks

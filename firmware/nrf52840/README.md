@@ -44,8 +44,9 @@ unverified until the checklist at the end has been worked through.
   Expect a battery to last days, not months.
 - The configurator channel over Bluetooth, boot protocol over Bluetooth,
   showing the lock-key LEDs, passkey pairing.
-- Flashing from the command line: `jmk flash` looks for the RP2040's
-  bootloader drive only.
+- Flashing from the command line: `jmk flash` writes to the drive that
+  appears on the keyboard's USB port, as it does for an RP2040, but has
+  not been tried with this bootloader yet.
 - Board power switches (for example the nice!nano's P0.13, which cuts
   power to external parts): mark such pins as reserved.
 
@@ -182,10 +183,10 @@ cargo run -p jmk-uf2 -- nrf52840 \
 
 Press reset twice quickly; a drive appears. Copy `jmk-nrf52840.uf2` to it.
 
-`jmk flash` only knows the RP2040's bootloader drive. Run against an nRF
-board it still sends the reboot-to-bootloader request, then fails waiting
-for the wrong drive; the board's own drive is there and the file can be
-copied by hand.
+`jmk flash` writes the image straight to the drive that appears on the
+board's USB port, which the Adafruit bootloader should take as the RP2040's
+does; this is untried. If it fails, the drive is still there and the file
+can be copied by hand.
 
 The Nordic SoftDevice Controller and MPSL libraries that get linked in are
 closed source and have their own licence (see the `nrf-sdc` and `nrf-mpsl`
@@ -215,8 +216,7 @@ press of reset) before starting.
    factory reset. This is the first use of flash through the radio
    scheduler's time slots; a hang here ends in a watchdog reset after 10 s.
 6. **Reboot to the bootloader.** Send a reboot request with
-   `bootloader: true` (`jmk flash <file>` does, before it gives up waiting
-   for an RP2040 drive): the UF2 drive appears and stays for longer than
+   `bootloader: true` (`jmk bootloader` does): the UF2 drive appears and stays for longer than
    10 s. If it resets after 10 s, the installed bootloader version does not
    feed the watchdog the firmware left running.
 7. **Update keeps the configuration.** After flashing a new UF2 file the

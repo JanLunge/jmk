@@ -1,0 +1,1279 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>POG v2 · set up a hand-built keyboard by pressing its keys</title>
+    <meta
+      name="description"
+      content="JMK is keyboard firmware you configure after flashing. POG is the app that does it: press every key once and it works out the wiring. No config files, no compiling."
+    />
+    <meta property="og:title" content="POG v2 with JMK" />
+    <meta property="og:description" content="Flash one file. Press every key once. Start typing." />
+    <meta property="og:image" content="editor.webp" />
+    <link rel="icon" type="image/svg+xml" href="icon.svg" />
+    <!-- Fonts are served from here, not from a font service: Bricolage Grotesque and Instrument Sans, both under the SIL Open Font License. -->
+    <link rel="preload" href="fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin />
+    <script>
+      // Before the first paint, so the page never flashes the wrong look.
+      // Dark unless the visitor chose light here: some phone browsers report a light system while the phone is dark.
+      try {
+        document.documentElement.dataset.theme = localStorage.getItem('pog.theme') === 'light' ? 'light' : 'dark'
+      } catch {
+        document.documentElement.dataset.theme = 'dark'
+      }
+    </script>
+    <style>
+      @font-face {
+        font-family: 'Bricolage Grotesque';
+        font-weight: 200 800;
+        font-stretch: 100%;
+        font-display: swap;
+        src: url(fonts/bricolage-grotesque.woff2) format('woff2');
+      }
+      @font-face {
+        font-family: 'Instrument Sans';
+        font-weight: 400 700;
+        font-display: swap;
+        src: url(fonts/instrument-sans.woff2) format('woff2');
+      }
+
+      :root {
+        color-scheme: dark;
+        --bg: #171717;
+        --panel: #1f1f1f;
+        --panel-2: #292929;
+        --line: #383838;
+        --rule: #262626;
+        --text: #f3f1ec;
+        --muted: #a19a91;
+        --accent: #ef8f4c;
+        --accent-deep: #d9702a;
+        --accent-soft: rgba(239, 143, 76, 0.16);
+        --on-accent: #171717;
+        /* The little keyboard: its case, a key at rest, a key that was found. */
+        --case: #121212;
+        --cap: #3a3a3a;
+        --cap-side: #262626;
+        --cap-on: #f3f1ec;
+        --cap-on-side: #c9c5bb;
+        --cap-on-ink: #171717;
+        --ok: #6ee7a0;
+        --display: 'Bricolage Grotesque', ui-rounded, system-ui, sans-serif;
+        --body: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+        --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+
+      :root[data-theme='light'] {
+        color-scheme: light;
+        --bg: #f3f1ec;
+        --panel: #ffffff;
+        --panel-2: #f6f4ef;
+        --line: #dedad0;
+        --rule: #e3dfd5;
+        --text: #211e1a;
+        --muted: #6f695f;
+        --accent: #d9702a;
+        --accent-deep: #b3561a;
+        --accent-soft: rgba(217, 112, 42, 0.13);
+        --on-accent: #ffffff;
+        --case: #e7e3d9;
+        --cap: #cfcabd;
+        --cap-side: #b5b0a2;
+        --cap-on: #ffffff;
+        --cap-on-side: #c9c5bb;
+        --cap-on-ink: #211e1a;
+        --ok: #1f9d55;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 17px/1.55 var(--body);
+        -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .wrap {
+        width: min(1080px, 100% - 40px);
+        margin-inline: auto;
+      }
+
+      /* --- Top ----------------------------------------------------------- */
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 22px 0;
+      }
+
+      header img {
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+      }
+
+      header .name {
+        font: 800 1.15rem var(--display);
+        letter-spacing: 0.01em;
+      }
+
+      header .tag {
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 6px;
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      header nav {
+        margin-left: auto;
+        display: flex;
+        gap: 22px;
+        font-size: 0.95rem;
+      }
+
+      header nav a {
+        color: var(--muted);
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+
+      header nav a:hover {
+        color: var(--text);
+      }
+
+      .theme {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        margin-left: 6px;
+        padding: 0;
+        border-radius: 11px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--muted);
+        cursor: pointer;
+        transition:
+          color 0.2s,
+          background 0.2s;
+      }
+
+      .theme:hover {
+        color: var(--text);
+        background: var(--panel-2);
+      }
+
+      .theme .sun,
+      :root[data-theme='light'] .theme .moon {
+        display: none;
+      }
+
+      :root[data-theme='light'] .theme .sun {
+        display: block;
+      }
+
+      body,
+      .bench,
+      .steps li,
+      .btn,
+      figcaption {
+        transition:
+          background-color 0.3s,
+          border-color 0.3s,
+          color 0.3s;
+      }
+
+      /* --- Hero ---------------------------------------------------------- */
+      .hero {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        gap: 56px;
+        align-items: center;
+        padding: 56px 0 84px;
+      }
+
+      h1 {
+        margin: 0;
+        font: 800 clamp(2.3rem, 5.5vw, 4.5rem) / 0.98 var(--display);
+        letter-spacing: -0.035em;
+        white-space: nowrap;
+      }
+
+      h1 span {
+        display: block;
+        opacity: 0;
+        transform: translateY(18px);
+        animation: rise 0.7s var(--ease) forwards;
+      }
+
+      h1 span:nth-child(2) {
+        animation-delay: 0.09s;
+      }
+
+      h1 span:nth-child(3) {
+        animation-delay: 0.18s;
+        color: var(--accent);
+      }
+
+      @keyframes rise {
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      .lead {
+        max-width: 31em;
+        margin: 26px 0 0;
+        font-size: 1.15rem;
+        color: var(--muted);
+      }
+
+      .lead strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      .get {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        margin-top: 34px;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 13px 20px;
+        border-radius: 13px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        font: 600 1rem var(--body);
+        text-decoration: none;
+        transition:
+          transform 0.15s var(--ease),
+          background 0.2s,
+          border-color 0.2s;
+      }
+
+      .btn:hover {
+        background: var(--panel-2);
+        border-color: var(--muted);
+      }
+
+      .btn:active {
+        transform: translateY(2px);
+      }
+
+      .btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+        box-shadow: 0 5px 0 var(--accent-deep);
+      }
+
+      .btn.primary:hover {
+        filter: brightness(1.06);
+      }
+
+      .btn.primary:active {
+        transform: translateY(4px);
+        box-shadow: 0 1px 0 var(--accent-deep);
+      }
+
+      .small {
+        font-size: 0.88rem;
+        color: var(--muted);
+      }
+
+      .get + .small {
+        margin-top: 18px;
+      }
+
+      /* --- The setup, small enough for a web page --------------------------- */
+      .bench {
+        position: relative;
+        padding: 24px;
+        border-radius: 26px;
+        border: 1px solid var(--line);
+        background:
+          radial-gradient(120% 90% at 100% 0%, var(--accent-soft), transparent 60%),
+          var(--panel);
+        opacity: 0;
+        animation: rise 0.8s 0.25s var(--ease) forwards;
+      }
+
+      /* Says plainly that this is not the app itself. */
+      .demo {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin: 0 0 16px;
+        padding-bottom: 14px;
+        border-bottom: 1px dashed var(--line);
+        font-size: 0.88rem;
+        color: var(--muted);
+      }
+
+      .demo b {
+        flex: none;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: var(--accent);
+        color: var(--on-accent);
+        font: 800 0.74rem var(--display);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      /* The way through the setup, as in the app: a line of dots. */
+      .dots {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0 0 18px;
+        padding: 0;
+        list-style: none;
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .dots li {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .dots li::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: var(--line);
+        transition: all 0.3s var(--ease);
+      }
+
+      .dots li.done::before {
+        background: var(--ok);
+      }
+
+      .dots li.now::before {
+        width: 22px;
+        background: var(--accent);
+      }
+
+      .dots li span {
+        display: none;
+      }
+
+      .dots li.now span {
+        display: inline;
+        color: var(--text);
+        font-weight: 600;
+        margin-right: 4px;
+      }
+
+      /* What the app shows. */
+      .screen {
+        min-height: 178px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .ask {
+        font: 700 1.3rem / 1.15 var(--display);
+        letter-spacing: -0.01em;
+        margin: 0;
+      }
+
+      .hint {
+        margin: 6px 0 0;
+        font-size: 0.93rem;
+        color: var(--muted);
+      }
+
+      .hint b {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      .hint .num {
+        font: 800 1.05rem var(--display);
+        color: var(--accent);
+      }
+
+      .view {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 6px;
+        margin: 14px 0;
+      }
+
+      .line {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 34px;
+      }
+
+      .chip {
+        display: grid;
+        place-items: center;
+        flex: none;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: var(--text);
+        font: 700 0.9rem var(--display);
+        animation: pop 0.25s var(--ease);
+      }
+
+      button.chip {
+        cursor: pointer;
+      }
+
+      .chip.row-end {
+        border-color: var(--accent);
+        box-shadow: inset -4px 0 0 var(--accent);
+      }
+
+      .chip.picked {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+      }
+
+      .chip.empty {
+        border-style: dashed;
+        background: none;
+      }
+
+      @keyframes pop {
+        from {
+          opacity: 0;
+          transform: scale(0.7);
+        }
+      }
+
+      .bar {
+        height: 8px;
+        border-radius: 4px;
+        background: var(--line);
+        overflow: hidden;
+      }
+
+      .bar i {
+        display: block;
+        height: 100%;
+        width: 0;
+        border-radius: 4px;
+        background: var(--accent);
+        transition: width 1.3s cubic-bezier(0.4, 0, 0.3, 1);
+      }
+
+      .typed {
+        min-height: 2.3em;
+        padding: 7px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        font: 0.95rem ui-monospace, 'SF Mono', Menlo, monospace;
+        white-space: pre;
+        overflow: hidden;
+      }
+
+      .typed:empty::before {
+        content: 'Press the keys below to type';
+        color: var(--muted);
+      }
+
+      .acts {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 40px;
+      }
+
+      .acts .btn {
+        padding: 8px 15px;
+        font-size: 0.93rem;
+        border-radius: 11px;
+      }
+
+      .acts .btn.primary {
+        box-shadow: 0 4px 0 var(--accent-deep);
+      }
+
+      .acts .btn:disabled {
+        opacity: 0.4;
+        cursor: default;
+        pointer-events: none;
+      }
+
+      .acts .again {
+        margin-left: auto;
+        border: 0;
+        padding: 0;
+        background: none;
+        color: var(--muted);
+        font: inherit;
+        font-size: 0.88rem;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        cursor: pointer;
+      }
+
+      .acts .again:hover {
+        color: var(--text);
+      }
+
+      /* The keyboard on the desk. */
+      .desk {
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px dashed var(--line);
+      }
+
+      .desk > span {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 0.78rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .pad {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        max-width: 300px;
+        margin-inline: auto;
+        padding: 14px;
+        border-radius: 18px;
+        background: var(--case);
+        border: 1px solid var(--line);
+        transition: opacity 0.3s;
+      }
+
+      .pad.off {
+        opacity: 0.45;
+      }
+
+      .cap {
+        position: relative;
+        aspect-ratio: 1;
+        border: 0;
+        padding: 0;
+        border-radius: 12px;
+        background: var(--cap);
+        box-shadow: 0 6px 0 var(--cap-side);
+        color: transparent;
+        font: 800 1.1rem var(--display);
+        cursor: pointer;
+        transition:
+          transform 0.09s var(--ease),
+          box-shadow 0.09s var(--ease),
+          background 0.25s;
+      }
+
+      .pad.off .cap {
+        cursor: default;
+      }
+
+      .cap.down {
+        transform: translateY(5px);
+        box-shadow: 0 1px 0 var(--cap-side);
+      }
+
+      .cap.found {
+        background: var(--cap-on);
+        box-shadow: 0 6px 0 var(--cap-on-side);
+        color: var(--cap-on-ink);
+      }
+
+      .cap.found.down {
+        box-shadow: 0 1px 0 var(--cap-on-side);
+      }
+
+      .cap.last {
+        background: var(--accent);
+        box-shadow: 0 6px 0 var(--accent-deep);
+        color: var(--on-accent);
+      }
+
+      .cap.last.down {
+        box-shadow: 0 1px 0 var(--accent-deep);
+      }
+
+      /* The key to press next, where the demo asks for one. */
+      .cap.hint,
+      .chip.hint {
+        animation: hint 1.3s ease-in-out infinite;
+      }
+
+      @keyframes hint {
+        0%,
+        100% {
+          outline: 2px solid var(--accent);
+          outline-offset: 2px;
+        }
+        50% {
+          outline: 2px solid transparent;
+          outline-offset: 9px;
+        }
+      }
+
+      .cap:focus-visible,
+      .chip:focus-visible,
+      .theme:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+
+      /* --- Sections ------------------------------------------------------- */
+      section {
+        padding: 76px 0;
+        border-top: 1px solid var(--rule);
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font: 800 clamp(1.9rem, 4vw, 2.9rem) / 1.02 var(--display);
+        letter-spacing: -0.03em;
+      }
+
+      .sub {
+        max-width: 36em;
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        margin: 38px 0 0;
+        padding: 0;
+        list-style: none;
+        counter-reset: step;
+      }
+
+      .steps li {
+        counter-increment: step;
+        padding: 22px;
+        border-radius: 20px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+      }
+
+      .steps li::before {
+        content: counter(step);
+        display: grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        margin-bottom: 18px;
+        border-radius: 11px;
+        background: var(--cap-on);
+        box-shadow: 0 5px 0 var(--cap-on-side);
+        color: var(--cap-on-ink);
+        font: 800 1.15rem var(--display);
+      }
+
+      .steps li:last-child::before {
+        background: var(--accent);
+        box-shadow: 0 5px 0 var(--accent-deep);
+        color: var(--on-accent);
+      }
+
+      .steps h3 {
+        margin: 0 0 6px;
+        font: 700 1.25rem var(--display);
+        letter-spacing: -0.01em;
+      }
+
+      .steps p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.98rem;
+      }
+
+      .shot {
+        margin: 44px 0 0;
+        border-radius: 18px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        box-shadow: 0 40px 80px -40px rgba(0, 0, 0, 0.55);
+      }
+
+      .shot img {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      figcaption {
+        padding: 12px 18px;
+        background: var(--panel);
+        border-top: 1px solid var(--line);
+        font-size: 0.88rem;
+        color: var(--muted);
+      }
+
+      .does {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 4px 48px;
+        margin: 34px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .does li {
+        display: flex;
+        gap: 14px;
+        padding: 15px 0;
+        border-bottom: 1px solid var(--rule);
+      }
+
+      .does li::before {
+        content: '';
+        flex: none;
+        width: 22px;
+        height: 12px;
+        margin-top: 0.5em;
+        background: var(--accent);
+        clip-path: polygon(18% 0, 82% 0, 100% 100%, 0 100%);
+        border-radius: 3px;
+      }
+
+      .does b {
+        font-weight: 600;
+      }
+
+      .does span {
+        color: var(--muted);
+      }
+
+      .honest {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 48px;
+        align-items: start;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.96rem;
+      }
+
+      td {
+        padding: 13px 0;
+        border-bottom: 1px solid var(--rule);
+        vertical-align: top;
+      }
+
+      td:first-child {
+        width: 46%;
+        padding-right: 18px;
+        font-weight: 600;
+      }
+
+      td:last-child {
+        color: var(--muted);
+      }
+
+      .end {
+        text-align: center;
+        padding: 96px 0 104px;
+      }
+
+      .end h2 {
+        font-size: clamp(2.3rem, 6vw, 4.2rem);
+      }
+
+      .end .get {
+        justify-content: center;
+      }
+
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 22px;
+        padding: 26px 0 40px;
+        border-top: 1px solid var(--rule);
+        font-size: 0.88rem;
+        color: var(--muted);
+      }
+
+      footer a {
+        text-underline-offset: 3px;
+      }
+
+      footer span:first-child {
+        margin-right: auto;
+      }
+
+      @media (max-width: 1040px) and (min-width: 861px) {
+        .steps {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+
+      @media (max-width: 860px) {
+        .hero,
+        .honest {
+          grid-template-columns: 1fr;
+          gap: 40px;
+        }
+        .hero {
+          padding: 28px 0 60px;
+        }
+        .steps,
+        .does {
+          grid-template-columns: 1fr;
+        }
+        .bench {
+          padding: 18px;
+        }
+        section {
+          padding: 56px 0;
+        }
+        header nav a:not(.keep) {
+          display: none;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before {
+          animation-duration: 0.01s !important;
+          animation-delay: 0s !important;
+          transition-duration: 0.01s !important;
+        }
+        html {
+          scroll-behavior: auto;
+        }
+        .cap.hint,
+        .chip.hint {
+          animation: none;
+          outline: 2px solid var(--accent);
+          outline-offset: 3px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <img src="icon.svg" alt="" />
+        <span class="name">POG</span>
+        <span class="tag">v2</span>
+        <nav>
+          <a href="#how">How it works</a>
+          <a href="#does">What it does</a>
+          <a href="#status">Status</a>
+          <a class="keep" href="https://github.com/JanLunge/jmk">GitHub</a>
+        </nav>
+        <button class="theme" type="button" data-theme-switch aria-label="Switch to the light look" title="Light or dark">
+          <svg class="moon" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 11.6A7 7 0 0 1 8.4 3.5a7 7 0 1 0 8.1 8.1z" /></svg>
+          <svg class="sun" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="3.4" /><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7 6 6M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3" /></svg>
+        </button>
+      </header>
+
+      <main>
+        <div class="hero">
+          <div>
+            <h1>
+              <span>Flash one file.</span>
+              <span>Press every key.</span>
+              <span>Start typing.</span>
+            </h1>
+            <p class="lead">
+              <strong>JMK</strong> is keyboard firmware you configure <em>after</em> flashing.
+              <strong>POG</strong> is the app that does it: it works out how your board is wired from the
+              keys you press. No config files, no compiling.
+            </p>
+            <div class="get">
+              <a class="btn primary" data-download href="https://github.com/JanLunge/jmk/releases/latest">Download POG</a>
+              <a class="btn" href="https://github.com/JanLunge/jmk">Source on GitHub</a>
+            </div>
+            <p class="small" data-download-note>macOS, Windows and Linux · free and open source</p>
+          </div>
+
+          <div class="bench" aria-label="Demo: the setup of a small macro pad, to try here">
+            <p class="demo"><b>Demo</b> Try how the setup feels. Nothing here touches a real keyboard.</p>
+            <ol class="dots" data-dots>
+              <li><span>Firmware</span></li>
+              <li><span>Find the keys</span></li>
+              <li><span>Rows</span></li>
+              <li><span>Keymap</span></li>
+            </ol>
+            <div class="screen" aria-live="polite">
+              <p class="ask" data-ask></p>
+              <p class="hint" data-hint></p>
+              <div class="view" data-view></div>
+              <div class="acts" data-acts></div>
+            </div>
+            <div class="desk">
+              <span>Demo keyboard · a 3 × 2 macro pad</span>
+              <div class="pad off" data-pad></div>
+            </div>
+          </div>
+        </div>
+
+        <section id="how">
+          <h2>Built for people who build keyboards.</h2>
+          <p class="sub">
+            Solder, plug in, press the keys. Change the wiring tomorrow and do it again in a minute. The
+            firmware is never the part you think about.
+          </p>
+          <ol class="steps">
+            <li>
+              <h3>Flash one file</h3>
+              <p>The same prebuilt firmware for every board. POG installs it when you plug in a bare controller.</p>
+            </li>
+            <li>
+              <h3>Press every key once</h3>
+              <p>POG watches the pins and works out the wiring: one pin per key, a matrix, a duplex matrix, or a mix.</p>
+            </li>
+            <li>
+              <h3>Show where rows end</h3>
+              <p>Press the last key of each row. That gives the keys their order and the picture its shape.</p>
+            </li>
+            <li>
+              <h3>Edit it live</h3>
+              <p>You are in the editor. Keymap, layers and lights change on the keyboard as you click.</p>
+            </li>
+          </ol>
+
+          <figure class="shot">
+            <img src="editor.webp" width="2560" height="1720" loading="lazy" alt="The POG keymap editor showing a split keyboard with a Colemak-DH layout" />
+            <figcaption>The keymap of a split keyboard. Click a key, pick what it does, done.</figcaption>
+          </figure>
+        </section>
+
+        <section id="does">
+          <h2>What it does</h2>
+          <ul class="does">
+            <li><div><b>Finds the wiring itself.</b> <span>Direct pins, matrix with or without diodes, duplex matrix, rotary knobs.</span></div></li>
+            <li><div><b>Split keyboards.</b> <span>Over a serial cable, with two data wires or just one.</span></div></li>
+            <li><div><b>A real keymap.</b> <span>Layers, hold-tap, combos, one-shot modifiers, macros you record.</span></div></li>
+            <li><div><b>Letters in one go.</b> <span>QWERTY, Colemak, Colemak-DH or Dvorak on the letter keys.</span></div></li>
+            <li><div><b>Lights.</b> <span>RGB underglow and per-key lights.</span></div></li>
+            <li><div><b>One file is the whole keyboard.</b> <span>Wiring, layout, keymap and lights, to back up or to set up the next one.</span></div></li>
+            <li><div><b>Updates from the app.</b> <span>Firmware in one click, no reset button, both halves of a split.</span></div></li>
+            <li><div><b>Try it without hardware.</b> <span>Virtual keyboards run the real firmware logic.</span></div></li>
+          </ul>
+        </section>
+
+        <section id="status">
+          <div class="honest">
+            <div>
+              <h2>Early, and honest about it.</h2>
+              <p class="sub">
+                This is an early alpha. The saved format can still change. I use it daily on macOS and
+                Ubuntu on my own boards.
+              </p>
+              <p class="sub" style="margin-top: 14px">
+                Built with a lot of AI help: I design it, decide what goes in and test it on my own
+                keyboards, but most of the code was written with AI coding tools.
+              </p>
+              <p class="sub" style="margin-top: 14px">
+                POG v2 follows <a href="https://github.com/JanLunge/pog">POG</a>, which did the same job for KMK.
+              </p>
+            </div>
+            <table>
+              <tr>
+                <td>RP2040<br /><span class="small">Pi Pico and friends</span></td>
+                <td>Runs on my own boards. This is the one to use.</td>
+              </tr>
+              <tr>
+                <td>nRF52840<br /><span class="small">nice!nano and friends</span></td>
+                <td>Compiles, not yet run on a real board. No wireless yet.</td>
+              </tr>
+              <tr>
+                <td>Split over a cable</td>
+                <td>Works with two data wires and with one.</td>
+              </tr>
+              <tr>
+                <td>RGB lights</td>
+                <td>WS2812, on the RP2040 only.</td>
+              </tr>
+            </table>
+          </div>
+        </section>
+
+        <section class="end">
+          <h2>Got a board on the desk?</h2>
+          <div class="get">
+            <a class="btn primary" data-download href="https://github.com/JanLunge/jmk/releases/latest">Download POG</a>
+            <a class="btn" href="https://github.com/JanLunge/jmk/releases/latest">All downloads</a>
+          </div>
+          <p class="small">No board yet? The app comes with virtual keyboards to try all of it.</p>
+        </section>
+      </main>
+
+      <footer>
+        <span>JMK and POG v2 · by Jan Lunge</span>
+        <a href="https://github.com/JanLunge/jmk">GitHub</a>
+        <a href="https://github.com/JanLunge/jmk/releases">Releases</a>
+        <a href="https://github.com/JanLunge/jmk/blob/main/LICENSE">Apache License 2.0</a>
+      </footer>
+    </div>
+
+    <script>
+      // --- Light or dark --------------------------------------------------------
+      const root = document.documentElement
+      const themeSwitch = document.querySelector('[data-theme-switch]')
+      const nameTheme = () => themeSwitch.setAttribute('aria-label', root.dataset.theme === 'light' ? 'Switch to the dark look' : 'Switch to the light look')
+      nameTheme()
+      themeSwitch.addEventListener('click', () => {
+        root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light'
+        nameTheme()
+        try {
+          localStorage.setItem('pog.theme', root.dataset.theme)
+        } catch {}
+      })
+
+      // --- The setup of a 3 × 2 macro pad, in the app's own four steps. ----------
+      const KEYS = 6
+      /** The pad is three wide, so this key ends its top row. */
+      const TOP_RIGHT = 2
+      const LETTERS = 'QWEASD'
+      const pad = document.querySelector('[data-pad]')
+      const dots = [...document.querySelectorAll('[data-dots] li')]
+      const ask = document.querySelector('[data-ask]')
+      const hint = document.querySelector('[data-hint]')
+      const view = document.querySelector('[data-view]')
+      const acts = document.querySelector('[data-acts]')
+      const el = (tag, className, text) => Object.assign(document.createElement(tag), { className: className ?? '', textContent: text ?? '' })
+
+      const caps = Array.from({ length: KEYS }, (_, index) => {
+        const cap = el('button', 'cap')
+        cap.type = 'button'
+        cap.addEventListener('pointerdown', () => press(index))
+        // Space and Enter on a focused key, for whoever does not use a pointer.
+        cap.addEventListener('click', (event) => event.detail === 0 && press(index))
+        pad.append(cap)
+        return cap
+      })
+
+      /** step: 0 firmware, 1 keys, 2 rows, 3 keymap. order: the keys of the pad as they were pressed. */
+      const state = { step: 0, order: [], ends: new Set(), letters: [], picked: 0, typed: '' }
+
+      /** The keys in the order pressed, cut into rows after each row end. */
+      function rows() {
+        const all = [[]]
+        state.order.forEach((_, n) => {
+          all.at(-1).push(n)
+          if (state.ends.has(n) && n < state.order.length - 1) all.push([])
+        })
+        return all
+      }
+
+      /** The key that ends the top row, until a row end is marked: the one the demo asks for. */
+      function hinted() {
+        if (state.step !== 2 || state.ends.size > 0) return -1
+        const n = state.order.indexOf(TOP_RIGHT)
+        return n === state.order.length - 1 ? -1 : n
+      }
+
+      function button(text, primary, action, disabled = false) {
+        const b = el('button', primary ? 'btn primary' : 'btn', text)
+        b.type = 'button'
+        b.disabled = disabled
+        b.addEventListener('click', action)
+        return b
+      }
+
+      function draw() {
+        dots.forEach((dot, n) => (dot.className = n < state.step ? 'done' : n === state.step ? 'now' : ''))
+        pad.classList.toggle('off', state.step === 0)
+        const wanted = hinted()
+        caps.forEach((cap, index) => {
+          const n = state.order.indexOf(index)
+          cap.classList.toggle('found', n >= 0)
+          cap.classList.toggle('hint', n >= 0 && n === wanted)
+          cap.textContent = n < 0 ? '' : state.step === 3 ? state.letters[n] : n + 1
+          cap.setAttribute('aria-label', n < 0 ? 'A key that was not pressed yet' : `Key ${n + 1}`)
+        })
+        view.replaceChildren()
+        acts.replaceChildren()
+        ;[firmware, keys, ends, keymap][state.step]()
+        if (state.step > 0) {
+          const again = el('button', 'again', 'Start again')
+          again.type = 'button'
+          again.addEventListener('click', reset)
+          acts.append(again)
+        }
+      }
+
+      function firmware() {
+        ask.textContent = 'Say you plug in a new board.'
+        hint.textContent = 'It has no firmware yet. The app carries it.'
+        const bar = el('div', 'bar')
+        bar.append(el('i'))
+        bar.hidden = true
+        view.append(bar)
+        const install = button('Install the firmware', true, () => {
+          install.disabled = true
+          install.textContent = 'Installing…'
+          bar.hidden = false
+          requestAnimationFrame(() => requestAnimationFrame(() => (bar.firstChild.style.width = '100%')))
+          setTimeout(() => go(1), 1500)
+        })
+        acts.append(install)
+      }
+
+      function keys() {
+        const found = state.order.length
+        ask.textContent = 'Press every key once.'
+        hint.innerHTML = found ? `<span class="num">${found}</span> <b>${found === 1 ? 'key' : 'keys'}</b> · any order` : 'Click the keys below, or type on your own keyboard.'
+        const line = el('div', 'line')
+        state.order.forEach((_, n) => line.append(el('span', 'chip', n + 1)))
+        for (let n = found; n < KEYS; n++) line.append(el('span', 'chip empty'))
+        view.append(line)
+        acts.append(button("That's all of them", true, () => go(2), found < KEYS))
+      }
+
+      function ends() {
+        const marked = state.ends.size > 0
+        const wanted = hinted()
+        ask.textContent = 'Which key ends each row?'
+        hint.textContent = marked
+          ? 'The app now knows which keys sit next to each other.'
+          : wanted < 0
+            ? 'Press the last key of the top row, on the keyboard or here.'
+            : `Press the last key of the top row: the pulsing one, key ${wanted + 1}.`
+        for (const row of rows()) {
+          const line = el('div', 'line')
+          for (const n of row) {
+            const chip = el('button', state.ends.has(n) ? 'chip row-end' : n === wanted ? 'chip hint' : 'chip', n + 1)
+            chip.type = 'button'
+            chip.setAttribute('aria-label', `Key ${n + 1}${state.ends.has(n) ? ', ends its row' : ''}`)
+            chip.addEventListener('click', () => toggleEnd(n))
+            line.append(chip)
+          }
+          view.append(line)
+        }
+        acts.append(button(marked ? 'Continue' : 'Skip', true, () => go(3)))
+      }
+
+      function keymap() {
+        ask.textContent = 'Done. Next comes the editor.'
+        hint.textContent = 'A taste of it: pick a key and type a letter to change it. The real one is in the app.'
+        for (const row of rows()) {
+          const line = el('div', 'line')
+          for (const n of row) {
+            const chip = el('button', n === state.picked ? 'chip picked' : 'chip', state.letters[n])
+            chip.type = 'button'
+            chip.setAttribute('aria-label', `Key ${n + 1}: ${state.letters[n]}`)
+            chip.addEventListener('click', () => {
+              state.picked = n
+              draw()
+            })
+            line.append(chip)
+          }
+          view.append(line)
+        }
+        view.append(el('div', 'typed', state.typed))
+      }
+
+      function toggleEnd(n) {
+        // The last key ends the last row anyway.
+        if (n === state.order.length - 1) return
+        state.ends.has(n) ? state.ends.delete(n) : state.ends.add(n)
+        draw()
+      }
+
+      function go(step) {
+        state.step = step
+        if (step === 3) state.letters = [...LETTERS]
+        caps.forEach((cap) => cap.classList.remove('last'))
+        draw()
+      }
+
+      function reset() {
+        Object.assign(state, { order: [], ends: new Set(), letters: [], picked: 0, typed: '' })
+        go(0)
+      }
+
+      /** A key of the pad goes down. */
+      function press(index) {
+        if (state.step === 0) return
+        const cap = caps[index]
+        cap.classList.add('down')
+        setTimeout(() => cap.classList.remove('down'), 130)
+        caps.forEach((each) => each.classList.toggle('last', each === cap))
+        const n = state.order.indexOf(index)
+        if (state.step === 1 && n < 0) state.order.push(index)
+        else if (state.step === 2) return toggleEnd(n)
+        else if (state.step === 3) state.typed = (state.typed + state.letters[n].toLowerCase()).slice(-22)
+        draw()
+      }
+
+      // The visitor's own keyboard: it presses the pad while keys are found, and fills the keymap at the end.
+      window.addEventListener('keydown', (event) => {
+        if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return
+        if (event.key.length !== 1 || event.key === ' ') return
+        if (event.target instanceof HTMLElement && event.target.closest('a, input, textarea')) return
+        if (state.step === 1) {
+          const next = caps.findIndex((_, index) => !state.order.includes(index))
+          if (next >= 0) press(next)
+        } else if (state.step === 3) {
+          state.letters[state.picked] = event.key.toUpperCase()
+          state.picked = (state.picked + 1) % KEYS
+          draw()
+        }
+      })
+
+      draw()
+
+      // --- Downloads: straight to the file for this system, when GitHub says which. ---
+      const system = /Mac/i.test(navigator.platform) ? 'mac' : /Win/i.test(navigator.platform) ? 'win' : /Linux/i.test(navigator.platform) && !/Android/i.test(navigator.userAgent) ? 'linux' : undefined
+      const names = { mac: 'macOS', win: 'Windows', linux: 'Linux' }
+      const buttons = document.querySelectorAll('[data-download]')
+      if (system) buttons.forEach((button) => (button.textContent = `Download for ${names[system]}`))
+
+      fetch('https://api.github.com/repos/JanLunge/jmk/releases/latest')
+        .then((answer) => (answer.ok ? answer.json() : Promise.reject()))
+        .then((release) => {
+          const version = release.tag_name.replace(/^v/, '')
+          const note = document.querySelector('[data-download-note]')
+          note.textContent = `Version ${version} · macOS, Windows and Linux · free and open source`
+          // Apple silicon cannot be told from Intel in a browser, so a Mac gets the release page with both.
+          const file = { win: /-win-x64\.exe$/, linux: /\.AppImage$/ }[system]
+          const asset = file && release.assets.find((each) => file.test(each.name))
+          if (asset) buttons.forEach((button) => (button.href = asset.browser_download_url))
+          if (system === 'win') note.textContent += ' · not signed yet, so Windows asks once'
+        })
+        .catch(() => {})
+    </script>
+  </body>
+</html>

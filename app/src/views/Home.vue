@@ -1,16 +1,54 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { arrivals, installArrival, updateDue, updateNeedsUsb } from '../lib/firmware'
 import SplitPicture, { type PictureBoard } from '../components/SplitPicture.vue'
 import SetupGuide from '../components/SetupGuide.vue'
 import { isConfigured, role } from '../lib/session'
 import KeyboardView from '../components/KeyboardView.vue'
-import { app, connectUsb, openDemo } from '../lib/app'
+import { app, connectUsb, openDemo, reconnectUsb } from '../lib/app'
 import { DEMOS } from '../lib/demos'
-import { appUpdate, desktop } from '../lib/desktop'
+import { appUpdate, desktop, type KeyboardAccess } from '../lib/desktop'
 import { usbSupported } from '../lib/transport'
 
 const canUsb = usbSupported()
+
+// Linux keeps programs from a keyboard's settings until a udev rule lets
+// them in. The desktop app sees a keyboard it is kept from and can install
+// the rule; a browser cannot tell, so there it is a line of advice.
+const access = ref<KeyboardAccess>()
+const allowing = ref(false)
+const allowProblem = ref('')
+const byHand = ref(false)
+const linuxBrowser = !desktop && canUsb && /Linux/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent)
+async function lookAtAccess() {
+  access.value = await desktop!.access().catch(() => undefined)
+}
+if (desktop?.platform === 'linux') {
+  lookAtAccess()
+  const timer = setInterval(() => allowing.value || lookAtAccess(), 2000)
+  onBeforeUnmount(() => clearInterval(timer))
+}
+async function allow() {
+  allowing.value = true
+  allowProblem.value = ''
+  try {
+    const problem = await desktop!.allowAccess()
+    if (problem && problem !== 'dismissed') {
+      allowProblem.value = problem
+      byHand.value = true
+    }
+    await lookAtAccess()
+    if (!access.value?.blocked) await reconnectUsb()
+  } finally {
+    allowing.value = false
+  }
+}
+const copied = ref(false)
+async function copyCommand() {
+  await navigator.clipboard.writeText(access.value?.command ?? '')
+  copied.value = true
+  setTimeout(() => (copied.value = false), 1500)
+}
 
 // Putting JMK on a board for the first time (desktop app only).
 const installing = ref<'idle' | 'waiting' | 'done'>('idle')
@@ -95,6 +133,23 @@ const previews = computed(() =>
     <SetupGuide :steps="steps" :current="stage === 'waiting' ? 0 : 1" />
     <div class="side col">
       <div class="setup-fill" :class="{ listed: app.sessions.length }">
+        <Transition name="rise">
+          <div v-if="access?.blocked" class="note warn access col" data-test="linux-access">
+            <div class="row">
+              <div class="col grow">
+                <strong>Linux keeps POG from your keyboard.</strong>
+                <span class="small">Allow it once with your password.</span>
+              </div>
+              <button class="btn primary" :disabled="allowing" data-test="linux-allow" @click="allow">{{ allowing ? 'Waiting…' : 'Allow' }}</button>
+            </div>
+            <span v-if="allowProblem" class="small" data-test="linux-problem">{{ allowProblem }} Run this in a terminal instead:</span>
+            <button v-else-if="!byHand" class="link small by-hand" @click="byHand = true">Or do it yourself in a terminal</button>
+            <div v-if="byHand" class="row command">
+              <code class="mono small grow" data-test="linux-command">{{ access.command }}</code>
+              <button class="btn small ghost" @click="copyCommand">{{ copied ? 'Copied' : 'Copy' }}</button>
+            </div>
+          </div>
+        </Transition>
         <!-- Keyboards that are open already come first: they are what you came back for. -->
         <section v-if="app.sessions.length" class="col open" data-test="found-boards">
           <h2>Your keyboards</h2>
@@ -226,6 +281,9 @@ const previews = computed(() =>
             {{ desktop ? 'Look for a keyboard' : 'Connect a keyboard' }}
           </button>
           <span v-else class="muted small">This browser cannot talk to USB keyboards. Use the desktop app.</span>
+          <a v-if="linuxBrowser" class="muted small" href="https://github.com/JanLunge/jmk#linux" target="_blank" rel="noopener" data-test="linux-hint">
+            Not found on Linux?
+          </a>
         </template>
       </footer>
     </div>
@@ -265,6 +323,37 @@ const previews = computed(() =>
   height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.access {
+  gap: 8px;
+  margin-bottom: 20px;
+  align-self: center;
+  width: 100%;
+  max-width: 640px;
+}
+
+.access .row {
+  gap: 14px;
+  align-items: center;
+}
+
+.access .by-hand {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.access code {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  overflow-wrap: anywhere;
+  user-select: all;
 }
 
 .open {

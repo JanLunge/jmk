@@ -23,6 +23,11 @@ export interface AppUpdate {
   message?: string
 }
 
+export interface KeyboardAccess {
+  blocked: number
+  command: string
+}
+
 export interface Desktop {
   /** Node's name for the operating system: 'darwin', 'win32', 'linux'. */
   platform: string
@@ -35,6 +40,17 @@ export interface Desktop {
   drives(): Promise<BootDrive[]>
   /** The chips the app carries a firmware file for, e.g. ['rp2040']. */
   bundled(): Promise<string[]>
+  /**
+   * Linux only: how many JMK keyboards are plugged in that the system keeps
+   * the app from, and the terminal command that lets it in.
+   */
+  access(): Promise<KeyboardAccess>
+  /**
+   * Linux only: install the rule that lets the app in; the system asks for
+   * the password. Resolves to '' when done, 'dismissed' when the user closed
+   * the dialog, otherwise to what went wrong.
+   */
+  allowAccess(): Promise<string>
   update: {
     state(): Promise<AppUpdate>
     /** Look for a newer release now; a newer one is downloaded straight away. */

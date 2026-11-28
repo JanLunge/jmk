@@ -1,0 +1,4 @@
+# Lets POG set up JMK keyboards. Save as /etc/udev/rules.d/70-jmk-keyboard.rules
+# and plug the keyboard in again.
+ACTION!="remove", SUBSYSTEM=="hidraw", ATTRS{manufacturer}=="JMK", ENV{JMK_KEYBOARD}="1"
+ENV{JMK_KEYBOARD}=="1", ATTRS{bInterfaceNumber}=="02", TAG+="uaccess"
