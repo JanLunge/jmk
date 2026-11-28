@@ -789,6 +789,8 @@ kbd {
 
 /* The drawing shrinks to the room there is, in both directions. */
 .board > svg {
+  /* The same picture in the keymap and under the typing test: it moves from one to the other. */
+  view-transition-name: keyboard;
   flex: 1 1 0;
   min-height: 0;
 }

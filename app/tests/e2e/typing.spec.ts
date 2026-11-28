@@ -192,13 +192,20 @@ test("the computer's own keyboard, as a real keyboard types: the field, its log 
   await page.keyboard.press('ArrowLeft', { delay: 40 })
   await expect(page.locator('[data-test=scratch-text]')).toHaveValue('h')
   await expect(page.locator('[data-test=scratch-keys] .key')).toHaveText(['h', 'i', 'Bksp', '←'])
+  // The keys have a line of their own: wide or narrow, they leave the text where it is.
+  await page.waitForTimeout(400) // the field has widened by now
+  const text = await page.locator('[data-test=scratch-text]').boundingBox()
+  await page.keyboard.press('Space', { delay: 40 })
+  await page.keyboard.press('Backspace', { delay: 40 })
+  await expect(page.locator('[data-test=scratch-keys] .key')).toHaveText(['h', 'i', 'Bksp', '←', 'Space', 'Bksp'])
+  expect(await page.locator('[data-test=scratch-text]').boundingBox()).toEqual(text)
   // Using the field moves nothing else in the header.
   expect(await page.locator('header.bar').boundingBox()).toEqual(header)
   await page.click('[data-test=scratch-keys]')
   const rows = page.locator('[data-test=scratch-log-row]')
-  await expect(rows.locator('.cap')).toHaveText(['←', 'Bksp', 'i', 'h'])
-  expect(ms(await rows.nth(1).locator('[data-test=log-held]').textContent())).toBeGreaterThanOrEqual(30)
-  expect(ms(await rows.nth(1).locator('[data-test=log-gap]').textContent())).toBeGreaterThanOrEqual(30)
+  await expect(rows.locator('.cap')).toHaveText(['Bksp', 'Space', '←', 'Bksp', 'i', 'h'])
+  expect(ms(await rows.nth(3).locator('[data-test=log-held]').textContent())).toBeGreaterThanOrEqual(30)
+  expect(ms(await rows.nth(3).locator('[data-test=log-gap]').textContent())).toBeGreaterThanOrEqual(30)
   await page.keyboard.press('Escape')
   await expect(page.locator('[data-test=scratch-log]')).toHaveCount(0)
 

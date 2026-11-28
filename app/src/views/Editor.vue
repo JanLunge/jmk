@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import KeyboardView from '../components/KeyboardView.vue'
 import TryBox from '../components/TryBox.vue'
 import { attempt, cabled, openFarHalf, pairByCable, partnerOf, reconcile, resolveConflict, saveAll, sideOf, toast } from '../lib/app'
-import { hearVirtual, newTryout } from '../lib/tryout'
+import { hearVirtual, newTryout, setExpanded } from '../lib/tryout'
 import { carriedVersion, updateDue, updateFirmware, updating } from '../lib/firmware'
 import { historyOf, redo, startHistory, undo } from '../lib/history'
 import { legend } from '../lib/keycodes'
@@ -390,9 +390,10 @@ onBeforeUnmount(() => {
     </Transition>
 
     <div class="content">
-      <Transition name="rise" mode="out-in">
-        <TypingTest v-if="tryout.expanded" :session="session" :tryout="tryout" :virtual="virtualKeys" @close="tryout.expanded = false" />
-        <KeymapTab v-else-if="tab === 'keymap'" :session="session" />
+      <!-- Not part of the tabs' own transition: the keyboard's picture moves between the two (see setExpanded). -->
+      <TypingTest v-if="tryout.expanded" :session="session" :tryout="tryout" :virtual="virtualKeys" @close="setExpanded(tryout, false)" />
+      <Transition v-else name="rise" mode="out-in">
+        <KeymapTab v-if="tab === 'keymap'" :session="session" />
         <LayoutTab v-else-if="tab === 'layout'" :session="session" />
         <BehaviorsTab v-else-if="tab === 'behaviours'" :session="session" />
         <LightingTab v-else-if="tab === 'lighting'" :key="lit.id" :session="lit" :main="session" :halves="lightHalves" @half="litId = $event" />

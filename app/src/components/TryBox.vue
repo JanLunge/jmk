@@ -1,12 +1,13 @@
 <script setup lang="ts">
 // A slim field in the header to type into, for trying the keyboard out. The
-// keys that arrived last are named beside the text, so keys that print
-// nothing (Esc, arrows, Bksp) show too; a click on them opens the log of all
-// of them with their timings. A real keyboard types into the field as into
+// keys that arrived last are named on a line of their own under the text, so
+// keys that print nothing (Esc, arrows, Bksp) show too and the text never
+// moves for them; a click on them opens the log of all of them with their
+// timings. A real keyboard types into the field as into
 // any other; a virtual one has its keys read from what it sends.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { domStroke } from '../lib/keyfeed'
-import { clearTryout, loseHeld, takeStroke, type Tryout } from '../lib/tryout'
+import { clearTryout, loseHeld, setExpanded, takeStroke, type Tryout } from '../lib/tryout'
 import KeyLogPanel from './KeyLogPanel.vue'
 
 const props = defineProps<{
@@ -21,7 +22,8 @@ const root = ref<HTMLElement>()
 const field = ref<HTMLInputElement>()
 const focused = ref(false)
 const logOpen = ref(false)
-const recent = computed(() => props.tryout.log.entries.slice(-4))
+// As many as the line under the field can show; older ones slide out on its left.
+const recent = computed(() => props.tryout.log.entries.slice(-14))
 const used = computed(() => !!text.value || props.tryout.log.entries.length > 0)
 
 function onKey(event: KeyboardEvent, down: boolean) {
@@ -69,52 +71,56 @@ onBeforeUnmount(() => listen(false))
 
 <template>
   <div ref="root" class="try" :class="{ open: focused || used || logOpen || tryout.expanded }" data-test="scratch" @click="field?.focus()">
-    <span v-if="tryout.expanded" class="field label muted">Typing test</span>
-    <input
-      v-else
-      ref="field"
-      :value="text"
-      class="field mono"
-      :placeholder="virtual ? 'Press its keys to try it' : 'Type here to try it'"
-      :readonly="virtual"
-      spellcheck="false"
-      autocomplete="off"
-      autocapitalize="off"
-      data-test="scratch-text"
-      @input="own = ($event.target as HTMLInputElement).value"
-      @keydown="onKey($event, true)"
-      @keyup="onKey($event, false)"
-      @focus="focused = true"
-      @blur="onBlur"
-    />
+    <div class="line">
+      <span v-if="tryout.expanded" class="field label muted">Typing test</span>
+      <input
+        v-else
+        ref="field"
+        :value="text"
+        class="field mono"
+        :placeholder="virtual ? 'Press its keys to try it' : 'Type here to try it'"
+        :readonly="virtual"
+        spellcheck="false"
+        autocomplete="off"
+        autocapitalize="off"
+        data-test="scratch-text"
+        @input="own = ($event.target as HTMLInputElement).value"
+        @keydown="onKey($event, true)"
+        @keyup="onKey($event, false)"
+        @focus="focused = true"
+        @blur="onBlur"
+      />
+      <button class="icon clear" :class="{ hidden: !used }" title="Clear the text and the log" aria-label="Clear" :tabindex="used ? 0 : -1" data-test="scratch-clear" @click.stop="clear">×</button>
+      <button
+        class="icon expand"
+        :class="{ on: tryout.expanded }"
+        :title="tryout.expanded ? 'Close the typing test' : 'Open the typing test'"
+        :aria-label="tryout.expanded ? 'Close the typing test' : 'Open the typing test'"
+        :aria-pressed="tryout.expanded"
+        data-test="scratch-expand"
+        @click.stop="setExpanded(tryout, !tryout.expanded)"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path v-if="tryout.expanded" d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+          <path v-else d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+        </svg>
+      </button>
+    </div>
+    <!-- A line of its own, always there: keys come and go on it without moving the text above. -->
     <button
       class="keys"
       :class="{ on: logOpen }"
       :disabled="!tryout.log.entries.length && !logOpen"
-      title="The keys that came last. Click for all of them with their timings."
+      title="The keys that came last, newest on the right. Click for all of them with their timings."
       aria-label="Timing log"
       :aria-expanded="logOpen"
       data-test="scratch-keys"
       @click.stop="logOpen = !logOpen"
     >
+      <span v-if="!recent.length" class="none">keys show here</span>
       <TransitionGroup name="pop">
         <span v-for="key in recent" :key="key.id" class="key">{{ key.label }}</span>
       </TransitionGroup>
-    </button>
-    <button class="icon clear" :class="{ hidden: !used }" title="Clear the text and the log" aria-label="Clear" :tabindex="used ? 0 : -1" data-test="scratch-clear" @click.stop="clear">×</button>
-    <button
-      class="icon expand"
-      :class="{ on: tryout.expanded }"
-      :title="tryout.expanded ? 'Close the typing test' : 'Open the typing test'"
-      :aria-label="tryout.expanded ? 'Close the typing test' : 'Open the typing test'"
-      :aria-pressed="tryout.expanded"
-      data-test="scratch-expand"
-      @click.stop="tryout.expanded = !tryout.expanded"
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path v-if="tryout.expanded" d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
-        <path v-else d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
-      </svg>
     </button>
     <Transition name="fade">
       <KeyLogPanel v-if="logOpen" class="panel" :log="tryout.log" @clear="clearTryout(tryout)" @close="logOpen = false" @click.stop />
@@ -126,14 +132,11 @@ onBeforeUnmount(() => listen(false))
 .try {
   position: relative;
   display: flex;
-  align-items: center;
-  gap: 4px;
+  flex-direction: column;
   width: 230px;
   /* Never so wide that the header has to make room. */
   flex: 0 1 auto;
   min-width: 150px;
-  height: 38px;
-  padding: 0 4px 0 12px;
   border-radius: 10px;
   border: 1px solid var(--line);
   background: var(--bg);
@@ -151,6 +154,14 @@ onBeforeUnmount(() => listen(false))
 .try:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 2px 3px 0 12px;
 }
 
 .field {
@@ -173,26 +184,26 @@ onBeforeUnmount(() => listen(false))
   cursor: default;
 }
 
+/* The newest key sits at the right end; older ones are pushed out on the left, where they fade. */
 .keys {
   display: flex;
-  gap: 4px;
-  flex: none;
-  max-width: 58%;
-  height: 28px;
+  gap: 3px;
+  height: 22px;
   align-items: center;
-  overflow: hidden;
   justify-content: flex-end;
-  padding: 0 4px;
+  overflow: hidden;
+  padding: 0 6px 2px 12px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 0 0 9px 9px;
   background: none;
   cursor: pointer;
+  font: inherit;
+  mask-image: linear-gradient(to right, transparent 0, #000 36px);
   transition: background 0.15s;
 }
 
 .keys:disabled {
   cursor: text;
-  padding: 0;
 }
 
 .keys:hover:not(:disabled),
@@ -203,17 +214,27 @@ onBeforeUnmount(() => listen(false))
 .keys:focus-visible,
 .icon:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: -2px;
+}
+
+.none {
+  flex: 1;
+  text-align: left;
+  color: var(--muted);
+  font-size: 0.72rem;
+  opacity: 0.7;
+  white-space: nowrap;
 }
 
 .key {
   flex: none;
-  padding: 1px 7px;
-  border-radius: 6px;
+  padding: 0 6px;
+  border-radius: 5px;
   background: var(--cap-top);
   border-bottom: 2px solid var(--cap);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 600;
+  line-height: 15px;
   white-space: nowrap;
 }
 
@@ -224,8 +245,8 @@ onBeforeUnmount(() => listen(false))
 
 .icon {
   flex: none;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
   border: none;
@@ -251,8 +272,8 @@ onBeforeUnmount(() => listen(false))
 }
 
 .icon svg {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -260,7 +281,7 @@ onBeforeUnmount(() => listen(false))
   stroke-linejoin: round;
 }
 
-/* Kept in place while there is nothing to clear, so the keys beside it do not shift when there is. */
+/* Kept in place while there is nothing to clear, so nothing beside it shifts when there is. */
 .clear.hidden {
   visibility: hidden;
 }

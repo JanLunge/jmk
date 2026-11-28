@@ -385,3 +385,22 @@ textarea {
 .blend-leave-to {
   opacity: 0;
 }
+
+/* Opening and closing the typing test: the keyboard's picture travels, the rest fades. */
+::view-transition-group(keyboard) {
+  animation-duration: 0.45s;
+  animation-timing-function: var(--ease);
+}
+
+/* The two pictures are boxes of different shapes around the same drawing: keep its proportions on the way. */
+::view-transition-old(keyboard),
+::view-transition-new(keyboard) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.25s;
+}

@@ -1,6 +1,7 @@
 // Trying a keyboard out from the editor: the keys it sent, with timings, what
 // they typed, and whether the typing test is open. One per open editor.
 
+import { nextTick } from 'vue'
 import { ReportReader, type Stroke } from './keyfeed'
 import { clearLog, logLoseHeld, logPress, logRelease, newKeyLog, type KeyLog } from './keylog'
 import { onHostEvent } from './session'
@@ -26,6 +27,21 @@ export function takeStroke(tryout: Tryout, stroke: Stroke, at: number, typing = 
     else if (stroke.text) tryout.text = (tryout.text + stroke.text).slice(-400)
   }
   tryout.hear?.(stroke, at)
+}
+
+/**
+ * Open or close the typing test. Where the browser can, the change is one
+ * view transition, so what both views share (the keyboard's picture, named
+ * `keyboard` in their styles) moves to its new place instead of being swapped.
+ */
+export function setExpanded(tryout: Tryout, on: boolean): void {
+  const change = async () => {
+    tryout.expanded = on
+    await nextTick()
+  }
+  const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (typeof document === 'undefined' || !document.startViewTransition || still) void change()
+  else document.startViewTransition(change)
 }
 
 export function clearTryout(tryout: Tryout): void {
