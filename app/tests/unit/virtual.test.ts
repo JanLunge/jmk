@@ -10,7 +10,7 @@ import { DEMOS } from '../../src/lib/demos'
 import type { Contact, HostEvent, Wire } from '../../src/lib/protocol'
 import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../../src/lib/lighting'
 import { keymapPoster } from '../../src/lib/poster'
-import { layerHex } from '../../src/lib/layers'
+import { layerHex, onWith } from '../../src/lib/layers'
 import { gridLayout } from '../../src/lib/layout'
 import { addKey, alignHalves, canTuneCombos, knobPositions, setCombos, needsRestart, save, setIndicators, setLayerWith, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
 import { starterAction } from './keys'
@@ -44,6 +44,16 @@ async function during<T>(work: Promise<T>): Promise<T> {
 }
 
 const keys = (typed: HostEvent[]) => typed.flatMap((e) => ('Keyboard' in e ? [e.Keyboard.keys] : []))
+
+describe('a see-through key', () => {
+  it('falls to the layers that are on with its own, not to every layer below', () => {
+    // Layer 2 is reached on its own: only the base is under it.
+    expect(onWith([], 2)).toEqual([2, 0])
+    // Layer 3 is on while 1 and 2 are; layer 4 while 3 is, and so with all of them.
+    expect(onWith([0, 0, 0, 0b110, 0b1000], 3)).toEqual([3, 2, 1, 0])
+    expect(onWith([0, 0, 0, 0b110, 0b1000], 4)).toEqual([4, 3, 2, 1, 0])
+  })
+})
 
 describe('virtual macro pad', () => {
   it('types through layers set from the app', async () => {

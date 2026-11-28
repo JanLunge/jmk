@@ -8,7 +8,7 @@ import { app, attempt, toast } from '../lib/app'
 import { localPositions } from '../lib/definition'
 import { dropped, landOn } from '../lib/drag'
 import { isModifierUsage, legend, usageForCode } from '../lib/keycodes'
-import { LAYER_COLORS, layerColor, layerColorNumber } from '../lib/layers'
+import { LAYER_COLORS, layerColor, layerColorNumber, onWith } from '../lib/layers'
 import { hasKey, nextInRow } from '../lib/layout'
 import type { Action, Basic } from '../lib/protocol'
 import { recordingKeys } from '../lib/recording'
@@ -29,12 +29,14 @@ const selected = computed<number | undefined>({
 watch(() => props.session.layers.length, (count) => (layer.value = Math.min(layer.value, count - 1)))
 
 const actions = computed(() => props.session.layers[layer.value] ?? [])
+/** The layers a see-through key of the open layer can fall to, highest first. */
+const under = computed(() => onWith(props.session.layersWith, layer.value).slice(1))
 const keyLegend = (pos: number) => {
   const action = actions.value[pos]
   if (action === undefined) return undefined
   // A see-through key shows, faintly, what it falls through to.
   if (action === 'Transparent') {
-    for (let below = layer.value - 1; below >= 0; below--) {
+    for (const below of under.value) {
       const lower = props.session.layers[below][pos]
       if (lower !== 'Transparent') return { ...legend(lower), kind: 'through' as const }
     }
@@ -51,12 +53,9 @@ function named(action: Action, drawn: ReturnType<typeof legend>) {
   return { ...drawn, main: name.length > 7 ? name.slice(0, 6) + '…' : name, sub: `M${index! + 1}` }
 }
 
-/** The layer whose action is drawn at a position: the first one at or below this layer that is not see-through. */
+/** The layer whose action is drawn at a position: this one, or the first one a see-through key falls to that has a key. */
 function shownLayer(pos: number): number {
-  for (let at = layer.value; at > 0; at--) {
-    if (props.session.layers[at]?.[pos] !== 'Transparent') return at
-  }
-  return 0
+  return [layer.value, ...under.value].find((at) => props.session.layers[at]?.[pos] !== 'Transparent') ?? 0
 }
 
 // A held key lights up fully only if the keyboard is doing what is drawn on

@@ -5,6 +5,7 @@
 import { describeAction, legend, type Legend } from './keycodes'
 import { layerHex } from './layers'
 import { bounds, hasKey } from './layout'
+import { onWith } from './layers'
 import type { Action, Combo, KeyGeometry } from './protocol'
 
 export interface PosterSource {
@@ -12,6 +13,8 @@ export interface PosterSource {
   layout: KeyGeometry[]
   layers: Action[][]
   layerColors: number[]
+  /** Per layer: the layers, one bit each, that turn it on while all of them are on. */
+  layersWith?: number[]
   /** Positions drawn as a knob: the first of each knob's two. */
   knobs: number[]
   combos: Combo[]
@@ -58,8 +61,9 @@ function text(x: number, y: number, size: number, fill: string, content: string,
 const fit = (content: string, width: number, most: number, least = 8) => Math.max(least, Math.min(most, width / Math.max(content.length, 1) / 0.6))
 
 /** What a layer does at a position, looking through see-through keys. */
-function resolved(layers: Action[][], layer: number, pos: number): { action: Action; through: boolean } {
-  for (let at = layer; at >= 0; at--) {
+function resolved(source: PosterSource, layer: number, pos: number): { action: Action; through: boolean } {
+  const layers = source.layers
+  for (const at of onWith(source.layersWith ?? [], layer)) {
     const action = layers[at]?.[pos] ?? 'Transparent'
     if (action !== 'Transparent') return { action, through: at !== layer }
   }
@@ -158,14 +162,14 @@ export function keymapPoster(source: PosterSource, options: PosterOptions): Post
         (pos) => {
           const key = source.layout[pos]
           if (source.knobs.includes(pos)) {
-            const side = (at: number) => legend(resolved(source.layers, layer, at).action).main
+            const side = (at: number) => legend(resolved(source, layer, at).action).main
             return knobLegend(theme, key, scale, side(pos), side(pos + 1))
           }
-          const { action, through } = resolved(source.layers, layer, pos)
+          const { action, through } = resolved(source, layer, pos)
           return plainLegend(theme, key, scale, legend(action), through)
         },
         (pos) => {
-          const { action, through } = resolved(source.layers, layer, pos)
+          const { action, through } = resolved(source, layer, pos)
           return capLook(theme, colors, legend(action), through && !source.knobs.includes(pos))
         },
       )
@@ -198,7 +202,7 @@ export function keymapPoster(source: PosterSource, options: PosterOptions): Post
         const w = key.w * scale
         const h = key.h * scale
         if (source.knobs.includes(pos)) {
-          const side = (at: number) => legend(resolved(source.layers, 0, at).action).main
+          const side = (at: number) => legend(resolved(source, 0, at).action).main
           return knobLegend(theme, key, scale, side(pos), side(pos + 1))
         }
         const base = legend(source.layers[0]?.[pos] ?? 'Transparent')
@@ -226,7 +230,7 @@ export function keymapPoster(source: PosterSource, options: PosterOptions): Post
   if (combos.length) {
     parts.push(text(PAD, y + 8, 14, theme.text, 'Combos', 'font-weight="600" text-anchor="start"'))
     y += 28
-    const name = (pos: number) => legend(resolved(source.layers, 0, pos).action).main || `key ${pos + 1}`
+    const name = (pos: number) => legend(resolved(source, 0, pos).action).main || `key ${pos + 1}`
     const where = (layers = 0) => {
       const on = source.layers.map((_, index) => index).filter((index) => layers & (1 << index))
       return on.length ? `  (layer ${on.join(', ')})` : ''
