@@ -98,21 +98,24 @@ const dials = computed(() =>
         cy,
         r,
         transform: `rotate(${key.r / 10} ${cx} ${cy})`,
-        // Left turns one way, right the other. A knob on a switch keeps its lower half for the press.
+        // Left turns one way, right the other. A knob on a switch is that key, round, with the two turns as tabs on its top edge.
         halves: (press < 0
           ? [
-              { pos, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 0 ${cx} ${cy + r} Z`, x: cx - r / 2, y: cy + 6, arrow: '⟲' },
-              { pos: pos + 1, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 1 ${cx} ${cy + r} Z`, x: cx + r / 2, y: cy + 6, arrow: '⟳' },
+              { pos, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 0 ${cx} ${cy + r} Z`, x: cx - r / 2, y: cy + 6, arrow: '⟲', tab: '', room: r - 8, most: 18 },
+              { pos: pos + 1, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 1 ${cx} ${cy + r} Z`, x: cx + r / 2, y: cy + 6, arrow: '⟳', tab: '', room: r - 8, most: 18 },
             ]
           : [
-              { pos, d: `M ${cx} ${cy} H ${cx - r} A ${r} ${r} 0 0 1 ${cx} ${cy - r} Z`, x: cx - r * 0.45, y: cy - r * 0.18, arrow: '⟲' },
-              { pos: pos + 1, d: `M ${cx} ${cy} V ${cy - r} A ${r} ${r} 0 0 1 ${cx + r} ${cy} Z`, x: cx + r * 0.45, y: cy - r * 0.18, arrow: '⟳' },
-              { pos: press, d: `M ${cx - r} ${cy} A ${r} ${r} 0 0 0 ${cx + r} ${cy} Z`, x: cx, y: cy + r * 0.5, arrow: '' },
+              { pos: press, d: `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z`, x: cx, y: cy + 14, arrow: '', tab: '', room: 1.6 * r, most: 30 },
+              { pos, d: tab(cx - r - 3, cy - r - 4, r + 2), x: cx - r / 2 - 2, y: cy - r + 12, arrow: '', tab: '⟲ ', room: r - 6, most: 13 },
+              { pos: pos + 1, d: tab(cx + 1, cy - r - 4, r + 2), x: cx + r / 2 + 2, y: cy - r + 12, arrow: '', tab: '⟳ ', room: r - 6, most: 13 },
             ]
-        ).map((half) => ({ ...half, text: props.legend?.(half.pos)?.main ?? '', room: half.arrow ? r - 8 : 1.5 * r })),
+        ).map((half) => ({ ...half, text: half.tab + (props.legend?.(half.pos)?.main ?? '') })),
       }
     }),
 )
+
+/** A pill, 24 high. */
+const tab = (x: number, y: number, w: number) => `M ${x + 12} ${y} h ${w - 24} a 12 12 0 0 1 0 24 h ${24 - w} a 12 12 0 0 1 0 -24 Z`
 
 function fontSize(text: string, width: number): number {
   const fit = (width - 22) / Math.max(text.length, 1) / 0.6
@@ -188,7 +191,7 @@ function fontSize(text: string, width: number): number {
       >
         <path :d="half.d" />
         <text class="arrow" :x="half.x" :y="half.y - dial.r / 2.4 - 6">{{ half.arrow }}</text>
-        <text class="main" :x="half.x" :y="half.y" :font-size="Math.max(11, Math.min(18, half.room / Math.max(half.text.length, 1) / 0.6))">
+        <text class="main" :x="half.x" :y="half.y" :font-size="Math.max(half.tab ? 9 : 11, Math.min(half.most, half.room / Math.max(half.text.length, 1) / 0.6))">
           {{ half.text }}
         </text>
       </g>

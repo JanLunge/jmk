@@ -89,7 +89,7 @@ function board(source: PosterSource, scale: number, legends: (pos: number) => st
       const r = Math.min(w, h) / 2 - 3
       out.push(
         `<g${turn}><circle cx="${n(x + w / 2)}" cy="${n(y + h / 2)}" r="${n(r)}" fill="${look.fill}" stroke="${look.edge}" stroke-width="1.5"/>` +
-          `<path d="M ${n(x + w / 2)} ${n(y + h / 2 - r)} v ${n(press(pos) < 0 ? 2 * r : r)}${press(pos) < 0 ? '' : ` m ${n(-r)} 0 h ${n(2 * r)}`}" stroke="${look.edge}" stroke-width="1"/>` +
+          (press(pos) < 0 ? `<line x1="${n(x + w / 2)}" y1="${n(y + h / 2 - r)}" x2="${n(x + w / 2)}" y2="${n(y + h / 2 + r)}" stroke="${look.edge}" stroke-width="1"/>` : '') +
           `<g transform="translate(${n(x)} ${n(y)})">${legends(pos)}</g></g>`,
       )
       return
@@ -128,11 +128,16 @@ function knobLegend(theme: Theme, source: PosterSource, scale: number, layer: nu
   const at = knobKey(source.layout, source.knobs, pos)
   const [left, right, press] = [pos, pos + 1, at].map((p) => (p < 0 ? '' : legend(resolved(source, layer, p).action).main))
   const size = (content: string) => fit(content, w / 2 - 8, 12, 6.5)
-  const y = h / 2 - (at < 0 ? 0 : h * 0.15)
+  const bold = 'font-weight="600"'
+  // On a switch: the press in the middle, the turns small above it.
+  if (at >= 0)
+    return (
+      text(w / 4 + 3, h * 0.24, fit(left, w / 2 - 12, 9, 6), theme.muted, '⟲' + left) + text((3 * w) / 4 - 3, h * 0.24, fit(right, w / 2 - 12, 9, 6), theme.muted, right + '⟳') +
+      text(w / 2, h * 0.58, fit(press, w - 14, 18), theme.text, press, bold)
+    )
   return (
-    text(w / 4 + 2, y - 10, 9, theme.muted, '⟲') + text((3 * w) / 4 - 2, y - 10, 9, theme.muted, '⟳') +
-    text(w / 4 + 2, y + 4, size(left), theme.text, left, 'font-weight="600"') + text((3 * w) / 4 - 2, y + 4, size(right), theme.text, right, 'font-weight="600"') +
-    text(w / 2, h * 0.74, fit(press, w - 16, 13, 6.5), theme.text, press, 'font-weight="600"')
+    text(w / 4 + 2, h / 2 - 10, 9, theme.muted, '⟲') + text((3 * w) / 4 - 2, h / 2 - 10, 9, theme.muted, '⟳') +
+    text(w / 4 + 2, h / 2 + 4, size(left), theme.text, left, bold) + text((3 * w) / 4 - 2, h / 2 + 4, size(right), theme.text, right, bold)
   )
 }
 
