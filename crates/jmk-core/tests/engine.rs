@@ -598,17 +598,17 @@ fn mouse_keys_are_held_state_not_reports() {
         basic(Basic::MouseButtons(1)),
         basic(Basic::MouseButtons(2)),
         basic(Basic::MouseMove(Direction::Up)),
-        basic(Basic::MouseScroll(Direction::Down)),
+        basic(Basic::MouseWheel(Direction::Down)),
     ]]);
     rig.press(0, 0);
     rig.press(1, 1);
     rig.press(2, 2);
     rig.press(3, 3);
-    let (moving, scrolling) = (Direction::Up.bit(), Direction::Down.bit());
-    assert_eq!(rig.engine.mouse_keys(), MouseKeys { buttons: 3, moving, scrolling });
+    let (moving, wheel) = (Direction::Up.bit(), Direction::Down.bit());
+    assert_eq!(rig.engine.mouse_keys(), MouseKeys { buttons: 3, moving, wheel });
     rig.release(0, 4);
     rig.release(2, 5);
-    assert_eq!(rig.engine.mouse_keys(), MouseKeys { buttons: 2, moving: 0, scrolling });
+    assert_eq!(rig.engine.mouse_keys(), MouseKeys { buttons: 2, moving: 0, wheel });
     // The engine sends no keyboard report for them; the cursor stage reads them.
     assert!(rig.out().is_empty());
 }

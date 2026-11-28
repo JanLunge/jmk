@@ -138,7 +138,7 @@ const home = computed<TabId | undefined>(() => {
   if ('MomentaryLayer' in basic || 'ToggleLayer' in basic || 'ToLayer' in basic) return 'layers'
   if ('OneShotMods' in basic) return 'mods'
   if ('Consumer' in basic) return 'media'
-  if ('MouseButtons' in basic || 'MouseMove' in basic || 'MouseScroll' in basic) return 'mouse'
+  if ('MouseButtons' in basic || 'MouseMove' in basic || 'MouseWheel' in basic) return 'mouse'
   if ('Macro' in basic) return 'macros'
   return undefined
 })

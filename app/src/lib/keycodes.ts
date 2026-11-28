@@ -149,10 +149,10 @@ export const MOUSE_ACTIONS: { basic: Basic; label: string; name: string }[] = [
   { basic: { MouseMove: 'Down' }, label: 'M↓', name: 'Move cursor down' },
   { basic: { MouseMove: 'Left' }, label: 'M←', name: 'Move cursor left' },
   { basic: { MouseMove: 'Right' }, label: 'M→', name: 'Move cursor right' },
-  { basic: { MouseScroll: 'Up' }, label: 'W↑', name: 'Scroll up' },
-  { basic: { MouseScroll: 'Down' }, label: 'W↓', name: 'Scroll down' },
-  { basic: { MouseScroll: 'Left' }, label: 'W←', name: 'Scroll left' },
-  { basic: { MouseScroll: 'Right' }, label: 'W→', name: 'Scroll right' },
+  { basic: { MouseWheel: 'Up' }, label: 'W↑', name: 'Wheel up' },
+  { basic: { MouseWheel: 'Down' }, label: 'W↓', name: 'Wheel down' },
+  { basic: { MouseWheel: 'Left' }, label: 'W←', name: 'Wheel left' },
+  { basic: { MouseWheel: 'Right' }, label: 'W→', name: 'Wheel right' },
 ]
 
 /** The entry above for this action, if it is one of them. */
@@ -286,7 +286,7 @@ export function basicLegend(basic: Basic): Legend {
   if ('ToLayer' in basic) return { main: `L${basic.ToLayer}`, sub: 'go to', kind: 'layer', layer: basic.ToLayer }
   if ('OneShotMods' in basic) return { main: modsLabel(basic.OneShotMods), sub: 'one-shot', kind: 'mod' }
   if ('Macro' in basic) return { main: `M${basic.Macro + 1}`, sub: 'macro', kind: 'macro' }
-  if ('MouseButtons' in basic || 'MouseMove' in basic || 'MouseScroll' in basic) return { main: mouseAction(basic)?.label ?? 'Mouse', kind: 'media' }
+  if ('MouseButtons' in basic || 'MouseMove' in basic || 'MouseWheel' in basic) return { main: mouseAction(basic)?.label ?? 'Mouse', kind: 'media' }
   return { main: `#${basic.Custom}`, sub: 'custom', kind: 'special' }
 }
 
@@ -316,7 +316,7 @@ export function describeBasic(basic: Basic): string {
   if ('Macro' in basic) return `Macro ${basic.Macro + 1}`
   if ('MouseButtons' in basic) return mouseAction(basic)?.name ?? `Mouse buttons 0x${basic.MouseButtons.toString(16)}`
   if ('MouseMove' in basic) return mouseAction(basic)?.name ?? 'Move cursor'
-  if ('MouseScroll' in basic) return mouseAction(basic)?.name ?? 'Scroll'
+  if ('MouseWheel' in basic) return mouseAction(basic)?.name ?? 'Wheel'
   return `Custom action ${basic.Custom}`
 }
 

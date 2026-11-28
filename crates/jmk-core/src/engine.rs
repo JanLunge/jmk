@@ -214,7 +214,7 @@ impl Engine {
             match held.action {
                 Basic::MouseButtons(buttons) => keys.buttons |= buttons,
                 Basic::MouseMove(direction) => keys.moving |= direction.bit(),
-                Basic::MouseScroll(direction) => keys.scrolling |= direction.bit(),
+                Basic::MouseWheel(direction) => keys.wheel |= direction.bit(),
                 _ => {}
             }
         }
@@ -352,7 +352,7 @@ impl Engine {
             }
             Basic::Mods(_) => self.report(out),
             // Read through `mouse_keys`.
-            Basic::MouseButtons(_) | Basic::MouseMove(_) | Basic::MouseScroll(_) => {}
+            Basic::MouseButtons(_) | Basic::MouseMove(_) | Basic::MouseWheel(_) => {}
             Basic::MomentaryLayer(_) | Basic::None => {}
         }
     }

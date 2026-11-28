@@ -21,8 +21,8 @@ export type Basic =
   | { MouseButtons: number }
   /** Moves the cursor while held. */
   | { MouseMove: Direction }
-  /** Scrolls while held. */
-  | { MouseScroll: Direction }
+  /** Turns the wheel while held. */
+  | { MouseWheel: Direction }
 
 export type Direction = 'Up' | 'Down' | 'Left' | 'Right'
 

@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(bytes(Basic::Custom(1)), [10, 1]);
         assert_eq!(bytes(Basic::MouseButtons(1)), [11, 1]);
         assert_eq!(bytes(Basic::MouseMove(Direction::Left)), [12, 2]);
-        assert_eq!(bytes(Basic::MouseScroll(Direction::Right)), [13, 3]);
+        assert_eq!(bytes(Basic::MouseWheel(Direction::Right)), [13, 3]);
     }
 
     #[test]

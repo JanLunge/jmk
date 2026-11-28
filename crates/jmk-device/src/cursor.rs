@@ -13,17 +13,17 @@ const MOVE_INTERVAL_MS: Millis = 10;
 const MOVE_START: i32 = 2;
 const MOVE_MAX: i32 = 20;
 const ACCEL_MS: Millis = 1000;
-/// A scroll key scrolls one step at once, then repeats like a held key:
-/// after `SCROLL_DELAY_MS`, every `SCROLL_INTERVAL_MS`.
-const SCROLL_DELAY_MS: Millis = 300;
-const SCROLL_INTERVAL_MS: Millis = 50;
+/// A wheel key turns the wheel one step at once, then repeats like a held
+/// key: after `WHEEL_DELAY_MS`, every `WHEEL_INTERVAL_MS`.
+const WHEEL_DELAY_MS: Millis = 300;
+const WHEEL_INTERVAL_MS: Millis = 50;
 
 const UP: u8 = Direction::Up.bit();
 const DOWN: u8 = Direction::Down.bit();
 const LEFT: u8 = Direction::Left.bit();
 const RIGHT: u8 = Direction::Right.bit();
 
-/// Moving or scrolling, which repeats while its keys are held.
+/// Moving or turning the wheel, which repeats while its keys are held.
 #[derive(Clone, Copy, Default)]
 struct Repeat {
     /// Since when its keys have been held, and when it next takes a step.
@@ -51,7 +51,7 @@ pub(crate) struct Cursor {
     /// The buttons the computer was last told about.
     buttons: u8,
     moving: Repeat,
-    scrolling: Repeat,
+    wheel: Repeat,
 }
 
 impl Cursor {
@@ -67,10 +67,10 @@ impl Cursor {
             report.x = (axis(keys.moving, RIGHT, LEFT) * speed) as i16;
             report.y = (axis(keys.moving, DOWN, UP) * speed) as i16;
         }
-        let scroll_wait = |held| if held == 0 { SCROLL_DELAY_MS } else { SCROLL_INTERVAL_MS };
-        if self.scrolling.due(keys.scrolling != 0, now, scroll_wait).is_some() {
-            report.wheel = axis(keys.scrolling, UP, DOWN) as i8;
-            report.pan = axis(keys.scrolling, RIGHT, LEFT) as i8;
+        let wheel_wait = |held| if held == 0 { WHEEL_DELAY_MS } else { WHEEL_INTERVAL_MS };
+        if self.wheel.due(keys.wheel != 0, now, wheel_wait).is_some() {
+            report.wheel = axis(keys.wheel, UP, DOWN) as i8;
+            report.pan = axis(keys.wheel, RIGHT, LEFT) as i8;
         }
         let moved = report.x != 0 || report.y != 0 || report.wheel != 0 || report.pan != 0;
         if moved || report.buttons != self.buttons {
@@ -144,21 +144,21 @@ mod tests {
     }
 
     #[test]
-    fn scrolling_steps_once_then_repeats_after_a_delay() {
+    fn wheel_steps_once_then_repeats_after_a_delay() {
         let mut cursor = Cursor::new();
-        let down = MouseKeys { scrolling: DOWN, ..Default::default() };
-        let reports = run(&mut cursor, down, 0, SCROLL_DELAY_MS);
+        let down = MouseKeys { wheel: DOWN, ..Default::default() };
+        let reports = run(&mut cursor, down, 0, WHEEL_DELAY_MS);
         assert_eq!(reports, [MouseReport { wheel: -1, ..Default::default() }]);
-        let reports = run(&mut cursor, down, SCROLL_DELAY_MS, SCROLL_DELAY_MS + 2 * SCROLL_INTERVAL_MS);
+        let reports = run(&mut cursor, down, WHEEL_DELAY_MS, WHEEL_DELAY_MS + 2 * WHEEL_INTERVAL_MS);
         assert_eq!(reports.len(), 2);
-        let right = MouseKeys { scrolling: RIGHT, ..Default::default() };
+        let right = MouseKeys { wheel: RIGHT, ..Default::default() };
         assert_eq!(run(&mut cursor, right, 1000, 1001)[0].pan, 1);
     }
 
     #[test]
-    fn moving_and_scrolling_at_once_are_kept_apart() {
+    fn moving_and_turning_the_wheel_at_once_are_kept_apart() {
         let mut cursor = Cursor::new();
-        let keys = MouseKeys { moving: UP, scrolling: UP, ..Default::default() };
+        let keys = MouseKeys { moving: UP, wheel: UP, ..Default::default() };
         let reports = run(&mut cursor, keys, 0, 1);
         assert_eq!(reports, [MouseReport { y: -MOVE_START as i16, wheel: 1, ..Default::default() }]);
     }

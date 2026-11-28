@@ -33,11 +33,11 @@ pub enum Basic {
     MouseButtons(u8),
     /// Moves the cursor for as long as it is held.
     MouseMove(Direction),
-    /// Scrolls for as long as it is held.
-    MouseScroll(Direction),
+    /// Turns the wheel for as long as it is held.
+    MouseWheel(Direction),
 }
 
-/// Which way a mouse key moves the cursor or scrolls.
+/// Which way a mouse key moves the cursor or turns the wheel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
     Up,
@@ -47,7 +47,7 @@ pub enum Direction {
 }
 
 impl Direction {
-    /// Its bit in [`MouseKeys::moving`] and [`MouseKeys::scrolling`].
+    /// Its bit in [`MouseKeys::moving`] and [`MouseKeys::wheel`].
     pub const fn bit(self) -> u8 {
         1 << self as u8
     }
@@ -60,8 +60,8 @@ pub struct MouseKeys {
     pub buttons: u8,
     /// One bit per [`Direction`] held by a [`Basic::MouseMove`] key.
     pub moving: u8,
-    /// One bit per [`Direction`] held by a [`Basic::MouseScroll`] key.
-    pub scrolling: u8,
+    /// One bit per [`Direction`] held by a [`Basic::MouseWheel`] key.
+    pub wheel: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
