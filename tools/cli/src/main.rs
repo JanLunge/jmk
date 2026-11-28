@@ -19,7 +19,7 @@ use jmk_proto::Vec as PinVec;
 const USAGE: &str = "\
 usage: jmk [--device <chip id>] <command>
 
-  devices                       connected keyboards and their chip ids
+  devices                       connected keyboards with chip id, chip, firmware, name
   info                          firmware, chip and usable pins
   show                          current hardware configuration and layer 0
   matrix <rows> <cols> <col2row|row2col|both>
@@ -233,6 +233,16 @@ impl Keyboard {
         }
     }
 
+    /// The name given to the keyboard in the app, if it has one. Firmware
+    /// that answers something else gets no name rather than an error: only
+    /// `GetInfo` keeps its place in the protocol for ever.
+    fn name(&mut self) -> Option<String> {
+        match self.request(Request::GetMeta) {
+            Ok(Response::Meta(meta)) if !meta.name.is_empty() => Some(meta.name.to_string()),
+            _ => None,
+        }
+    }
+
     fn hardware(&mut self) -> Result<HardwareConfig> {
         match self.request(Request::GetHardware)? {
             Response::Hardware(hardware) => Ok(hardware),
@@ -314,10 +324,13 @@ fn select(device: Option<&str>) -> Result<Found> {
 
 fn devices() {
     for keyboard in keyboards() {
-        match Keyboard::open(&keyboard.hidraw).and_then(|mut k| k.info()) {
-            Ok(info) => {
+        let found = Keyboard::open(&keyboard.hidraw).and_then(|mut k| Ok((k.info()?, k.name())));
+        match found {
+            Ok((info, name)) => {
                 let (major, minor, patch) = info.firmware;
-                println!("{}  {:?}, firmware {major}.{minor}.{patch}", chip_id(&info), info.mcu);
+                // Save the user supplied name for last, because it's the least consistent width
+                let name = name.map(|name| format!(", {name:?}")).unwrap_or_default();
+                println!("{}  {:?}, firmware {major}.{minor}.{patch}{name}", chip_id(&info), info.mcu);
             }
             Err(error) => println!("{}: {error}", keyboard.hidraw.display()),
         }
