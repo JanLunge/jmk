@@ -219,6 +219,40 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
   await page.click('[data-test=reverse-0]')
   await page.click('[data-test=knob-cw-0]')
   await expect(typed(page)).toHaveText(before! + before![1])
+
+  // The knob is also a switch: on key 3 it is drawn as one round key, turned and pressed.
+  // Slowly when filmed, so that each state can be seen.
+  const pause = () => page.waitForTimeout(process.env.SHOTS ? 1500 : 0)
+  await page.click('[data-test=nav-layout]')
+  await pause()
+  await page.locator('[data-test=layout-canvas] [data-pos="3"]').dispatchEvent('pointerdown')
+  await page.dispatchEvent('body', 'pointerup')
+  await pause()
+  await page.selectOption('[data-test=knob-on-key]', '4')
+  await expect(page.locator('[data-test=layout-canvas] [data-pos="4"]')).toHaveCount(0)
+  await pause()
+  await page.click('[data-test=nav-keymap]')
+  await expect(page.locator('[data-test=keymap-board] .key[data-pos="3"]')).toHaveCount(0)
+  await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos]')).toHaveCount(3)
+  // The turns are small tabs on the key; with the knob selected they grow, to be easy to hit.
+  const part = (pos: number) => page.locator(`[data-test=keymap-board] [data-knob="4"] [data-pos="${pos}"]`)
+  const small = (await part(5).boundingBox())!
+  await pause()
+  await assign(page, 3, 4) // pressing the knob: A
+  await expect(part(3)).toContainText('A')
+  await expect.poll(async () => (await part(5).boundingBox())!.width).toBeGreaterThan(small.width * 1.8)
+  await pause()
+  await part(5).dispatchEvent('pointerdown')
+  await part(5).dispatchEvent('pointerup')
+  await expect(part(5)).toHaveClass(/selected/)
+  await saved(page)
+  if (process.env.SHOTS) await page.locator('[data-test=keymap-board]').locator('..').screenshot({ path: `${process.env.SHOTS}/knob-on-key.png` })
+  await pause()
+  // A click beside the keys lets go of the selection, and the tabs shrink again.
+  await page.locator('[data-test=keymap-board]').locator('..').click({ position: { x: 20, y: 20 } })
+  await expect(page.locator('[data-test=keymap-board] .selected')).toHaveCount(0)
+  await expect.poll(async () => (await part(5).boundingBox())!.width).toBeCloseTo(small.width, 0)
+  await pause()
 })
 
 const splitStatus = (page: Page) => page.locator('[data-test=split-status]')
@@ -564,6 +598,8 @@ test('changes save themselves and can be undone; an empty keyboard offers its le
 
   // Nothing types yet, and the quick way to the letters is pointed out.
   await expect(page.locator('[data-test=letters-nudge]')).toBeVisible()
+  const place = () => page.locator('[data-test=keymap-board]').boundingBox()
+  const before = await place()
   await page.click('[data-test=letters-nudge-open]')
   await expect(page.locator('[data-test=letters-dialog]')).toBeVisible()
   await page.keyboard.press('Escape')
@@ -572,6 +608,8 @@ test('changes save themselves and can be undone; an empty keyboard offers its le
   await assign(page, 0, 0x14) // Q
   await expect(first).toContainText('Q')
   await expect(page.locator('[data-test=letters-nudge]')).toHaveCount(0)
+  // The line going away must not move the keyboard.
+  expect(await place()).toEqual(before)
   await saved(page)
   await tap(page, 0)
   await expect(typed(page)).toHaveText('q')

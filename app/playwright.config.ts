@@ -8,7 +8,8 @@ export default defineConfig({
   timeout: 60_000,
   // The tests share nothing, but the virtual keyboards keep real time.
   workers: 4,
-  use: { baseURL: `http://127.0.0.1:${port}`, viewport: { width: 1280, height: 860 } },
+  // Pictures for pull requests (SHOTS set) are taken in the dark theme, and every test is filmed (test-results/*/video.webm).
+  use: { baseURL: `http://127.0.0.1:${port}`, viewport: { width: 1280, height: 860 }, colorScheme: process.env.SHOTS ? 'dark' : 'light', video: process.env.SHOTS ? { mode: 'on', size: { width: 1280, height: 860 } } : 'off' },
   webServer: {
     command: `npx vite preview --port ${port} --strictPort --host 127.0.0.1`,
     url: `http://127.0.0.1:${port}`,

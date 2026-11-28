@@ -4,7 +4,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { attempt, toast } from '../lib/app'
 import { legend } from '../lib/keycodes'
-import { bounds, corners, gridLayout, hasKey, normalised, parseKle, UNIT, type Bounds } from '../lib/layout'
+import { bounds, corners, gridLayout, hasKey, knobKey, normalised, parseKle, UNIT, type Bounds } from '../lib/layout'
 import type { KeyGeometry } from '../lib/protocol'
 import { knobPositions, knobSpot, setLayout, type Session } from '../lib/session'
 
@@ -27,6 +27,7 @@ watch(
   (layout) => {
     if (dragging) return
     draft.value = copy(layout)
+    findCarried()
     for (const pos of [...selection]) if (!hasKey(draft.value[pos])) selection.delete(pos)
     view.value = fit()
   },
@@ -34,18 +35,46 @@ watch(
 
 /** Give the keyboard the picture as it is drawn now. */
 function commit() {
+  // A knob on a key goes where its key goes.
+  carried.forEach((key, knob) => (draft.value[knob] = { ...draft.value[key] }))
   const tidy = normalised(draft.value)
   draft.value = copy(tidy)
   view.value = fit()
   if (JSON.stringify(tidy) !== JSON.stringify(props.session.layout)) attempt(() => setLayout(props.session, tidy))
 }
 
-const keys = computed(() => draft.value.map((key, pos) => ({ key, pos })).filter(({ key }) => hasKey(key)))
 /** Knobs have a place in the picture too; it lives at the first of their two positions. */
 const knobs = computed(() => knobPositions(props.session))
+/** Knobs that sit on a switch, which is then their press: knob position to key position. Such a knob is drawn as its key. */
+const carried = reactive(new Map<number, number>())
+function findCarried() {
+  carried.clear()
+  knobs.value.forEach((knob) => {
+    const key = knobKey(draft.value, knobs.value, knob)
+    if (key >= 0) carried.set(knob, key)
+  })
+}
+findCarried()
+const knobOn = (pos: number) => [...carried].find(([, key]) => key === pos)?.[0]
+const keys = computed(() => draft.value.map((key, pos) => ({ key, pos })).filter(({ key, pos }) => hasKey(key) && !carried.has(pos)))
 const isKnob = (pos: number) => knobs.value.includes(pos)
 const missingKnobs = computed(() => knobs.value.filter((pos) => !hasKey(draft.value[pos])))
 const switches = computed(() => keys.value.filter(({ pos }) => !isKnob(pos)))
+
+/** Put a knob on the selected key, or take the one there off again. */
+function setKnob(pos: number, knob: number | undefined) {
+  for (const [other, key] of [...carried]) {
+    if (key !== pos && other !== knob) continue
+    carried.delete(other)
+    draft.value[other] = { x: 0, y: 0, w: 0, h: 0, r: 0 }
+    if (other !== knob) draft.value[other] = knobSpot(draft.value)
+  }
+  if (knob !== undefined) {
+    while (draft.value.length <= knob + 1) draft.value.push({ x: 0, y: 0, w: 0, h: 0, r: 0 })
+    carried.set(knob, pos)
+  }
+  commit()
+}
 
 function placeKnob(pos: number) {
   while (draft.value.length <= pos + 1) draft.value.push({ x: 0, y: 0, w: 0, h: 0, r: 0 })
@@ -321,14 +350,14 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
           v-for="{ key, pos } in keys"
           :key="pos"
           class="key"
-          :class="{ selected: selection.has(pos), pressed: session.pressed.has(pos), knob: isKnob(pos) }"
+          :class="{ selected: selection.has(pos), pressed: session.pressed.has(pos), knob: isKnob(pos) || knobOn(pos) !== undefined }"
           :transform="`rotate(${key.r / 10} ${key.x + key.w / 2} ${key.y + key.h / 2})`"
           :data-pos="pos"
           @pointerdown="down(pos, $event)"
         >
-          <rect :x="key.x + 3" :y="key.y + 3" :width="key.w - 6" :height="key.h - 6" :rx="isKnob(pos) ? Math.min(key.w, key.h) / 2 : 12" />
+          <rect :x="key.x + 3" :y="key.y + 3" :width="key.w - 6" :height="key.h - 6" :rx="isKnob(pos) || knobOn(pos) !== undefined ? Math.min(key.w, key.h) / 2 : 12" />
           <text class="main" :x="key.x + key.w / 2" :y="key.y + key.h / 2 - 4">{{ isKnob(pos) ? '⟲ ⟳' : label(pos) }}</text>
-          <text class="index" :x="key.x + key.w / 2" :y="key.y + key.h - 20">{{ isKnob(pos) ? 'knob' : pos }}</text>
+          <text class="index" :x="key.x + key.w / 2" :y="key.y + key.h - 20">{{ isKnob(pos) ? 'knob' : knobOn(pos) !== undefined ? pos + ' ⟲⟳' : pos }}</text>
         </g>
         <rect v-if="marquee" class="marquee" :x="marquee.x" :y="marquee.y" :width="marquee.w" :height="marquee.h" rx="4" data-test="marquee" />
       </svg>
@@ -356,6 +385,13 @@ const label = (pos: number) => (props.session.layers[0]?.[pos] ? legend(props.se
             <input class="input" type="number" :step="field === 'r' ? 5 : 0.25" :value="shown(field)" :placeholder="selection.size > 1 ? 'mixed' : ''" :data-test="'field-' + field" @change="setField(field, $event)" />
           </label>
         </div>
+        <label v-if="knobs.length && selection.size === 1 && !isKnob([...selection][0])" class="field">
+          Knob on this key (pressing the knob is this key)
+          <select class="input" data-test="knob-on-key" :value="knobOn([...selection][0]) ?? ''" @change="setKnob([...selection][0], ($event.target as HTMLSelectElement).value === '' ? undefined : Number(($event.target as HTMLSelectElement).value))">
+            <option value="">none</option>
+            <option v-for="(knob, index) in knobs" :key="knob" :value="knob">knob {{ index + 1 }}</option>
+          </select>
+        </label>
         <div class="row">
           <button class="btn small" @click="rotate(-150)">⟲ 15°</button>
           <button class="btn small" @click="rotate(150)">⟳ 15°</button>
@@ -489,8 +525,13 @@ text {
 
 .fields {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
+}
+
+/* A number box is as wide as its column, not as wide as it likes. */
+.fields .input {
+  width: 100%;
 }
 
 .tools {

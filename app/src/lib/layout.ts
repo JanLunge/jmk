@@ -43,6 +43,13 @@ export interface Bounds {
   h: number
 }
 
+/** The switch a knob sits on in the picture: pressing the knob. -1 when it stands alone. */
+export function knobKey(layout: KeyGeometry[], knobs: number[], knob: number): number {
+  const at = layout[knob]
+  if (!hasKey(at)) return -1
+  return layout.findIndex((key, pos) => !knobs.includes(pos) && (['x', 'y', 'w', 'h', 'r'] as const).every((f) => key[f] === at[f]))
+}
+
 /** Corners of a key after rotation around its centre. */
 export function corners(key: KeyGeometry): [number, number][] {
   const cx = key.x + key.w / 2

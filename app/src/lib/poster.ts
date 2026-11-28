@@ -4,7 +4,7 @@
 
 import { describeAction, legend, type Legend } from './keycodes'
 import { layerHex } from './layers'
-import { bounds, hasKey } from './layout'
+import { bounds, hasKey, knobKey } from './layout'
 import { onWith } from './layers'
 import type { Action, Combo, KeyGeometry } from './protocol'
 
@@ -74,8 +74,10 @@ function resolved(source: PosterSource, layer: number, pos: number): { action: A
 function board(source: PosterSource, scale: number, legends: (pos: number) => string, cap: (pos: number) => { fill: string; edge: string; dashed: boolean }): { body: string; w: number; h: number } {
   const box = bounds(source.layout)
   const out: string[] = []
+  const press = (knob: number) => knobKey(source.layout, source.knobs, knob)
+  const under = new Set(source.knobs.map(press))
   source.layout.forEach((key, pos) => {
-    if (!hasKey(key)) return
+    if (!hasKey(key) || under.has(pos)) return
     const x = (key.x - box.x) * scale
     const y = (key.y - box.y) * scale
     const w = key.w * scale
@@ -87,7 +89,7 @@ function board(source: PosterSource, scale: number, legends: (pos: number) => st
       const r = Math.min(w, h) / 2 - 3
       out.push(
         `<g${turn}><circle cx="${n(x + w / 2)}" cy="${n(y + h / 2)}" r="${n(r)}" fill="${look.fill}" stroke="${look.edge}" stroke-width="1.5"/>` +
-          `<line x1="${n(x + w / 2)}" y1="${n(y + h / 2 - r)}" x2="${n(x + w / 2)}" y2="${n(y + h / 2 + r)}" stroke="${look.edge}" stroke-width="1"/>` +
+          (press(pos) < 0 ? `<line x1="${n(x + w / 2)}" y1="${n(y + h / 2 - r)}" x2="${n(x + w / 2)}" y2="${n(y + h / 2 + r)}" stroke="${look.edge}" stroke-width="1"/>` : '') +
           `<g transform="translate(${n(x)} ${n(y)})">${legends(pos)}</g></g>`,
       )
       return
@@ -119,13 +121,23 @@ function plainLegend(theme: Theme, key: KeyGeometry, scale: number, shown: Legen
   return main + sub
 }
 
-function knobLegend(theme: Theme, key: KeyGeometry, scale: number, left: string, right: string): string {
-  const w = key.w * scale
-  const h = key.h * scale
+/** A knob on `layer`: what turning it does and, for one that sits on a switch, pressing it below that. */
+function knobLegend(theme: Theme, source: PosterSource, scale: number, layer: number, pos: number): string {
+  const w = source.layout[pos].w * scale
+  const h = source.layout[pos].h * scale
+  const at = knobKey(source.layout, source.knobs, pos)
+  const [left, right, press] = [pos, pos + 1, at].map((p) => (p < 0 ? '' : legend(resolved(source, layer, p).action).main))
   const size = (content: string) => fit(content, w / 2 - 8, 12, 6.5)
+  const bold = 'font-weight="600"'
+  // On a switch: the press in the middle, the turns small above it.
+  if (at >= 0)
+    return (
+      text(w / 4 + 3, h * 0.24, fit(left, w / 2 - 12, 9, 6), theme.muted, '⟲' + left) + text((3 * w) / 4 - 3, h * 0.24, fit(right, w / 2 - 12, 9, 6), theme.muted, right + '⟳') +
+      text(w / 2, h * 0.58, fit(press, w - 14, 18), theme.text, press, bold)
+    )
   return (
     text(w / 4 + 2, h / 2 - 10, 9, theme.muted, '⟲') + text((3 * w) / 4 - 2, h / 2 - 10, 9, theme.muted, '⟳') +
-    text(w / 4 + 2, h / 2 + 4, size(left), theme.text, left, 'font-weight="600"') + text((3 * w) / 4 - 2, h / 2 + 4, size(right), theme.text, right, 'font-weight="600"')
+    text(w / 4 + 2, h / 2 + 4, size(left), theme.text, left, bold) + text((3 * w) / 4 - 2, h / 2 + 4, size(right), theme.text, right, bold)
   )
 }
 
@@ -161,10 +173,7 @@ export function keymapPoster(source: PosterSource, options: PosterOptions): Post
         scale,
         (pos) => {
           const key = source.layout[pos]
-          if (source.knobs.includes(pos)) {
-            const side = (at: number) => legend(resolved(source, layer, at).action).main
-            return knobLegend(theme, key, scale, side(pos), side(pos + 1))
-          }
+          if (source.knobs.includes(pos)) return knobLegend(theme, source, scale, layer, pos)
           const { action, through } = resolved(source, layer, pos)
           return plainLegend(theme, key, scale, legend(action), through)
         },
@@ -201,10 +210,7 @@ export function keymapPoster(source: PosterSource, options: PosterOptions): Post
         const key = source.layout[pos]
         const w = key.w * scale
         const h = key.h * scale
-        if (source.knobs.includes(pos)) {
-          const side = (at: number) => legend(resolved(source, 0, at).action).main
-          return knobLegend(theme, key, scale, side(pos), side(pos + 1))
-        }
+        if (source.knobs.includes(pos)) return knobLegend(theme, source, scale, 0, pos)
         const base = legend(source.layers[0]?.[pos] ?? 'Transparent')
         const out = [text(w / 2, h / 2 - (base.sub ? 3 : 0), fit(base.main, w - 16, 20), theme.text, base.kind === 'through' ? '' : base.main, 'font-weight="700"')]
         if (base.sub) out.push(text(w / 2, h / 2 + 12, fit(base.sub, w - 10, 9, 6.5), theme.muted, base.sub))
