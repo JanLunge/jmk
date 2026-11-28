@@ -9,7 +9,7 @@ import { localPositions } from '../lib/definition'
 import { dropped, landOn } from '../lib/drag'
 import { isModifierUsage, legend, usageForCode } from '../lib/keycodes'
 import { LAYER_COLORS, layerColor, layerColorNumber, onWith } from '../lib/layers'
-import { hasKey, nextInRow } from '../lib/layout'
+import { hasKey, knobKey, nextInRow } from '../lib/layout'
 import type { Action, Basic } from '../lib/protocol'
 import { recordingKeys } from '../lib/recording'
 import { ALPHAS, guessAlphas, letterActions } from '../lib/starter'
@@ -78,10 +78,11 @@ const layerActive = (index: number) => props.session.layerAware && (props.sessio
 const knobs = computed(() => {
   const count = props.session.hardware.encoders.length
   const first = localPositions(props.session.hardware) - 2 * count
-  return [...Array(count).keys()].map((index) => ({ index, ccw: first + 2 * index, cw: first + 2 * index + 1 }))
+  const at = [...Array(count).keys()].map((index) => first + 2 * index)
+  return at.map((ccw, index) => ({ index, ccw, cw: ccw + 1, press: knobKey(props.session.layout, at, ccw) }))
 })
-/** Knobs without a place in the picture get buttons under it. */
-const looseKnobs = computed(() => knobs.value.filter((knob) => !hasKey(props.session.layout[knob.ccw])))
+/** Knobs without a place in the picture get buttons under it; so do knobs on a key, whose turns are small there. */
+const looseKnobs = computed(() => knobs.value.filter((knob) => knob.press >= 0 || !hasKey(props.session.layout[knob.ccw])))
 
 async function change(action: Action) {
   const keys = [...selection.value]
@@ -453,7 +454,10 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
               <button class="turn" :class="{ on: selected === knob.ccw }" :data-test="'knob-' + knob.index + '-ccw'" @click="selected = knob.ccw">
                 ⟲ <strong>{{ keyLegend(knob.ccw)?.main || '·' }}</strong>
               </button>
-              <span class="dial" />
+              <button v-if="knob.press >= 0" class="turn" :class="{ on: selected === knob.press }" :data-test="'knob-' + knob.index + '-press'" @click="selected = knob.press">
+                <span class="dial" /> <strong>{{ keyLegend(knob.press)?.main || '·' }}</strong>
+              </button>
+              <span v-else class="dial" />
               <button class="turn" :class="{ on: selected === knob.cw }" :data-test="'knob-' + knob.index + '-cw'" @click="selected = knob.cw">
                 <strong>{{ keyLegend(knob.cw)?.main || '·' }}</strong> ⟳
               </button>
@@ -680,6 +684,13 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
 
 .turn.on {
   border-color: var(--accent);
+}
+
+.turn .dial {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
 }
 
 .dial {

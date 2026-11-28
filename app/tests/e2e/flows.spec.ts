@@ -229,10 +229,13 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
   await page.click('[data-test=nav-keymap]')
   await expect(page.locator('[data-test=keymap-board] .key[data-pos="3"]')).toHaveCount(0)
   await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos]')).toHaveCount(3)
+  // Its three parts are small in the picture, so they have buttons under it too.
+  await page.click('[data-test=knob-0-press]')
+  await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos="3"]')).toHaveClass(/selected/)
   await assign(page, 3, 4) // pressing the knob: A
   await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos="3"]')).toContainText('A')
   await saved(page)
-  if (process.env.SHOTS) await page.locator('[data-test=keymap-board]').screenshot({ path: `${process.env.SHOTS}/knob-on-key.png` })
+  if (process.env.SHOTS) await page.locator('[data-test=keymap-board]').locator('..').screenshot({ path: `${process.env.SHOTS}/knob-on-key.png` })
 })
 
 const splitStatus = (page: Page) => page.locator('[data-test=split-status]')
