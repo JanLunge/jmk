@@ -125,4 +125,8 @@ impl Pins for RpPins {
         // needs tens of microseconds to rise against the wiring capacitance.
         block_for(Duration::from_micros(30));
     }
+
+    fn wait_us(&mut self, us: u16) {
+        block_for(Duration::from_micros(us as u64));
+    }
 }

@@ -40,7 +40,7 @@ import { app, attempt, benchOf, pairUp, partnerOf, relink, toast } from '../lib/
 import { boardsFor, chipLabel, findBoard, genericBoard, pinLabel, pinsOfAnyShape, shapeFromPins, wirablePins } from '../lib/boards'
 import { desktop, type BootDrive } from '../lib/desktop'
 import { localPositions, parseDefinition, positionCount as definitionPositions, type Definition } from '../lib/definition'
-import { arrivals as allArrivals, bootDrives, installArrival, installOnBoard, updateDue, updateFirmware } from '../lib/firmware'
+import { arrivals as allArrivals, bootDrives, carriedVersion, installArrival, installOnBoard, updateDue, updateFirmware } from '../lib/firmware'
 import SplitPicture, { type PictureBoard } from '../components/SplitPicture.vue'
 import { chooseLink, findWires } from '../lib/cable'
 import { KeyCollector, KnobFinder } from '../lib/collector'
@@ -244,6 +244,16 @@ async function flash(which: 'this' | 'other' | 'new', work: () => Promise<void>)
   flashing.value = 'idle'
 }
 const updateThis = () => flash('this', () => updateFirmware(props.session))
+/** The halves being set up that run older firmware than the app carries. */
+const behind = computed(() => halves.value.filter((half) => updateDue(half)))
+/** Update every half that is behind, one after the other; each comes back as a new connection. */
+const updateBehind = () =>
+  flash('this', async () => {
+    for (const id of behind.value.map((half) => half.id)) {
+      const half = app.sessions.find((each) => each.id === id && !each.closed)
+      if (half && updateDue(half)) await updateFirmware(half)
+    }
+  })
 const updateOther = () => other.value && flash('other', () => updateFirmware(other.value!))
 /** Boards without firmware that could be this keyboard's other half: on the same bench if it is virtual, on USB if it is real. */
 const arrivals = computed(() => {
@@ -512,7 +522,12 @@ function describeKey(half: Session, key: KeySignature): string {
 }
 
 // --- Result ------------------------------------------------------------------
-const results = computed(() => ordered.value.map((half) => ({ half, result: inferWiring(setupOf(half).collector.keys, moreWiringLimit(half.info.protocol) + 1) })))
+const results = computed(() =>
+  ordered.value.map((half) => ({
+    half,
+    result: inferWiring(setupOf(half).collector.keys, moreWiringLimit(half.info.protocol) + 1, setupOf(half).collector.stuck),
+  })),
+)
 /** The first thing that could not be read, if any. */
 const problem = computed(() => {
   for (const { half, result } of results.value) {
@@ -528,10 +543,14 @@ const plans = computed(() => {
   return results.value.map(({ half, result }) => {
     if (!result.ok) return undefined
     const link = cableOf(half)
+    // How this board's sensors are driven stays as it was set.
+    const { settle_us = 0, drive_idle_high = false } = half.hardware.scan ?? {}
+    const { inverted } = result.wiring
     const hardware: HardwareConfig = {
       matrix: result.wiring.matrix,
       more: result.wiring.more.length ? result.wiring.more : undefined,
       doubles: result.wiring.doubles.length ? result.wiring.doubles : undefined,
+      scan: inverted.length || settle_us || drive_idle_high ? { inverted, settle_us, drive_idle_high } : undefined,
       reserved_pins: [...reserved],
       debounce_ms: 5,
       encoders: [...setupOf(half).encoders],
@@ -769,9 +788,11 @@ const stuckPins = computed(() => {
     // A knob can rest with a contact closed; once it is found, that is no stuck key.
     const knobs = new Set(setupOf(half).encoders.flatMap((e) => [e.a, e.b]))
     return setupOf(half).collector.stuck.some((contact) => {
-      if ('Ground' in contact && knobs.has(contact.Ground)) return false
-      const on = 'Ground' in contact ? [contact.Ground] : 'Supply' in contact ? [contact.Supply] : [contact.Link.driven, contact.Link.sensed]
-      return on.some((pin) => !ambiguous.has(pin))
+      // A connection between two pins at rest can be a sensor key that
+      // opens when pressed; the result step tells about those.
+      if ('Link' in contact) return false
+      const pin = 'Ground' in contact ? contact.Ground : contact.Supply
+      return !('Ground' in contact && knobs.has(pin)) && !ambiguous.has(pin)
     })
   })
 })
@@ -807,6 +828,17 @@ const nextLabel = computed(() => {
 <template>
   <div class="wizard">
     <SetupGuide :steps="guideSteps" :current="guideAt" />
+    <!-- The two-halves page offers this per half; everywhere else, here. -->
+    <div v-if="desktop && isUsb && behind.length && view !== 'shape'" class="note row wrap firmware-due" data-test="wizard-firmware-due">
+      <span>
+        This app carries newer firmware ({{ carriedVersion().join('.') }}, the {{ behind.length > 1 ? 'halves run' : 'board runs' }}
+        {{ [...new Set(behind.map((half) => half.info.firmware.join('.')))].join(' and ') }}).
+      </span>
+      <button class="btn small primary" :disabled="flashing !== 'idle'" @click="updateBehind">
+        {{ flashing === 'this' ? 'Updating… it comes back by itself' : behind.length > 1 ? 'Update both halves' : 'Update firmware' }}
+      </button>
+      <span v-if="flashProblem" class="small">{{ flashProblem }}</span>
+    </div>
     <div class="stage col">
     <Transition :name="direction === 'forward' ? 'slide' : 'slide-back'" mode="out-in">
       <!-- 2 ------------------------------------------------------------------>
@@ -1431,6 +1463,12 @@ const nextLabel = computed(() => {
   flex-direction: column;
   height: 100%;
   position: relative;
+}
+
+.firmware-due {
+  align-items: center;
+  gap: 12px;
+  margin: 8px 16px 0;
 }
 
 .top,

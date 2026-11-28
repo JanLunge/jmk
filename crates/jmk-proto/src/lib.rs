@@ -13,13 +13,13 @@ use serde::{Deserialize, Serialize};
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours;
 /// 11 combo options, more groups of switches and [`Request::SetDoubles`]; from 12 the
 /// halves of a split share what their lights show; 13 lights that show a state;
-/// 14 layers that are on while others are.
-pub const PROTOCOL_VERSION: u16 = 14;
+/// 14 layers that are on while others are; 15 [`Request::SetScan`]; 16 [`Request::Peer`].
+pub const PROTOCOL_VERSION: u16 = 16;
 
 /// What runs on the keyboard, as the app compares it with the firmware it
 /// carries to offer an update. Count it up with every change to the firmware
 /// that a keyboard should get, also one that leaves the protocol alone.
-pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 4, 3);
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 5, 3);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -57,6 +57,9 @@ pub const MAX_INDICATORS: usize = 8;
 pub const ACTIONS_PER_CHUNK: usize = 16;
 /// Largest serialised message in either direction.
 pub const MAX_MESSAGE: usize = 512;
+/// Largest message for the other half of a split that fits into
+/// [`Request::Peer`], and from it into [`Event::Peer`].
+pub const MAX_PEER_MESSAGE: usize = MAX_MESSAGE - 8;
 
 /// A GPIO number in the microcontroller's own numbering
 /// (RP2040: GPIO n; nRF52840: P0.n = n, P1.n = 32 + n).
@@ -192,6 +195,35 @@ pub type MoreWiring = Vec<MatrixConfig, MAX_MORE_WIRING>;
 /// in both directions closes both positions of its crossing; the second of
 /// them is listed here, so the switch is one key.
 pub type Doubles = Vec<u16, MAX_DOUBLES>;
+/// How this board's own switches are read, beyond which pins they use. Kept
+/// apart from [`HardwareConfig`] like [`MoreWiring`], so that older firmware
+/// and saves still read.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanConfig {
+    /// Positions of this board's own switches (counted from 0 on each half)
+    /// that read closed at rest and open while pressed: light-beam and other
+    /// sensor keys whose output works the other way round, like the centre
+    /// key of a Svalboard finger cluster. Ascending, each at most once.
+    pub inverted: Vec<u8, MAX_KEYS>,
+    /// Microseconds to wait after pulling a matrix line low before reading
+    /// it, which is also the time the line before has to go quiet; 0 for the
+    /// usual few. Keys whose sensors get their power through the line need
+    /// longer. Every line waits this long on every scan, once a millisecond.
+    pub settle_us: u16,
+    /// Hold the matrix lines that are not being read high, instead of
+    /// leaving them to the weak pull-ups. For lines that switch power to
+    /// sensors through a transistor (the Svalboard's rows): a pull-up is too
+    /// weak to switch them off, and every cluster then shows every key. The
+    /// firmware drives a pin high only for this, and only on the lines it
+    /// pulls low to read, so nothing else may drive them. Not for a matrix
+    /// read in both directions.
+    pub drive_idle_high: bool,
+}
+
+impl ScanConfig {
+    /// The longest wait between lines the firmware accepts.
+    pub const MAX_SETTLE_US: u16 = 200;
+}
 
 impl HardwareConfig {
     /// Every group of switches on the board, in the order of their positions.
@@ -535,6 +567,18 @@ pub enum Request {
     SetIndicators(Indicators),
     GetLayersWith,
     SetLayersWith(LayersWith),
+    GetScan,
+    /// How the switches are read. Takes effect at once.
+    SetScan(ScanConfig),
+    /// Pass a request on to the other half of a split over the cable: the
+    /// bytes it would get over USB, one whole message (not its reports).
+    /// Answered with `Ok` once it is on its way; what the other half sends
+    /// back comes as [`Event::Peer`]. Refused with
+    /// [`Error::NotConnected`] while the other half is not heard. The other
+    /// half refuses wiring detection and [`Request::HoldLow`] this way, as
+    /// both would stop it talking over the cable, and a restart into its
+    /// bootloader, which only a USB cable reaches.
+    Peer(Vec<u8, MAX_PEER_MESSAGE>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -563,6 +607,7 @@ pub enum Response {
     Doubles(Doubles),
     Indicators(Indicators),
     LayersWith(LayersWith),
+    Scan(ScanConfig),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -583,6 +628,9 @@ pub enum Error {
     /// a serial link on pins that have no serial function.
     Unsupported,
     Storage,
+    /// The other half of a split is not heard over the cable, or did not
+    /// answer in time.
+    NotConnected,
 }
 
 /// Sent by the device without a request.
@@ -597,6 +645,11 @@ pub enum Event {
     /// Bitmask of the layers now active. Sent when key watching starts and
     /// whenever it changes.
     Layers(u32),
+    /// A message from the other half of a split, in the bytes it would send
+    /// over USB: the reply to a [`Request::Peer`], or one of its events
+    /// while it was asked that way to watch keys. A request that got no
+    /// answer in time is answered here with [`Error::NotConnected`].
+    Peer(Vec<u8, MAX_PEER_MESSAGE>),
 }
 
 /// Everything the device sends.

@@ -261,6 +261,7 @@ fn print_event(event: &Event) {
         Event::Probe(contacts) => println!("contacts: {contacts:?}"),
         Event::Resolved { pos, layer } => println!("key {pos} used layer {layer}"),
         Event::Layers(layers) => println!("active layers: {layers:#b}"),
+        Event::Peer(bytes) => println!("message from the other half, {} bytes", bytes.len()),
     }
 }
 

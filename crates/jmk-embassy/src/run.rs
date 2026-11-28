@@ -51,8 +51,11 @@ pub async fn run<P: Pins, F: NorFlash>(
         // If a pass overruns its millisecond the ticker is ready again at
         // once; yielding keeps USB and the other futures running.
         yield_now().await;
-        match select(ticker.next(), config.from_host.receive()).await {
-            Either::First(()) => {
+        // A waiting request goes first: with a slow scan (sensor keys that
+        // need long to settle) the ticker is always ready, and the
+        // configurator would never get an answer.
+        match select(config.from_host.receive(), ticker.next()).await {
+            Either::Second(()) => {
                 let now = Instant::now();
                 device.set_host(host());
                 device.set_locks(crate::usb::locks());
@@ -63,32 +66,34 @@ pub async fn run<P: Pins, F: NorFlash>(
                     }
                 }
             }
-            Either::Second(report) => {
+            Either::First(report) => {
                 let Some(request) = assembler.push::<Request>(&report) else { continue };
                 let response = match request {
                     Ok(request) => device.handle(request, &mut out),
                     Err(_) => Response::Error(Error::Malformed),
                 };
                 send(&DeviceMessage::Response(response));
-                let now = (device.hardware().split.link(), device.lighting().pin);
-                if now != wired {
-                    if now.0 != wired.0 {
-                        wiring.set_link(now.0);
-                    }
-                    if now.1 != wired.1 {
-                        wiring.set_light(now.1);
-                    }
-                    wired = now;
-                    // The drivers let go of their old pins during this
-                    // pause. One of them may be wired to a key now.
-                    yield_now().await;
-                    device.claim_pins();
-                }
-                if let Some(bootloader) = device.take_reboot() {
-                    // Give the reply time to reach the host first.
-                    reboot_at = Some((Instant::now() + Duration::from_millis(100), bootloader));
-                }
             }
+        }
+        // A request changes these, from the computer or passed on by the
+        // other half over the cable.
+        let now = (device.hardware().split.link(), device.lighting().pin);
+        if now != wired {
+            if now.0 != wired.0 {
+                wiring.set_link(now.0);
+            }
+            if now.1 != wired.1 {
+                wiring.set_light(now.1);
+            }
+            wired = now;
+            // The drivers let go of their old pins during this
+            // pause. One of them may be wired to a key now.
+            yield_now().await;
+            device.claim_pins();
+        }
+        if let Some(bootloader) = device.take_reboot() {
+            // Give the reply time to reach the host, or the other half, first.
+            reboot_at = Some((Instant::now() + Duration::from_millis(100), bootloader));
         }
     }
 }

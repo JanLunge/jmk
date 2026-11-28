@@ -1,7 +1,7 @@
 use heapless::{String, Vec};
 use jmk_core::{Action, Combo, ComboOptions, HoldTapFlavor, HoldTapProfile, Keymap, MacroStep};
 use jmk_proto::{
-    Doubles, HardwareConfig, Indicators, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
+    Doubles, HardwareConfig, Indicators, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, ScanConfig, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, MAX_MACRO_NAME, MAX_MACRO_STEPS,
 };
 
@@ -38,6 +38,8 @@ pub struct Config {
     pub indicators: Indicators,
     /// The layers that turn each layer on while they are on together.
     pub layers_with: [u8; MAX_LAYERS],
+    /// Which switches read the other way round, and how long lines settle.
+    pub scan: ScanConfig,
     /// How many times the shared part was saved with a change in it; see
     /// [`crate::sync`].
     pub revision: u32,
@@ -155,6 +157,7 @@ impl Config {
             doubles: Vec::new(),
             indicators: Indicators { pin: None, active_low: false, list: Vec::new() },
             layers_with: [0; MAX_LAYERS],
+            scan: ScanConfig { inverted: Vec::new(), settle_us: 0, drive_idle_high: false },
             revision: 0,
             base: None,
         }
@@ -181,6 +184,7 @@ impl Config {
             doubles,
             indicators,
             layers_with,
+            scan,
             revision,
             base,
         } = self;
@@ -202,6 +206,7 @@ impl Config {
         doubles.clear();
         *indicators = Self::new().indicators;
         *layers_with = [0; MAX_LAYERS];
+        *scan = ScanConfig::default();
         *revision = 0;
         *base = None;
     }

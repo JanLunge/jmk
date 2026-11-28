@@ -9,12 +9,15 @@
 //! and a half whose keymap is the older one asks for the newer one piece by
 //! piece: see [`crate::sync`]. The half that types also sends its clock, by
 //! which the lights of both move, and what its indicator lights go by.
+//! Requests from the computer for the other half and what it answers travel
+//! in parts as well: see [`crate::peer`].
 //!
 //! Frame: 0x4A, length, type, payload, CRC-8 over length, type and payload.
 
 use jmk_core::Millis;
 use jmk_proto::MAX_KEYS;
 
+use crate::peer::{Part, PART};
 use crate::sync::Side;
 
 /// A byte pipe to the other half. Both calls return at once.
@@ -54,6 +57,9 @@ const TYPE_ABOUT: u8 = 4;
 const TYPE_FETCH: u8 = 5;
 const TYPE_CHUNK: u8 = 6;
 const TYPE_CLOCK: u8 = 7;
+const TYPE_ASK: u8 = 8;
+const TYPE_ANSWER: u8 = 9;
+const _: () = assert!(MAX_BODY >= 4 + PART);
 
 const FLAG_CLEAN: u8 = 1;
 const FLAG_FORCE: u8 = 2;
@@ -80,6 +86,7 @@ pub(crate) enum Message {
     Chunk(Chunk),
     /// The sender's time in milliseconds, its active layers and lock keys.
     Clock(u32, (u8, u8)),
+    Part(Part),
 }
 
 fn send(link: &mut impl Link, kind: u8, payload: &[u8]) {
@@ -176,6 +183,20 @@ impl Parser {
             (TYPE_CLOCK, [a, b, c, d, layers, locks, ..]) => {
                 Some(Message::Clock(u32::from_le_bytes([*a, *b, *c, *d]), (*layers, *locks)))
             }
+            (kind @ (TYPE_ASK | TYPE_ANSWER), [id, index, count, bytes @ ..])
+                if !bytes.is_empty() && bytes.len() <= PART && index < count =>
+            {
+                let mut data = [0; PART];
+                data[..bytes.len()].copy_from_slice(bytes);
+                Some(Message::Part(Part {
+                    ask: kind == TYPE_ASK,
+                    id: *id,
+                    index: *index,
+                    count: *count,
+                    len: bytes.len() as u8,
+                    data,
+                }))
+            }
             _ => None,
         }
     }
@@ -207,6 +228,8 @@ pub(crate) struct Post {
     /// It wants the keymap with this digest from this offset on.
     pub fetch: Option<(u32, u16)>,
     pub chunk: Option<Chunk>,
+    /// Parts of requests for this half, or of what the other half sent back.
+    pub parts: heapless::Vec<Part, 8>,
 }
 
 pub(crate) struct Split {
@@ -308,6 +331,15 @@ impl Split {
         self.peer_shows
     }
 
+    /// Send a part of a request for the other half or of an answer to one.
+    pub fn send_part(&mut self, link: &mut impl Link, part: &Part) {
+        let mut payload = [0u8; 3 + PART];
+        payload[..3].copy_from_slice(&[part.id, part.index, part.count]);
+        let len = part.len as usize;
+        payload[3..3 + len].copy_from_slice(&part.data[..len]);
+        send(link, if part.ask { TYPE_ASK } else { TYPE_ANSWER }, &payload[..3 + len]);
+    }
+
     /// Whether this half does the typing. A half on its own always does.
     /// Of two that hear each other it is the one a computer listens to,
     /// and the first half if that does not decide it, so that two halves
@@ -363,6 +395,9 @@ impl Split {
             Message::Fetch { digest, offset } => post.fetch = Some((digest, offset)),
             Message::Chunk(chunk) => post.chunk = Some(chunk),
             Message::Clock(at, shows) => clock = Some((at, shows)),
+            Message::Part(part) => {
+                let _ = post.parts.push(part);
+            }
         });
         if let Some((clock, shows)) = clock {
             self.ahead = clock as i64 - now as i64;

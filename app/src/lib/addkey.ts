@@ -3,7 +3,7 @@
 
 import type { KeySignature } from './infer'
 import { keyCount, wiringParts } from './definition'
-import { LIMITS, type HardwareConfig, type MatrixConfig, type Pin } from './protocol'
+import { LIMITS, NO_SCAN, type HardwareConfig, type MatrixConfig, type Pin } from './protocol'
 
 export type AddPlan =
   | {
@@ -19,10 +19,21 @@ export type AddPlan =
   | { ok: false; problem: string }
 
 /**
+/**
  * Work out how the key that made `key` joins the wiring in `hardware`, on a
- * keyboard that can have `maxMore` groups of switches besides its first.
+ * keyboard that can have `maxMore` groups of switches besides its first. Keys
+ * read the other way round keep that, wherever the new numbering puts them.
  */
 export function planAddedKey(hardware: HardwareConfig, key: KeySignature, maxMore: number = LIMITS.moreWiring): AddPlan {
+  const plan = planDoubles(hardware, key, maxMore)
+  if (!plan.ok) return plan
+  const before = hardware.scan?.inverted ?? []
+  const inverted = [...new Set([...before.map(plan.move), ...(key.inverted ? [plan.pos] : [])])].sort((a, b) => a - b)
+  if (inverted.length === before.length && inverted.every((pos, i) => pos === before[i])) return plan
+  return { ...plan, hardware: { ...plan.hardware, scan: { ...(hardware.scan ?? NO_SCAN), inverted } } }
+}
+
+function planDoubles(hardware: HardwareConfig, key: KeySignature, maxMore: number): AddPlan {
   const plan = planGroups(hardware, key, maxMore)
   if (!plan.ok) return plan
   const { double, ...rest } = plan

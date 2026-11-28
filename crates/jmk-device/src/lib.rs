@@ -9,6 +9,7 @@ mod config;
 mod device;
 mod lights;
 mod link;
+mod peer;
 mod pins;
 mod probe;
 mod scan;

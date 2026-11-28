@@ -3,12 +3,16 @@
 
 import { LIMITS, type Contact, type DiodeDirection, type MatrixConfig, type Pin } from './protocol'
 
-/** What pressing one key connected. */
-export type KeySignature =
+/**
+ * What pressing one key connected, or with `inverted`, what it let go of: a
+ * key that reads closed at rest and opens when pressed.
+ */
+export type KeySignature = (
   | { kind: 'ground'; pin: Pin }
   | { kind: 'supply'; pin: Pin }
   /** `diode`: current only flows one way, from `sensed` to `driven`. */
   | { kind: 'link'; driven: Pin; sensed: Pin; diode: boolean }
+) & { inverted?: boolean }
 
 export function contactKey(contact: Contact): string {
   if ('Ground' in contact) return `g${contact.Ground}`
@@ -58,6 +62,8 @@ export interface Wiring {
    * a matrix read in both directions is read a second time.
    */
   doubles: number[]
+  /** Positions read the other way round: closed at rest, open when pressed. Ascending. */
+  inverted: number[]
   /** Things the user should know, in plain words. */
   notes: string[]
 }
@@ -75,6 +81,8 @@ interface Part {
   /** Positions within the group that read a key a second time. */
   doubles: number[]
   notes: string[]
+  /** Positions within this group closed at rest that no key was pressed on. */
+  closed?: number[]
 }
 
 /** The most switch positions one board can have (the firmware's limit). */
@@ -88,7 +96,7 @@ const MAX_POSITIONS = 128
  * push switch of a knob on two pins of its own, say) are a matrix of their
  * own, as long as the keyboard has room for another group (`groups` in all).
  */
-export function inferWiring(keys: KeySignature[], groups: number = LIMITS.moreWiring + 1): InferResult {
+export function inferWiring(keys: KeySignature[], groups: number = LIMITS.moreWiring + 1, closedAtRest: Contact[] = []): InferResult {
   if (keys.length === 0) return { ok: false, problem: 'No keys were pressed yet.' }
   const indexed = keys.map((key, index) => ({ key, index }))
   const parts: Part[] = []
@@ -101,8 +109,9 @@ export function inferWiring(keys: KeySignature[], groups: number = LIMITS.moreWi
   const room = Math.max(1, groups - direct.length)
   const shared = islands.length > room
   const matrices = shared ? [...islands.slice(0, room - 1), islands.slice(room - 1).flat()] : islands
+  const linksAtRest = closedAtRest.flatMap((contact) => ('Link' in contact ? [contact.Link] : []))
   for (const [n, group] of matrices.entries()) {
-    const matrix = inferMatrix(group.map(({ key }) => key))
+    const matrix = inferMatrix(group.map(({ key }) => key), linksAtRest)
     if ('problem' in matrix) return { ok: false, problem: matrix.problem }
     if (shared && n === matrices.length - 1) matrix.notes.push('Its keys are on pins apart from each other, so some of its crossings have no key.')
     parts.push({ ...matrix, keys: group.map(({ index }, i) => ({ key: index, local: matrix.positions[i] })) })
@@ -123,13 +132,16 @@ export function inferWiring(keys: KeySignature[], groups: number = LIMITS.moreWi
   }
 
   const positions: number[] = Array(keys.length).fill(0)
+  const inverted = new Set<number>()
   const doubles: number[] = []
   let base = 0
   for (const part of parts) {
     for (const { key, local } of part.keys) positions[key] = base + local
+    for (const local of part.closed ?? []) inverted.add(base + local)
     doubles.push(...part.doubles.map((local) => base + local))
     base += part.size
   }
+  keys.forEach((key, index) => key.inverted && inverted.add(positions[index]))
   if (base > MAX_POSITIONS) return { ok: false, problem: `This wiring has room for ${base} keys, but a board can have ${MAX_POSITIONS}.` }
   if (doubles.length > LIMITS.doubles) {
     return {
@@ -139,7 +151,14 @@ export function inferWiring(keys: KeySignature[], groups: number = LIMITS.moreWi
   }
   const notes = parts.flatMap((part) => part.notes)
   if (parts.length > 1) notes.push('The keyboard mixes these wiring styles; each group is read in its own way.')
-  return { ok: true, wiring: { matrix: parts[0].config, more: parts.slice(1).map((part) => part.config), positions, doubles, notes } }
+  if (inverted.size) {
+    notes.push(
+      `${inverted.size === 1 ? 'One key reads' : `${inverted.size} keys read`} closed at rest, so ${inverted.size === 1 ? 'it counts' : 'they count'} as pressed when ${inverted.size === 1 ? 'it opens' : 'they open'}. ` +
+        'That is how light-beam sensor keys work; on mechanical switches it means a stuck key.',
+    )
+  }
+  const wiring = { matrix: parts[0].config, more: parts.slice(1).map((part) => part.config), positions, inverted: [...inverted].sort((a, b) => a - b), doubles, notes }
+  return { ok: true, wiring }
 }
 
 const count = (keys: number) => (keys === 1 ? 'One key connects' : `${keys} keys each connect`)
@@ -167,7 +186,8 @@ function islandsOf<T extends { key: LinkKey }>(keys: T[]): T[][] {
 
 function inferMatrix(
   keys: LinkKey[],
-): { config: MatrixConfig; positions: number[]; size: number; doubles: number[]; notes: string[] } | { problem: string } {
+  closedAtRest: { driven: Pin; sensed: Pin }[],
+): { config: MatrixConfig; positions: number[]; size: number; doubles: number[]; notes: string[]; closed: number[] } | { problem: string } {
   const withDiodes = keys.filter((key) => key.diode)
   const without = keys.length - withDiodes.length
   // Split the pins into two groups so that every key joins one pin of each:
@@ -211,18 +231,26 @@ function inferMatrix(
   const diodes: DiodeDirection = duplex ? 'Both' : drivenAreRows ? 'Col2Row' : 'Row2Col'
   const crossings = rows.length * cols.length
   const doubles: number[] = []
-  const positions = keys.map((key) => {
+  const positionOf = (key: { driven: Pin; sensed: Pin; diode?: boolean }, real = true) => {
     const pinOnSide = (which: 0 | 1) => (side.get(key.driven) === which ? key.driven : key.sensed)
     const row = rows.indexOf(pinOnSide(drivenAreRows ? 0 : 1))
     const col = cols.indexOf(pinOnSide(drivenAreRows ? 1 : 0))
     const crossing = row * cols.length + col
     // Read in both directions, a key without a diode shows at both positions
     // of its crossing. It is one key: the first position is its own.
-    if (duplex && !key.diode) doubles.push(crossings + crossing)
+    if (real && duplex && key.diode === false) doubles.push(crossings + crossing)
     // In a duplex matrix the keys found by pulling a row low come first.
-    const second = duplex && key.diode && !rows.includes(key.driven)
+    const second = duplex && key.diode !== false && !rows.includes(key.driven)
     return (second ? crossings : 0) + crossing
-  })
+  }
+  const positions = keys.map((key) => positionOf(key))
+  // Crossings that conducted at rest the way the firmware reads them would
+  // otherwise read as held for good, a cluster without its sensors plugged
+  // in, say. Read the other way round they rest.
+  const closed = closedAtRest
+    .filter(({ driven, sensed }) => side.get(driven) !== undefined && side.get(sensed) !== undefined && side.get(driven) !== side.get(sensed))
+    .filter(({ driven }) => duplex || side.get(driven) === 0)
+    .map((link) => positionOf(link, false))
   if (new Set([...positions, ...doubles]).size !== positions.length + doubles.length) {
     return { problem: 'Two keys join the same two pins the same way round. Check for keys wired in parallel.' }
   }
@@ -230,7 +258,7 @@ function inferMatrix(
   const size = crossings * (duplex ? 2 : 1)
   if (keys.length === 1 && crossings === 1) {
     const notes = [`One key joins two pins of its own${keys[0].diode ? ', through a diode' : ', without a diode'}.`]
-    return { config: { Matrix: { rows, cols, diodes } }, positions, size, doubles, notes }
+    return { config: { Matrix: { rows, cols, diodes } }, positions, size, doubles, notes, closed }
   }
   const notes = [`A matrix of ${plural(rows.length, 'row')} and ${plural(cols.length, 'column')}.`]
   if (duplex) {
@@ -254,5 +282,5 @@ function inferMatrix(
         `Holding ${without === 1 ? 'it' : 'one of them'} together with two keys that form a corner with it can make a fourth appear pressed.`,
     )
   }
-  return { config: { Matrix: { rows, cols, diodes } }, positions, size, doubles, notes }
+  return { config: { Matrix: { rows, cols, diodes } }, positions, size, doubles, notes, closed }
 }

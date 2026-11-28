@@ -201,6 +201,12 @@ impl VirtualKeyboard {
                 Some(link) => device.poll(*now, host, link, event),
                 None => device.poll(*now, host, &mut (), event),
             }
+            // A request passed on over the cable may restart the board.
+            match self.device.take_reboot() {
+                Some(true) => self.in_bootloader = true,
+                Some(false) => self.reboot(),
+                None => {}
+            }
         }
     }
 

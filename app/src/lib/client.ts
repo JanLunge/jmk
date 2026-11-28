@@ -21,7 +21,7 @@ import type {
   Response,
   SplitStatus,
 } from './protocol'
-import { describeError, LIMITS } from './protocol'
+import { describeError, LIMITS, NO_SCAN, type ScanConfig } from './protocol'
 import type { Transport } from './transport'
 import { bridge } from './wasm'
 
@@ -34,6 +34,12 @@ export const COMBO_OPTIONS_PROTOCOL = 11
 export const MANY_GROUPS_PROTOCOL = 11
 /** Groups of switches a keyboard of that protocol version can have besides its first. */
 export const moreWiringLimit = (protocol: number) => (protocol < MORE_WIRING_PROTOCOL ? 0 : protocol < MANY_GROUPS_PROTOCOL ? 3 : LIMITS.moreWiring)
+export const isUsualScan = (scan: ScanConfig) => !scan.inverted.length && !scan.settle_us && !scan.drive_idle_high
+
+/** Firmware that can read keys the other way round and wait longer between lines. */
+export const SCAN_PROTOCOL = 15
+/** Firmware that passes requests on to the other half over the cable. */
+export const PEER_PROTOCOL = 16
 let nextChannel = 1
 
 export class KeyboardError extends Error {}
@@ -43,6 +49,8 @@ export class KeyboardClient {
   onProbe: (contacts: Contact[]) => void = () => {}
   onResolved: (pos: number, layer: number) => void = () => {}
   onLayers: (layers: number) => void = () => {}
+  /** A message from the other half of a split, passed on over the cable (see `CableTransport`). */
+  onPeer: (bytes: number[]) => void = () => {}
   private readonly channel = nextChannel++
   private queue: Promise<unknown> = Promise.resolve()
   private waiting: ((response: Response) => void) | undefined
@@ -73,6 +81,7 @@ export class KeyboardClient {
     else if ('Probe' in event) this.onProbe(event.Probe)
     else if ('Resolved' in event) this.onResolved(event.Resolved.pos, event.Resolved.layer)
     else if ('Layers' in event) this.onLayers(event.Layers)
+    else if ('Peer' in event) this.onPeer(event.Peer)
   }
 
   /** Send a request and wait for its reply. Requests run one after another. */
@@ -152,11 +161,17 @@ export class KeyboardClient {
     if (this.protocol < MANY_GROUPS_PROTOCOL) return hardware
     const doubles: number[] = await this.expect('GetDoubles', 'Doubles')
     if (doubles.length) hardware.doubles = doubles
+    if (this.protocol < SCAN_PROTOCOL) return hardware
+    const scan: ScanConfig = await this.expect('GetScan', 'Scan')
+    if (!isUsualScan(scan)) hardware.scan = scan
     return hardware
   }
 
   async setHardware(hardware: HardwareConfig): Promise<void> {
-    const { more = [], doubles = [], ...first } = hardware
+    const { more = [], doubles = [], scan = NO_SCAN, ...first } = hardware
+    if (this.protocol < SCAN_PROTOCOL && !isUsualScan(scan)) {
+      throw new KeyboardError("This keyboard's firmware is too old for keys that open when pressed. Update the firmware first.")
+    }
     const matrix = first.matrix
     const duplex = [matrix, ...more].some((part) => part !== 'None' && 'Matrix' in part && part.Matrix.diodes === 'Both')
     const tooOld = new KeyboardError("This keyboard's firmware is too old for this wiring. Update the firmware first.")
@@ -175,6 +190,7 @@ export class KeyboardClient {
       if (more.length) await this.ok({ SetMoreWiring: more })
       // Last: the keyboard forgets them whenever the wiring is set.
       if (doubles.length) await this.ok({ SetDoubles: doubles })
+      if (this.protocol >= SCAN_PROTOCOL) await this.ok({ SetScan: scan })
     } catch (error) {
       if (before.length) await this.ok({ SetMoreWiring: before }).catch(() => {})
       if (doublesBefore.length) await this.ok({ SetDoubles: doublesBefore }).catch(() => {})
@@ -234,6 +250,8 @@ export class KeyboardClient {
   letterRows = (): Promise<number[][]> => this.expect('GetLetterRows', 'LetterRows')
   setLetterRows = (rows: number[][]) => this.shared({ SetLetterRows: rows })
   reboot = (bootloader: boolean) => this.ok({ Reboot: { bootloader } })
+  /** Pass a whole request on to the other half; its answer comes through `onPeer`. */
+  peer = (bytes: number[]) => this.ok({ Peer: bytes })
 
   async actions(layer: number, count: number): Promise<Action[]> {
     const actions: Action[] = []

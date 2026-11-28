@@ -83,4 +83,8 @@ impl Pins for NrfPins {
         // microsecond.
         cortex_m::asm::delay(64 * 10);
     }
+
+    fn wait_us(&mut self, us: u16) {
+        cortex_m::asm::delay(64 * us as u32);
+    }
 }

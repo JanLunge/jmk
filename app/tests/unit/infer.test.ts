@@ -371,3 +371,50 @@ describe('a missed key on a board that mixes wiring styles', () => {
     expect([0, 1, 2, 3, 4, 5, 6, 7, 8].map(plan.move)).toEqual([0, 1, 3, 4, 6, 7, 9, 10, 12])
   })
 })
+
+describe('keys that open when pressed', () => {
+  // Svalboard-like: rows 8 and 7 power a cluster each, columns 14, 13, 12 are read.
+  // The centre column (12) conducts at rest on both rows.
+  const atRest: Contact[] = [{ Link: { driven: 8, sensed: 12 } }, { Link: { driven: 7, sensed: 12 } }]
+
+  it('reads a connection that lets go as an inverted key', () => {
+    let now = 0
+    const collector = new KeyCollector(() => now)
+    collector.update(atRest)
+    now = 1000
+    collector.update(atRest)
+    collector.update([atRest[1]])
+    expect(collector.keys).toEqual([{ ...link(8, 12), inverted: true }])
+    expect(collector.confused).toBe(false)
+    collector.update(atRest)
+    collector.update([...atRest, { Link: { driven: 8, sensed: 14 } }])
+    expect(collector.keys).toHaveLength(2)
+    expect(collector.keys[1].inverted).toBeUndefined()
+  })
+
+  it('turns pressed and untouched crossings closed at rest round', () => {
+    const keys = [{ ...link(8, 12), inverted: true }, link(8, 14), link(7, 13), link(8, 13)]
+    const result = inferWiring(keys, undefined, atRest)
+    expect(result).toMatchObject({ ok: true, wiring: { matrix: { Matrix: { rows: [8, 7], cols: [12, 14, 13], diodes: 'Col2Row' } } } })
+    // Row 8 centre was pressed; row 7 centre never was but still rests.
+    if (result.ok) expect(result.wiring.inverted).toEqual([0, 3])
+  })
+
+  it('ignores connections at rest outside the matrix or against its direction', () => {
+    const result = inferWiring([link(8, 14), link(7, 13)], undefined, [{ Link: { driven: 14, sensed: 8 } }, { Link: { driven: 3, sensed: 4 } }])
+    if (result.ok) expect(result.wiring.inverted).toEqual([])
+  })
+
+  it('keeps inverted keys in place when a key is added', () => {
+    const hardware = {
+      matrix: { Matrix: { rows: [8], cols: [12, 14], diodes: 'Col2Row' as const } },
+      scan: { inverted: [0], settle_us: 90, drive_idle_high: true },
+      reserved_pins: [],
+      debounce_ms: 5,
+      encoders: [],
+      split: 'None' as const,
+    }
+    const plan = planAddedKey(hardware, { ...link(7, 12), inverted: true })
+    expect(plan).toMatchObject({ ok: true, pos: 2, hardware: { scan: { inverted: [0, 2], settle_us: 90, drive_idle_high: true } } })
+  })
+})

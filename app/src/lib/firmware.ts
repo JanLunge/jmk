@@ -6,7 +6,6 @@ import { app, halvesOf, installVirtual, saveAll, sideOf, virtualDrives, type Ben
 import { desktop, type BootDrive } from './desktop'
 import type { Mcu } from './protocol'
 import type { Session } from './session'
-import { VirtualTransport } from './transport'
 import { bridge } from './wasm'
 
 /** Protocol version from which the firmware can help find the cable between halves. */
@@ -81,10 +80,16 @@ export const isOlder = (a: Version, b: Version) => a[0] !== b[0] ? a[0] < b[0] :
 const carriedChips = ref<string[]>([])
 desktop?.bundled().then((chips) => (carriedChips.value = chips), () => {})
 
-const canUpdate = (session: Session) => !(session.transport instanceof VirtualTransport) && carriedChips.value.includes(chipName(session.info.mcu))
+const carried = (session: Session) => carriedChips.value.includes(chipName(session.info.mcu))
+/** A half reached over the cable cannot go into update mode: that needs its own USB cable. */
+const canUpdate = (session: Session) => session.transport.kind === 'usb' && carried(session)
 
 /** The app carries newer firmware than this board runs, and can put it on by itself. */
 export const updateDue = (session: Session) => canUpdate(session) && !session.closed && isOlder(session.info.firmware, carriedVersion())
+
+/** A half reached over the cable runs older firmware; plugged in by USB it could be updated. */
+export const updateNeedsUsb = (session: Session) =>
+  session.transport.kind === 'cable' && carried(session) && !session.closed && isOlder(session.info.firmware, carriedVersion())
 
 /** What an update in progress is doing, for the screen that shows while the keyboard is away. */
 export const updating = ref<string>()

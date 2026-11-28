@@ -16,6 +16,11 @@ pub enum Wire {
     Plain(Pin, Pin),
     /// Conducts from anode to cathode.
     Diode { anode: Pin, cathode: Pin },
+    /// A light-beam key like the Svalboard's: its sensor is powered through
+    /// a transistor that is on unless `power` is driven high (a pull-up is
+    /// too weak to switch it off), and while powered a comparator drives
+    /// `out` low when the key is closed and high when it is open.
+    Sensor { power: Pin, out: Pin },
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -124,6 +129,21 @@ impl Pins for SimPins {
 
     fn read(&mut self, pin: Pin) -> bool {
         let state = self.0.borrow();
+        if state.modes[pin as usize] == PinMode::High {
+            return true;
+        }
+        // Comparators of powered sensors drive their output either way.
+        let powered = |power: Pin| state.modes[power as usize] != PinMode::High;
+        let sensors = || state.switches.iter().filter_map(|(w, closed)| match w {
+            Wire::Sensor { power, out } if *out == pin && powered(*power) => Some(*closed),
+            _ => None,
+        });
+        if sensors().any(|closed| closed) {
+            return false;
+        }
+        if sensors().next().is_some() {
+            return true;
+        }
         let closed = || state.switches.iter().filter(|s| s.1).map(|s| s.0);
         let mut low = [false; 64];
         for (pin, mode) in state.modes.iter().enumerate() {
@@ -191,6 +211,16 @@ pub struct MemFlash {
 impl MemFlash {
     pub fn new(size: usize) -> Self {
         Self { bytes: Rc::new(RefCell::new(vec![0xFF; size])), writes_left: Default::default() }
+    }
+
+    /// Everything in the flash, as a debug probe would read it out.
+    pub fn bytes(&self) -> Vec<u8> {
+        self.bytes.borrow().clone()
+    }
+
+    /// Put bytes at the start of the flash, as another firmware left them.
+    pub fn load(&self, bytes: &[u8]) {
+        self.bytes.borrow_mut()[..bytes.len()].copy_from_slice(bytes);
     }
 
     /// Let this many writes succeed, then fail each one half way through,
