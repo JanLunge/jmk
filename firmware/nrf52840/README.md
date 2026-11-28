@@ -43,7 +43,8 @@ unverified until the checklist at the end has been worked through.
   is kept running for USB at all times, and the DC/DC converters are off.
   Expect a battery to last days, not months.
 - The configurator channel over Bluetooth, boot protocol over Bluetooth,
-  showing the lock-key LEDs, passkey pairing.
+  the lock keys over Bluetooth (a caps lock light
+  only follows a computer on USB), passkey pairing.
 - Flashing from the command line: `jmk flash` writes to the drive that
   appears on the keyboard's USB port, as it does for an RP2040, but has
   not been tried with this bootloader yet.

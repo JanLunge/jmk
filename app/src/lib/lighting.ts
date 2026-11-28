@@ -90,7 +90,7 @@ export function rgbToHsv(r: number, g: number, b: number): { hue: number; sat: n
 const hex = (rgb: number[]) => '#' + rgb.map((part) => Math.round(part).toString(16).padStart(2, '0')).join('')
 
 /** A zone's colour at full brightness, for a colour picker. */
-export const zoneHex = (zone: LightZone) => hex(hsvToRgb(zone.hue, zone.sat, 255))
+export const zoneHex = (zone: { hue: number; sat: number }) => hex(hsvToRgb(zone.hue, zone.sat, 255))
 
 export function hexToHueSat(value: string): { hue: number; sat: number } {
   const parts = [1, 3, 5].map((at) => parseInt(value.slice(at, at + 2), 16))

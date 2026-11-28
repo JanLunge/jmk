@@ -23,6 +23,7 @@ enum PinMode {
     Untouched,
     Input(Pull),
     Low,
+    High,
 }
 
 /// The pins of a simulated chip and what is wired to them. Clones share
@@ -87,6 +88,11 @@ impl SimPins {
         std::mem::take(&mut state.lights_fresh).then(|| state.lights.clone())
     }
 
+    /// Whether the firmware drives this pin high, as it does for a plain light.
+    pub fn drives_high(&self, pin: Pin) -> bool {
+        self.0.borrow().modes[pin as usize] == PinMode::High
+    }
+
     /// How often the firmware waited for levels to settle.
     pub fn settles(&self) -> usize {
         self.0.borrow().settles
@@ -110,6 +116,10 @@ impl Pins for SimPins {
 
     fn drive_low(&mut self, pin: Pin) {
         self.0.borrow_mut().modes[pin as usize] = PinMode::Low;
+    }
+
+    fn drive_high(&mut self, pin: Pin) {
+        self.0.borrow_mut().modes[pin as usize] = PinMode::High;
     }
 
     fn read(&mut self, pin: Pin) -> bool {

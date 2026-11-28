@@ -1,7 +1,7 @@
 //! The USB side every port presents: a boot keyboard, consumer control and
 //! the vendor channel for the configurator.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use embassy_futures::join::join;
 use embassy_usb::class::hid::{Config as HidConfig, HidBootProtocol, HidReaderWriter, HidSubclass, HidWriter, State};
@@ -90,6 +90,14 @@ static SUSPENDED: AtomicBool = AtomicBool::new(false);
 /// connected halves of a split, the one this is true for does the typing.
 pub fn listening() -> bool {
     configured() && !SUSPENDED.load(Ordering::Relaxed)
+}
+
+static LOCKS: AtomicU8 = AtomicU8::new(0);
+
+/// The lock keys as the computer last reported them: bit 0 num lock, 1 caps
+/// lock, 2 scroll lock.
+pub fn locks() -> u8 {
+    LOCKS.load(Ordering::Relaxed)
 }
 
 struct BusState;
@@ -227,8 +235,10 @@ impl<D: Driver<'static>> Keyboard<D> {
         let leds = async {
             let mut buf = [0u8; 1];
             loop {
-                // Lock-key LED state. Nothing shows it yet.
-                let _ = reader.read(&mut buf).await;
+                // Lock-key LED state, for the indicator lights.
+                if reader.read(&mut buf).await.is_ok() {
+                    LOCKS.store(buf[0], Ordering::Relaxed);
+                }
             }
         };
         join(send, leds).await;

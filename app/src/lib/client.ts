@@ -11,6 +11,7 @@ import type {
   HoldTapProfile,
   Info,
   KeyGeometry,
+  Indicators,
   LightingConfig,
   MacroStep,
   MatrixConfig,
@@ -221,6 +222,8 @@ export class KeyboardClient {
   lighting = (): Promise<LightingConfig> => this.expect('GetLighting', 'Lighting')
   setLighting = (lighting: LightingConfig) => this.ok({ SetLighting: lighting })
   identifyLed = (led: number | null) => this.ok({ IdentifyLed: led })
+  indicators = (): Promise<Indicators> => this.expect('GetIndicators', 'Indicators')
+  setIndicators = (indicators: Indicators) => this.ok({ SetIndicators: indicators })
   layerColors = (): Promise<number[]> => this.expect('GetLayerColors', 'LayerColors')
   setLayerColors = (colors: number[]) => this.shared({ SetLayerColors: colors })
   macroName = (index: number): Promise<string> => this.expect({ GetMacroName: { index } }, 'MacroName')

@@ -19,6 +19,7 @@ import type {
   Info,
   Pin,
   KeyGeometry,
+  Indicators,
   LightingConfig,
   MacroStep,
   Meta,
@@ -51,6 +52,8 @@ export interface Session {
   letterRows: number[][]
   split: SplitStatus
   lighting: LightingConfig
+  /** Lights that show caps lock or a layer. */
+  indicators: Indicators
   /** The light pin the firmware started with; before protocol 9 a change needs a restart. */
   bootLightPin: Pin | null
   /** A virtual keyboard's lights as they shine right now, in chain order. */
@@ -158,6 +161,15 @@ export function setLighting(session: Session, lighting: LightingConfig): Promise
   return sendNewest(session, 'lighting', () => session.client.setLighting(lighting))
 }
 
+/** Protocol version from which a light can show caps lock or a layer. */
+export const INDICATOR_PROTOCOL = 13
+export const canIndicate = (session: Session) => session.info.protocol >= INDICATOR_PROTOCOL
+
+export function setIndicators(session: Session, indicators: Indicators): Promise<void> {
+  session.indicators = indicators
+  return sendNewest(session, 'indicators', () => session.client.setIndicators(indicators))
+}
+
 /** Give a layer a colour number (see layers.ts). Firmware from before layer colours keeps it only until the app closes. */
 export function setLayerColor(session: Session, layer: number, color: number): Promise<void> {
   const colors = [...Array(session.layers.length).keys()].map((index) => (index === layer ? color : (session.layerColors[index] ?? 0)))
@@ -263,6 +275,7 @@ export async function openSession(transport: Transport, demo?: DemoHalf): Promis
     letterRows: [[], [], []],
     split: { ...NO_SPLIT },
     lighting: noLighting(),
+    indicators: { pin: null, active_low: false, list: [] },
     bootLightPin: null,
     lights: [],
     pressed: new Set<number>(),
@@ -338,6 +351,7 @@ export async function refresh(session: Session): Promise<void> {
   session.macroNames = names
   session.letterRows = canKeepLetterRows(session) ? await client.letterRows() : [[], [], []]
   session.lighting = canLight(session) ? await client.lighting() : noLighting()
+  if (canIndicate(session)) session.indicators = await client.indicators()
   if (canColorLayers(session)) session.layerColors = await client.layerColors()
   session.pressed.clear()
   session.usedLayer.clear()

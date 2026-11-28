@@ -8,7 +8,7 @@
 //! a second each half also says which chip it is and what keymap it holds,
 //! and a half whose keymap is the older one asks for the newer one piece by
 //! piece: see [`crate::sync`]. The half that types also sends its clock, by
-//! which the lights of both move.
+//! which the lights of both move, and what its indicator lights go by.
 //!
 //! Frame: 0x4A, length, type, payload, CRC-8 over length, type and payload.
 
@@ -78,8 +78,8 @@ pub(crate) enum Message {
     /// Send me the keymap with this digest from this offset on.
     Fetch { digest: u32, offset: u16 },
     Chunk(Chunk),
-    /// The sender's time in milliseconds.
-    Clock(u32),
+    /// The sender's time in milliseconds, its active layers and lock keys.
+    Clock(u32, (u8, u8)),
 }
 
 fn send(link: &mut impl Link, kind: u8, payload: &[u8]) {
@@ -173,8 +173,9 @@ impl Parser {
                     data,
                 }))
             }
-            // Whatever a later version adds after the time is left alone.
-            (TYPE_CLOCK, [a, b, c, d, ..]) => Some(Message::Clock(u32::from_le_bytes([*a, *b, *c, *d]))),
+            (TYPE_CLOCK, [a, b, c, d, layers, locks, ..]) => {
+                Some(Message::Clock(u32::from_le_bytes([*a, *b, *c, *d]), (*layers, *locks)))
+            }
             _ => None,
         }
     }
@@ -196,6 +197,8 @@ pub(crate) struct Own {
     pub positions: usize,
     pub uid: [u8; 8],
     pub about: Side,
+    /// Active layers and lock keys.
+    pub shows: (u8, u8),
 }
 
 /// What the other half asked for or sent of its keymap on one tick.
@@ -228,6 +231,9 @@ pub(crate) struct Split {
     dirty: bool,
     /// How far the typing half's clock is ahead of this one's.
     ahead: i64,
+    /// The typing half's layers and lock keys, as heard and as last sent.
+    peer_shows: (u8, u8),
+    sent_shows: (u8, u8),
 }
 
 impl Split {
@@ -249,6 +255,8 @@ impl Split {
             sent_about: None,
             dirty: false,
             ahead: 0,
+            peer_shows: (1, 0),
+            sent_shows: (1, 0),
         }
     }
 
@@ -293,6 +301,11 @@ impl Split {
         } else {
             (now as i64 + self.ahead) as Millis
         }
+    }
+
+    /// The typing half's active layers and lock keys.
+    pub fn shows(&self) -> (u8, u8) {
+        self.peer_shows
     }
 
     /// Whether this half does the typing. A half on its own always does.
@@ -349,10 +362,11 @@ impl Split {
             Message::About { uid, side } => about = Some((uid, side)),
             Message::Fetch { digest, offset } => post.fetch = Some((digest, offset)),
             Message::Chunk(chunk) => post.chunk = Some(chunk),
-            Message::Clock(at) => clock = Some(at),
+            Message::Clock(at, shows) => clock = Some((at, shows)),
         });
-        if let Some(clock) = clock {
+        if let Some((clock, shows)) = clock {
             self.ahead = clock as i64 - now as i64;
+            self.peer_shows = shows;
         }
         if let Some((uid, side)) = about {
             self.peer_uid = uid;
@@ -389,7 +403,15 @@ impl Split {
             self.sent_host = own.host;
             self.last_sent = Some(now);
         }
-        if self.sent_about != Some(own.about) || self.last_about.is_none_or(|at| now - at >= ABOUT_MS) {
+        let about_due = self.sent_about != Some(own.about) || self.last_about.is_none_or(|at| now - at >= ABOUT_MS);
+        if (about_due || own.shows != self.sent_shows) && self.leading(now, own.host, own.first) {
+            let mut payload = [0u8; 6];
+            payload[..4].copy_from_slice(&(now as u32).to_le_bytes());
+            (payload[4], payload[5]) = own.shows;
+            send(link, TYPE_CLOCK, &payload);
+            self.sent_shows = own.shows;
+        }
+        if about_due {
             let about = own.about;
             let mut payload = [0u8; 21];
             payload[..8].copy_from_slice(&own.uid);
@@ -402,9 +424,6 @@ impl Split {
             send(link, TYPE_ABOUT, &payload);
             self.sent_about = Some(about);
             self.last_about = Some(now);
-            if self.leading(now, own.host, own.first) {
-                send(link, TYPE_CLOCK, &(now as u32).to_le_bytes());
-            }
         }
         post
     }
