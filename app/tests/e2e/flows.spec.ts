@@ -1005,6 +1005,14 @@ test('keymap: drag from the picker, swap keys, colour a layer, see all layers', 
   // A layer key wears the colour of the layer it leads to.
   await page.click('[data-test=add-layer]')
   await expect(page.locator('[data-test=layer-1]')).toHaveClass(/on/)
+  // Its options hang from the layer's button and float: the keyboard stays where it is.
+  const board = page.locator('[data-test=keymap-board]')
+  const place = await board.boundingBox()
+  await page.click('[data-test=layer-1]')
+  await expect(page.locator('[data-test=layer-colors]')).toBeVisible()
+  expect(await board.boundingBox()).toEqual(place)
+  await page.keyboard.press('Escape')
+  await expect(page.locator('[data-test=layer-colors]')).toHaveCount(0)
   await page.click('[data-test=layer-1]')
   await page.click('[data-test=color-4]')
   await expect(page.locator('[data-test=layer-colors]')).toHaveCount(0)
