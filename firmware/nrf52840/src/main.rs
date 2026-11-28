@@ -25,7 +25,7 @@ use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::Driver;
 use embassy_nrf::wdt::{self, HaltConfig, Watchdog, WatchdogHandle};
 use embassy_nrf::{bind_interrupts, pac, rng, usb};
-use jmk_core::{KeyboardReport, Output};
+use jmk_core::{KeyboardReport, MouseReport, Output};
 use jmk_device::{Board, Config, Device, Storage};
 use jmk_embassy::queue::{ConfigQueues, HidQueues};
 use jmk_embassy::usb::Usb;
@@ -81,6 +81,7 @@ impl<'a> RoutedOutput<'a> {
             let mut left = queues(self.over_usb);
             left.keyboard(&KeyboardReport::default());
             left.consumer(0);
+            left.mouse(&MouseReport::default());
             self.over_usb = over_usb;
         }
         queues(over_usb)
@@ -94,6 +95,10 @@ impl Output for RoutedOutput<'_> {
 
     fn consumer(&mut self, usage: u16) {
         self.route().consumer(usage);
+    }
+
+    fn mouse(&mut self, report: &MouseReport) {
+        self.route().mouse(report);
     }
 }
 

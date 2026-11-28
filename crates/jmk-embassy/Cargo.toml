@@ -10,7 +10,10 @@ repository = "https://github.com/JanLunge/jmk"
 jmk-core = { path = "../jmk-core" }
 jmk-proto = { path = "../jmk-proto" }
 jmk-device = { path = "../jmk-device" }
-embassy-usb = "0.6"
+# Each HID interface takes a handler, and `usb.rs` adds one for the bus
+# state: four interfaces need five. Past the default of four, building the
+# USB device panics at start-up and the keyboard never shows up.
+embassy-usb = { version = "0.6", features = ["max-handler-count-8", "max-interface-count-8"] }
 embassy-sync = "0.8"
 embassy-futures = "0.1"
 embassy-time = "0.5"

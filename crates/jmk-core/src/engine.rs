@@ -1,6 +1,6 @@
 use heapless::Vec;
 
-use crate::action::{Action, Basic, Combo, ComboOptions, HoldTapFlavor, HoldTapProfile, MacroStep};
+use crate::action::{Action, Basic, Combo, ComboOptions, HoldTapFlavor, HoldTapProfile, MacroStep, MouseKeys};
 use crate::combo::{ComboStage, Combos};
 use crate::keycode::modifier_bit;
 use crate::{Event, Millis, Source};
@@ -49,6 +49,34 @@ pub trait Output {
     fn consumer(&mut self, _usage: u16) {}
     /// A [`Basic::Custom`] action was pressed or released.
     fn custom(&mut self, _id: u16, _pressed: bool) {}
+    /// Mouse buttons changed or the cursor moved.
+    fn mouse(&mut self, _report: &MouseReport) {}
+}
+
+/// One mouse report: the buttons held and the movement since the last one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseReport {
+    /// One bit each: bit 0 is the left button, then right, middle, back,
+    /// forward.
+    pub buttons: u8,
+    /// Right is positive.
+    pub x: i16,
+    /// Down is positive.
+    pub y: i16,
+    /// Up is positive.
+    pub wheel: i8,
+    /// Right is positive.
+    pub pan: i8,
+}
+
+impl MouseReport {
+    /// As the USB and Bluetooth descriptors lay it out: buttons, X and Y
+    /// little-endian, wheel, pan.
+    pub fn bytes(&self) -> [u8; 7] {
+        let [x0, x1] = self.x.to_le_bytes();
+        let [y0, y1] = self.y.to_le_bytes();
+        [self.buttons, x0, x1, y0, y1, self.wheel as u8, self.pan as u8]
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -176,6 +204,21 @@ impl Engine {
             }
         }
         layers
+    }
+
+    /// The mouse keys held now. Turning these into movement takes time and
+    /// settings, which is left to the caller.
+    pub fn mouse_keys(&self) -> MouseKeys {
+        let mut keys = MouseKeys::default();
+        for held in &self.held {
+            match held.action {
+                Basic::MouseButtons(buttons) => keys.buttons |= buttons,
+                Basic::MouseMove(direction) => keys.moving |= direction.bit(),
+                Basic::MouseWheel(direction) => keys.wheel |= direction.bit(),
+                _ => {}
+            }
+        }
+        keys
     }
 
     /// The key presses acted on since the last call, oldest first, each with
@@ -308,6 +351,8 @@ impl Engine {
                 }
             }
             Basic::Mods(_) => self.report(out),
+            // Read through `mouse_keys`.
+            Basic::MouseButtons(_) | Basic::MouseMove(_) | Basic::MouseWheel(_) => {}
             Basic::MomentaryLayer(_) | Basic::None => {}
         }
     }

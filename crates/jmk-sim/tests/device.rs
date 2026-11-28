@@ -1,7 +1,7 @@
 //! The device logic against simulated wiring, flash and split cable.
 
 use jmk_core::keycode as kc;
-use jmk_core::{Action, Basic, MacroStep};
+use jmk_core::{Action, Basic, Direction, MacroStep};
 use jmk_proto::{
     ColorOrder, Contact, DiodeDirection, Effect, EncoderConfig, Error, Event, HardwareConfig, Indicator, Indicators, KeyGeometry,
     Led, LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, ScanConfig, Shows, SplitConfig, SplitStatus,
@@ -73,6 +73,7 @@ fn show(event: &HostEvent) -> String {
             format!("{mods:02x}:{}", keys.join(","))
         }
         HostEvent::Consumer(usage) => format!("consumer {usage:x}"),
+        HostEvent::Mouse { buttons, x, y, wheel, pan } => format!("mouse {buttons} {x},{y} {wheel},{pan}"),
     }
 }
 
@@ -117,6 +118,26 @@ fn direct_wiring_types_keys() {
     rig.run(10);
     assert_eq!(rig.out(), ["00:05", "00:"]);
     assert_eq!(rig.kb.pins().touched(), [7, 9]);
+}
+
+#[test]
+fn mouse_keys_click_and_move_the_cursor() {
+    let mut rig = Rig::new(Wiring::direct(&[7, 9]));
+    rig.ok(Request::SetHardware(direct(&[7, 9])));
+    let actions = [Action::Basic(Basic::MouseButtons(1)), Action::Basic(Basic::MouseMove(Direction::Right))].into_iter().collect();
+    rig.ok(Request::SetActions { layer: 0, pos: 0, actions });
+    rig.kb.set_key(0, true);
+    rig.run(2);
+    rig.kb.set_key(0, false);
+    rig.run(10);
+    assert_eq!(rig.out(), ["mouse 1 0,0 0,0", "mouse 0 0,0 0,0"]);
+    rig.kb.set_key(1, true);
+    rig.run(25);
+    rig.kb.set_key(1, false);
+    rig.run(10);
+    let moves = rig.out();
+    assert_eq!(moves.len(), 3, "{moves:?}");
+    assert!(moves.iter().all(|m| m.starts_with("mouse 0 2,0")), "{moves:?}");
 }
 
 #[test]

@@ -28,6 +28,40 @@ pub enum Basic {
     Macro(u8),
     /// Handed to the firmware's plugin hooks via [`crate::Output::custom`].
     Custom(u16),
+    /// Mouse buttons, one bit each: bit 0 is the left button, then right,
+    /// middle, back, forward.
+    MouseButtons(u8),
+    /// Moves the cursor for as long as it is held.
+    MouseMove(Direction),
+    /// Turns the wheel for as long as it is held.
+    MouseWheel(Direction),
+}
+
+/// Which way a mouse key moves the cursor or turns the wheel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl Direction {
+    /// Its bit in [`MouseKeys::moving`] and [`MouseKeys::wheel`].
+    pub const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+/// The mouse keys held right now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseKeys {
+    /// As in [`Basic::MouseButtons`].
+    pub buttons: u8,
+    /// One bit per [`Direction`] held by a [`Basic::MouseMove`] key.
+    pub moving: u8,
+    /// One bit per [`Direction`] held by a [`Basic::MouseWheel`] key.
+    pub wheel: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

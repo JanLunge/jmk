@@ -6,6 +6,7 @@
 #![cfg_attr(not(test), no_std)]
 
 mod config;
+mod cursor;
 mod device;
 mod lights;
 mod link;

@@ -244,6 +244,9 @@ export const canTuneCombos = (session: Session) => session.info.protocol >= COMB
 /** From this protocol on a cable with a single data wire works (RP2040 and RP2350 only). */
 export const ONE_WIRE_PROTOCOL = 10
 export const canShareWire = (session: Session) => session.info.protocol >= ONE_WIRE_PROTOCOL && (session.info.mcu === 'Rp2040' || session.info.mcu === 'Rp2350')
+/** From this protocol on, keys can be mouse buttons, move the cursor and scroll. */
+export const MOUSE_PROTOCOL = 17
+export const canMouse = (session: Session) => session.info.protocol >= MOUSE_PROTOCOL
 
 /** Where this board's positions start in the keymap. */
 export const splitOffset = (hardware: HardwareConfig) => (hardware.split === 'None' ? 0 : hardware.split.Half.offset)

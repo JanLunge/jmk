@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use jmk_core::{KeyboardReport, Output};
+use jmk_core::{KeyboardReport, MouseReport, Output};
 use jmk_device::{Board, Config, Device, Storage, STORAGE_SIZE};
 use jmk_proto::frame::{self, Assembler, REPORT_SIZE};
 use jmk_proto::{DeviceMessage, Error, Mcu, Pin, Request, Response};
@@ -15,6 +15,8 @@ pub enum HostEvent {
     Keyboard { mods: u8, keys: Vec<u8> },
     /// A media key went down, or all were released (0).
     Consumer(u16),
+    /// Mouse buttons held and movement since the last one.
+    Mouse { buttons: u8, x: i16, y: i16, wheel: i8, pan: i8 },
 }
 
 /// How a simulated keyboard is soldered together.
@@ -61,6 +63,10 @@ impl Output for HostLog {
     }
     fn consumer(&mut self, usage: u16) {
         self.0.push(HostEvent::Consumer(usage));
+    }
+    fn mouse(&mut self, report: &MouseReport) {
+        let MouseReport { buttons, x, y, wheel, pan } = *report;
+        self.0.push(HostEvent::Mouse { buttons, x, y, wheel, pan });
     }
 }
 

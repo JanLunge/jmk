@@ -5,11 +5,11 @@
 // drag it onto any key.
 import { computed, ref, watch } from 'vue'
 import { startDrag, type Dragged } from '../lib/drag'
-import { ANSI_BLOCKS, boardBlocks, describeAction, describeBasic, EXTRA_KEYS, KEY_GROUPS, keyIcon, keyLabel, keyName, MEDIA_KEYS, MOD_BITS, modKeyChar } from '../lib/keycodes'
+import { ANSI_BLOCKS, boardBlocks, describeAction, describeBasic, EXTRA_KEYS, KEY_GROUPS, keyIcon, keyLabel, keyName, MEDIA_KEYS, MOD_BITS, modKeyChar, MOUSE_ACTIONS } from '../lib/keycodes'
 import { ALTGR_BIT, language, languageId, LANGUAGES, symbols } from '../lib/language'
 import { layerHex } from '../lib/layers'
 import type { Action, Basic } from '../lib/protocol'
-import { macroLabel, type Session } from '../lib/session'
+import { canMouse, macroLabel, type Session } from '../lib/session'
 import MacroEditor from './MacroEditor.vue'
 
 const props = defineProps<{
@@ -96,6 +96,7 @@ interface Found {
 const everything = computed<Found[]>(() => [
   ...KEY_GROUPS.flatMap((group) => group.keys).map((key) => ({ label: keyLabel(key.usage), name: keyName(key.usage), basic: { Key: key.usage } as Basic })),
   ...MEDIA_KEYS.map((key) => ({ label: key.label, name: key.name, basic: { Consumer: key.usage } as Basic })),
+  ...(canMouse(props.session) ? MOUSE_ACTIONS : []),
   ...MOD_BITS.slice(0, 4).map((mod) => ({ label: `${mod.label} once`, name: `${mod.label} for the next key only`, basic: { OneShotMods: mod.bit } as Basic })),
 ])
 const found = computed(() => {
@@ -117,10 +118,13 @@ const TABS = [
   { id: 'layers', name: 'Layers' },
   { id: 'mods', name: 'One-shot' },
   { id: 'media', name: 'Media' },
+  { id: 'mouse', name: 'Mouse' },
   { id: 'macros', name: 'Macros' },
   { id: 'more', name: 'More' },
 ] as const
 type TabId = (typeof TABS)[number]['id']
+/** Older firmware cannot store what some pages offer. */
+const supportedTabs = computed(() => TABS.filter((t) => t.id !== 'mouse' || canMouse(props.session)))
 const tab = ref<TabId>('keys')
 
 const ON_BOARD = new Set(ANSI_BLOCKS.flatMap((block) => block.rows.flat()).map(([usage]) => usage))
@@ -134,6 +138,7 @@ const home = computed<TabId | undefined>(() => {
   if ('MomentaryLayer' in basic || 'ToggleLayer' in basic || 'ToLayer' in basic) return 'layers'
   if ('OneShotMods' in basic) return 'mods'
   if ('Consumer' in basic) return 'media'
+  if ('MouseButtons' in basic || 'MouseMove' in basic || 'MouseWheel' in basic) return 'mouse'
   if ('Macro' in basic) return 'macros'
   return undefined
 })
@@ -187,7 +192,7 @@ const summary = computed(() => {
     </div>
 
     <div v-show="!minimized" class="tabs row">
-      <button v-for="t in TABS" :key="t.id" class="tab" :class="{ on: !found && tab === t.id }" :data-test="'tab-' + t.id" @click="((tab = t.id), (search = ''))">
+      <button v-for="t in supportedTabs" :key="t.id" class="tab" :class="{ on: !found && tab === t.id }" :data-test="'tab-' + t.id" @click="((tab = t.id), (search = ''))">
         {{ t.name }}<span v-if="home === t.id" class="here" />
       </button>
       <span class="grow" />
@@ -291,6 +296,14 @@ const summary = computed(() => {
         <div class="grid big">
           <button v-for="key in MEDIA_KEYS" :key="key.usage" class="key-btn" :class="{ on: same({ Consumer: key.usage }) }" :title="key.name" :data-test="'media-' + key.usage" draggable="true" @dragstart="drag($event, { basic: { Consumer: key.usage } })" @click="choose({ Consumer: key.usage })">
             {{ key.name }}
+          </button>
+        </div>
+      </section>
+
+      <section v-else-if="tab === 'mouse'" class="page scroll">
+        <div class="grid big">
+          <button v-for="each in MOUSE_ACTIONS" :key="each.name" class="key-btn" :class="{ on: same(each.basic) }" :title="each.name" :data-test="'mouse-' + each.label" draggable="true" @dragstart="drag($event, { basic: each.basic })" @click="choose(each.basic)">
+            {{ each.name }}
           </button>
         </div>
       </section>

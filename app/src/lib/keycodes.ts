@@ -138,6 +138,26 @@ export const MEDIA_KEYS: KeyInfo[] = [
   k(0x224, 'Back', 'Browser back'), k(0x225, 'Fwd', 'Browser forward'), k(0x227, 'Refr', 'Browser refresh'),
 ]
 
+/** Mouse buttons and the keys that move the cursor or scroll. */
+export const MOUSE_ACTIONS: { basic: Basic; label: string; name: string }[] = [
+  { basic: { MouseButtons: 0x01 }, label: 'LMB', name: 'Left mouse button' },
+  { basic: { MouseButtons: 0x02 }, label: 'RMB', name: 'Right mouse button' },
+  { basic: { MouseButtons: 0x04 }, label: 'MMB', name: 'Middle mouse button' },
+  { basic: { MouseButtons: 0x08 }, label: 'MB4', name: 'Mouse back button' },
+  { basic: { MouseButtons: 0x10 }, label: 'MB5', name: 'Mouse forward button' },
+  { basic: { MouseMove: 'Up' }, label: 'M↑', name: 'Move cursor up' },
+  { basic: { MouseMove: 'Down' }, label: 'M↓', name: 'Move cursor down' },
+  { basic: { MouseMove: 'Left' }, label: 'M←', name: 'Move cursor left' },
+  { basic: { MouseMove: 'Right' }, label: 'M→', name: 'Move cursor right' },
+  { basic: { MouseWheel: 'Up' }, label: 'W↑', name: 'Wheel up' },
+  { basic: { MouseWheel: 'Down' }, label: 'W↓', name: 'Wheel down' },
+  { basic: { MouseWheel: 'Left' }, label: 'W←', name: 'Wheel left' },
+  { basic: { MouseWheel: 'Right' }, label: 'W→', name: 'Wheel right' },
+]
+
+/** The entry above for this action, if it is one of them. */
+const mouseAction = (basic: Basic) => MOUSE_ACTIONS.find((each) => JSON.stringify(each.basic) === JSON.stringify(basic))
+
 /**
  * The symbol printed on such a key, for keys that have one people know.
  * The word stays next to it wherever there is room, for whoever does not.
@@ -266,6 +286,7 @@ export function basicLegend(basic: Basic): Legend {
   if ('ToLayer' in basic) return { main: `L${basic.ToLayer}`, sub: 'go to', kind: 'layer', layer: basic.ToLayer }
   if ('OneShotMods' in basic) return { main: modsLabel(basic.OneShotMods), sub: 'one-shot', kind: 'mod' }
   if ('Macro' in basic) return { main: `M${basic.Macro + 1}`, sub: 'macro', kind: 'macro' }
+  if ('MouseButtons' in basic || 'MouseMove' in basic || 'MouseWheel' in basic) return { main: mouseAction(basic)?.label ?? 'Mouse', kind: 'media' }
   return { main: `#${basic.Custom}`, sub: 'custom', kind: 'special' }
 }
 
@@ -293,6 +314,9 @@ export function describeBasic(basic: Basic): string {
   if ('ToLayer' in basic) return `Switch to layer ${basic.ToLayer}`
   if ('OneShotMods' in basic) return `${modsLabel(basic.OneShotMods)} for the next key`
   if ('Macro' in basic) return `Macro ${basic.Macro + 1}`
+  if ('MouseButtons' in basic) return mouseAction(basic)?.name ?? `Mouse buttons 0x${basic.MouseButtons.toString(16)}`
+  if ('MouseMove' in basic) return mouseAction(basic)?.name ?? 'Move cursor'
+  if ('MouseWheel' in basic) return mouseAction(basic)?.name ?? 'Wheel'
   return `Custom action ${basic.Custom}`
 }
 

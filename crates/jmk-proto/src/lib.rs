@@ -13,13 +13,14 @@ use serde::{Deserialize, Serialize};
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours;
 /// 11 combo options, more groups of switches and [`Request::SetDoubles`]; from 12 the
 /// halves of a split share what their lights show; 13 lights that show a state;
-/// 14 layers that are on while others are; 15 [`Request::SetScan`]; 16 [`Request::Peer`].
-pub const PROTOCOL_VERSION: u16 = 16;
+/// 14 layers that are on while others are; 15 [`Request::SetScan`]; 16 [`Request::Peer`];
+/// 17 mouse keys.
+pub const PROTOCOL_VERSION: u16 = 17;
 
 /// What runs on the keyboard, as the app compares it with the firmware it
 /// carries to offer an update. Count it up with every change to the firmware
 /// that a keyboard should get, also one that leaves the protocol alone.
-pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 5, 3);
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 6, 0);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;

@@ -8,6 +8,7 @@ use jmk_proto::{
 };
 
 use crate::config::{Config, MacroError};
+use crate::cursor::Cursor;
 use crate::lights::Lights;
 use crate::link::{Link, Own, Post, Remote, Split, CHUNK};
 use crate::peer::{self, Peer, Taken};
@@ -58,6 +59,7 @@ pub struct Device<'a, P, F> {
     storage: Storage<F>,
     config: &'a mut Config,
     engine: Engine,
+    cursor: Cursor,
     scanner: Scanner,
     lights: Lights,
     split: Split,
@@ -115,6 +117,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
             storage,
             config,
             engine: Engine::new(),
+            cursor: Cursor::new(),
             scanner,
             lights: Lights::new(),
             split: Split::new(),
@@ -168,7 +171,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
     /// `link` leads to the other half; pass `&mut ()` if there is none.
     pub fn poll(&mut self, now: Millis, out: &mut impl Output, link: &mut impl Link, mut event: impl FnMut(Event)) {
         self.now = now;
-        let Self { scanner, config, engine, pins, watch_keys, reported_layers, split, lights, leading, digest, peer_watch, .. } = self;
+        let Self { scanner, config, engine, cursor, pins, watch_keys, reported_layers, split, lights, leading, digest, peer_watch, .. } = self;
         let (stored_digest, force) = (self.stored_digest, self.force);
         let (host, uid) = (self.host, self.board.uid);
         // What the indicator lights go by; on the half that does not type,
@@ -268,6 +271,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                 if engine.next_deadline(config).is_some_and(|deadline| now >= deadline) {
                     engine.tick(config, out, now);
                 }
+                cursor.tick(engine.mouse_keys(), now, out);
                 // Tell a watching configurator which layer each press used
                 // and which layers are on, so it can show what a key did.
                 let resolved = engine.take_resolved();

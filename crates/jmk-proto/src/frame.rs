@@ -96,6 +96,19 @@ mod tests {
         assert_eq!(reports, 2);
     }
 
+    /// Saved keymaps name a `Basic` by its place in the enum. New ones go at
+    /// the end, so the ones already saved keep meaning what they meant.
+    #[test]
+    fn saved_actions_keep_their_place() {
+        use jmk_core::{Basic, Direction};
+        let mut buf = [0u8; 8];
+        let mut bytes = |basic: Basic| postcard::to_slice(&basic, &mut buf).unwrap().to_vec();
+        assert_eq!(bytes(Basic::Custom(1)), [10, 1]);
+        assert_eq!(bytes(Basic::MouseButtons(1)), [11, 1]);
+        assert_eq!(bytes(Basic::MouseMove(Direction::Left)), [12, 2]);
+        assert_eq!(bytes(Basic::MouseWheel(Direction::Right)), [13, 3]);
+    }
+
     #[test]
     fn assembler_recovers_after_garbage() {
         let mut assembler = Assembler::new();

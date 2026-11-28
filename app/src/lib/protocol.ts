@@ -17,6 +17,14 @@ export type Basic =
   | { OneShotMods: number }
   | { Macro: number }
   | { Custom: number }
+  /** Mouse buttons, one bit each: left, right, middle, back, forward. */
+  | { MouseButtons: number }
+  /** Moves the cursor while held. */
+  | { MouseMove: Direction }
+  /** Turns the wheel while held. */
+  | { MouseWheel: Direction }
+
+export type Direction = 'Up' | 'Down' | 'Left' | 'Right'
 
 export type Action = 'Transparent' | { Basic: Basic } | { HoldTap: { hold: Basic; tap: Basic; profile: number } }
 
@@ -306,7 +314,10 @@ export type DeviceEvent =
 export type DeviceMessage = { Response: Response } | { Event: DeviceEvent }
 
 /** What a virtual keyboard's computer would receive. */
-export type HostEvent = { Keyboard: { mods: number; keys: number[] } } | { Consumer: number }
+export type HostEvent =
+  | { Keyboard: { mods: number; keys: number[] } }
+  | { Consumer: number }
+  | { Mouse: { buttons: number; x: number; y: number; wheel: number; pan: number } }
 
 /** `Sensor`: a light-beam key powered unless `power` is driven high, its comparator driving `out` low while closed. */
 export type Wire =
