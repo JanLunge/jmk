@@ -104,12 +104,35 @@ async function pickColor(number: number) {
 /** The layers that turn the open one on while they are on together, one bit each. */
 const joined = computed(() => props.session.layersWith[layer.value] ?? 0)
 const toggleJoined = (other: number) => attempt(() => setLayerWith(props.session, layer.value, joined.value ^ (1 << other)))
-function openLayer(index: number) {
+/** Where the open layer's options hang: under its button, within the row of layers. */
+const popAt = ref({ left: 0, top: 0 })
+const pop = ref<HTMLElement>()
+function openLayer(index: number, event?: MouseEvent) {
   // A second click on the open layer offers its colours and what turns it on.
   coloring.value = view.value === 'edit' && layer.value === index && !coloring.value
+  const button = event?.currentTarget as HTMLElement | undefined
+  if (coloring.value && button) popAt.value = { left: button.offsetLeft, top: button.offsetTop + button.offsetHeight + 8 }
   layer.value = index
   view.value = 'edit'
 }
+// The options float over the page, so a click anywhere else, or Escape, puts them away.
+function closeOptions(event: Event) {
+  if (!coloring.value) return
+  if (event instanceof KeyboardEvent) {
+    if (event.key === 'Escape') coloring.value = false
+    return
+  }
+  const target = event.target as HTMLElement
+  if (!pop.value?.contains(target) && !target.closest('.layer')) coloring.value = false
+}
+onMounted(() => {
+  window.addEventListener('pointerdown', closeOptions, true)
+  window.addEventListener('keydown', closeOptions, true)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', closeOptions, true)
+  window.removeEventListener('keydown', closeOptions, true)
+})
 
 // --- Dragging ------------------------------------------------------------------
 /** Something from the picker landed on a key. */
@@ -383,12 +406,15 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
             :style="{ '--tint': layerColor(session, index) ?? 'var(--muted)' }"
             :data-test="'layer-' + index"
             :title="view === 'edit' && layer === index ? 'Click again to change its colour or what turns it on' : ''"
-            @click="openLayer(index)"
+            :aria-expanded="view === 'edit' && layer === index ? coloring : undefined"
+            @click="openLayer(index, $event)"
           >
             <span class="swatch" :data-test="'layer-swatch-' + index" />
             Layer {{ index }}
             <span v-if="index === 0" class="muted small">base</span>
             <span v-if="index > 0 && layerActive(index)" class="live-dot" title="Active on the keyboard right now" data-test="layer-live" />
+            <!-- Says that the open layer has more to it: its options hang from here. -->
+            <svg v-if="view === 'edit' && layer === index" class="more" :class="{ open: coloring }" viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 4.5 3.5 3.5 3.5-3.5" /></svg>
           </button>
         </TransitionGroup>
         <button class="btn small ghost" title="Add a layer" :disabled="countingLayers || session.layers.length >= maxLayers" data-test="add-layer" @click="addLayer">+</button>
@@ -403,32 +429,53 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
         <button class="btn small ghost" :class="{ primary: view === 'all' }" data-test="all-layers" @click="view = view === 'all' ? 'edit' : 'all'">
           {{ view === 'all' ? 'Back to editing' : 'All layers' }}
         </button>
-      </div>
 
-      <Transition name="rise">
-        <div v-if="coloring && view === 'edit'" class="colors row" data-test="layer-colors">
-          <span class="muted small">Colour of layer {{ layer }}</span>
-          <button
-            v-for="(color, index) in LAYER_COLORS"
-            :key="color.name"
-            class="color"
-            :class="{ on: layerColorNumber(session.layerColors, layer) === index + 1 }"
-            :style="{ background: color.hex }"
-            :title="color.name"
-            :data-test="'color-' + (index + 1)"
-            @click="pickColor(index + 1)"
-          />
-          <span v-if="!canColorLayers(session)" class="muted small">Update the firmware under Hardware for the keyboard to remember it.</span>
-          <template v-if="layer > 0 && session.layers.length > 3 && canJoinLayers(session)">
-            <span class="muted small joined" title="For a third layer reached with two layer keys: it is on for as long as all the layers chosen here are">Also on while these are on together</span>
-            <template v-for="(_, other) in session.layers" :key="other">
-              <button v-if="other > 0 && other !== layer" class="btn small" :class="{ primary: joined & (1 << other) }" :data-test="'join-' + other" @click="toggleJoined(other)">
-                Layer {{ other }}
-              </button>
-            </template>
-          </template>
-        </div>
-      </Transition>
+        <!-- Floats over the keyboard: nothing below moves when it opens. -->
+        <Transition name="rise">
+          <div
+            v-if="coloring && view === 'edit'"
+            ref="pop"
+            class="layer-pop card col"
+            :style="{ left: popAt.left + 'px', top: popAt.top + 'px', '--tint': layerColor(session, layer) ?? 'var(--muted)' }"
+            role="dialog"
+            :aria-label="'Layer ' + layer"
+            data-test="layer-colors"
+          >
+            <div class="row pop-head">
+              <span class="swatch" />
+              <strong>Layer {{ layer }}</strong>
+              <span v-if="layer === 0" class="muted small">base</span>
+            </div>
+            <div class="col part">
+              <span class="muted small">Colour</span>
+              <div class="row swatches">
+                <button
+                  v-for="(color, index) in LAYER_COLORS"
+                  :key="color.name"
+                  class="color"
+                  :class="{ on: layerColorNumber(session.layerColors, layer) === index + 1 }"
+                  :style="{ background: color.hex }"
+                  :title="color.name"
+                  :data-test="'color-' + (index + 1)"
+                  @click="pickColor(index + 1)"
+                />
+              </div>
+              <span v-if="!canColorLayers(session)" class="muted small">Update the firmware under Hardware for the keyboard to remember it.</span>
+            </div>
+            <div v-if="layer > 0 && session.layers.length > 3 && canJoinLayers(session)" class="col part">
+              <span class="muted small">Also on while these are on together</span>
+              <div class="row swatches">
+                <template v-for="(_, other) in session.layers" :key="other">
+                  <button v-if="other > 0 && other !== layer" class="btn small" :class="{ primary: joined & (1 << other) }" :data-test="'join-' + other" @click="toggleJoined(other)">
+                    Layer {{ other }}
+                  </button>
+                </template>
+              </div>
+              <span class="muted small">For a third layer reached with two layer keys.</span>
+            </div>
+          </div>
+        </Transition>
+      </div>
 
       <KeymapOverview v-if="view === 'all'" :session="session" />
 
@@ -545,6 +592,62 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
 
 .layers {
   flex-wrap: wrap;
+  position: relative;
+}
+
+.more {
+  width: 11px;
+  height: 11px;
+  margin-right: -4px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.6;
+  transition: transform 0.2s var(--ease);
+}
+
+.more.open {
+  transform: rotate(180deg);
+}
+
+.layer-pop {
+  position: absolute;
+  z-index: 30;
+  gap: 14px;
+  width: max-content;
+  max-width: min(340px, 100%);
+  padding: 14px 16px;
+  border-color: color-mix(in srgb, var(--tint) 55%, var(--line));
+  box-shadow: var(--shadow);
+}
+
+/* A small tip pointing at the layer it belongs to. */
+.layer-pop::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 22px;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+  background: var(--panel);
+  border-left: 1px solid color-mix(in srgb, var(--tint) 55%, var(--line));
+  border-top: 1px solid color-mix(in srgb, var(--tint) 55%, var(--line));
+}
+
+.pop-head {
+  gap: 8px;
+}
+
+.part {
+  gap: 7px;
+}
+
+.swatches {
+  gap: 7px;
+  flex-wrap: wrap;
 }
 
 .layer {
@@ -576,15 +679,6 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
   height: 12px;
   border-radius: 4px;
   background: var(--tint);
-}
-
-.colors {
-  gap: 7px;
-  flex-wrap: wrap;
-}
-
-.joined {
-  margin-left: 14px;
 }
 
 .color {
