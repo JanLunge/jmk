@@ -336,6 +336,8 @@ impl Engine {
                 }
             }
             Basic::Mods(_) => self.report(out),
+            // Stored, but nothing acts on them yet.
+            Basic::MouseButtons(_) | Basic::MouseMove(_) | Basic::MouseScroll(_) => {}
             Basic::MomentaryLayer(_) | Basic::None => {}
         }
     }

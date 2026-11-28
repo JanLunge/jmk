@@ -17,6 +17,14 @@ export type Basic =
   | { OneShotMods: number }
   | { Macro: number }
   | { Custom: number }
+  /** Mouse buttons, one bit each: left, right, middle, back, forward. */
+  | { MouseButtons: number }
+  /** Moves the cursor while held. */
+  | { MouseMove: Direction }
+  /** Scrolls while held. */
+  | { MouseScroll: Direction }
+
+export type Direction = 'Up' | 'Down' | 'Left' | 'Right'
 
 export type Action = 'Transparent' | { Basic: Basic } | { HoldTap: { hold: Basic; tap: Basic; profile: number } }
 

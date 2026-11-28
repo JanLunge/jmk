@@ -28,6 +28,22 @@ pub enum Basic {
     Macro(u8),
     /// Handed to the firmware's plugin hooks via [`crate::Output::custom`].
     Custom(u16),
+    /// Mouse buttons, one bit each: bit 0 is the left button, then right,
+    /// middle, back, forward.
+    MouseButtons(u8),
+    /// Moves the cursor for as long as it is held.
+    MouseMove(Direction),
+    /// Scrolls for as long as it is held.
+    MouseScroll(Direction),
+}
+
+/// Which way a mouse key moves the cursor or scrolls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
