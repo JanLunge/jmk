@@ -148,7 +148,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         let Self { scanner, config, engine, pins, watch_keys, reported_layers, split, lights, leading, digest, .. } = self;
         let (stored_digest, force) = (self.stored_digest, self.force);
         let (host, uid) = (self.host, self.board.uid);
-        lights.tick(&config.lighting, now, pins);
+        lights.tick(&config.lighting, now, split.clock(now, *leading), pins);
         let prober = match &mut self.mode {
             Mode::Probing(prober) => prober,
             Mode::Holding(_) => return,
@@ -163,14 +163,15 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                     let _ = changes.push(change);
                 });
 
-                // While the other half types, this one only reports its keys.
+                // While the other half types, this one only reports its keys
+                // and lights up for those of both.
                 let leads = *leading;
                 let mut key = |pos: usize, pressed: bool, own: bool| {
                     if pos >= MAX_KEYS {
                         return;
                     }
                     let pos = pos as u16;
-                    if pressed && (own || leads) {
+                    if pressed {
                         lights.key_pressed(&config.lighting, pos);
                     }
                     if leads {
@@ -189,7 +190,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                             key(offset + pos as usize, pressed, true);
                         }
                         Change::Tap(pos) => {
-                            if is_half && !leads {
+                            if is_half {
                                 split.send_tap(link, pos);
                             }
                             key(offset + pos as usize, true, true);

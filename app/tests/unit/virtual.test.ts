@@ -397,6 +397,13 @@ describe('virtual split keyboard', () => {
     expect(onLeft.sync).toBe('Same')
     expect([onRight.revision, onRight.digest]).toEqual([onLeft.revision, onLeft.digest])
 
+    // So does what the lights show; the chain stays each half's own.
+    const glow = { effect: 'Solid' as const, hue: 40, sat: 255, val: 200, speed: 0 }
+    await during(setLighting(left, { ...left.lighting, underglow: glow }))
+    await during(save(left))
+    advanceVirtualTime(2000)
+    expect((await during(right.client.lighting())).underglow).toEqual(glow)
+
     // Without the cable, both on USB, the app brings the older half up to date.
     left.setup = right.setup = false
     transports[0].setCable(false)

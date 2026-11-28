@@ -7,7 +7,8 @@
 //! [`Split::leading`]. Encoder clicks have no state and are sent once. Twice
 //! a second each half also says which chip it is and what keymap it holds,
 //! and a half whose keymap is the older one asks for the newer one piece by
-//! piece: see [`crate::sync`].
+//! piece: see [`crate::sync`]. The half that types also sends its clock, by
+//! which the lights of both move.
 //!
 //! Frame: 0x4A, length, type, payload, CRC-8 over length, type and payload.
 
@@ -52,6 +53,7 @@ const TYPE_TAP: u8 = 2;
 const TYPE_ABOUT: u8 = 4;
 const TYPE_FETCH: u8 = 5;
 const TYPE_CHUNK: u8 = 6;
+const TYPE_CLOCK: u8 = 7;
 
 const FLAG_CLEAN: u8 = 1;
 const FLAG_FORCE: u8 = 2;
@@ -76,6 +78,8 @@ pub(crate) enum Message {
     /// Send me the keymap with this digest from this offset on.
     Fetch { digest: u32, offset: u16 },
     Chunk(Chunk),
+    /// The sender's time in milliseconds.
+    Clock(u32),
 }
 
 fn send(link: &mut impl Link, kind: u8, payload: &[u8]) {
@@ -169,6 +173,8 @@ impl Parser {
                     data,
                 }))
             }
+            // Whatever a later version adds after the time is left alone.
+            (TYPE_CLOCK, [a, b, c, d, ..]) => Some(Message::Clock(u32::from_le_bytes([*a, *b, *c, *d]))),
             _ => None,
         }
     }
@@ -220,6 +226,8 @@ pub(crate) struct Split {
     sent_host: bool,
     sent_about: Option<Side>,
     dirty: bool,
+    /// How far the typing half's clock is ahead of this one's.
+    ahead: i64,
 }
 
 impl Split {
@@ -240,6 +248,7 @@ impl Split {
             sent_host: false,
             sent_about: None,
             dirty: false,
+            ahead: 0,
         }
     }
 
@@ -274,6 +283,16 @@ impl Split {
         payload[2..4].copy_from_slice(&total.to_le_bytes());
         payload[4..4 + data.len()].copy_from_slice(data);
         send(link, TYPE_CHUNK, &payload[..4 + data.len()]);
+    }
+
+    /// The time the lights go by: the typing half's own, and on the other
+    /// half the same as far as it was told.
+    pub fn clock(&self, now: Millis, leading: bool) -> Millis {
+        if leading {
+            now
+        } else {
+            (now as i64 + self.ahead) as Millis
+        }
     }
 
     /// Whether this half does the typing. A half on its own always does.
@@ -312,14 +331,15 @@ impl Split {
         self.remote = [0; BITMAP];
     }
 
-    /// Exchange messages with the other half. While this half leads,
-    /// `on_remote` gets what changed over there.
+    /// Exchange messages with the other half. `on_remote` gets what changed
+    /// over there, whichever half types.
     pub fn tick(&mut self, now: Millis, link: &mut impl Link, own: Own, mut on_remote: impl FnMut(Remote)) -> Post {
         let was_connected = self.last_heard.is_some();
         self.since.get_or_insert(now);
         let mut state = None;
         let mut taps: heapless::Vec<u8, 8> = heapless::Vec::new();
         let mut about = None;
+        let mut clock = None;
         let mut post = Post::default();
         self.listen(now, link, |message| match message {
             Message::State { host, positions, pressed } => state = Some((host, positions, pressed)),
@@ -329,7 +349,11 @@ impl Split {
             Message::About { uid, side } => about = Some((uid, side)),
             Message::Fetch { digest, offset } => post.fetch = Some((digest, offset)),
             Message::Chunk(chunk) => post.chunk = Some(chunk),
+            Message::Clock(at) => clock = Some(at),
         });
+        if let Some(clock) = clock {
+            self.ahead = clock as i64 - now as i64;
+        }
         if let Some((uid, side)) = about {
             self.peer_uid = uid;
             self.peer = Some(side);
@@ -346,7 +370,7 @@ impl Split {
             self.heard_state = false;
             self.peer = None;
             self.apply([0; BITMAP], &mut on_remote);
-        } else if self.leading(now, own.host, own.first) {
+        } else {
             if let Some((_, _, pressed)) = state {
                 self.apply(pressed, &mut on_remote);
             }
@@ -378,6 +402,9 @@ impl Split {
             send(link, TYPE_ABOUT, &payload);
             self.sent_about = Some(about);
             self.last_about = Some(now);
+            if self.leading(now, own.host, own.first) {
+                send(link, TYPE_CLOCK, &(now as u32).to_le_bytes());
+            }
         }
         post
     }

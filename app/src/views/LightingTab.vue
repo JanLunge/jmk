@@ -10,12 +10,14 @@ import { bounds } from '../lib/layout'
 import { drawnAt, fromWire, hexToHueSat, lightMode, placeAtKey, ring, shown, underKeys, zoneHex, zonePreview, type LightMode } from '../lib/lighting'
 import type { Effect, Led, LightingConfig, LightZone, Pin } from '../lib/protocol'
 import { LIMITS, UNDERGLOW } from '../lib/protocol'
-import { linkPins, canLight, followsPins, knobPositions, needsRestart, restart, save, setLighting, type Session } from '../lib/session'
+import { linkPins, canLight, followsPins, knobPositions, needsRestart, restart, role, save, setLighting, sharesLights, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 
 const lighting = computed(() => props.session.lighting)
 const board = computed(() => findBoard(props.session.meta.controller, props.session.info.mcu, props.session.info.usable_pins))
+/** One half of a split whose lights go with the other half's. */
+const half = computed(() => role(props.session) !== 'single' && sharesLights(props.session))
 const change = (patch: Partial<LightingConfig>) => attempt(() => setLighting(props.session, { ...lighting.value, ...patch }))
 
 // --- The chain ---------------------------------------------------------------
@@ -35,8 +37,11 @@ async function turnOn() {
   if (pinDraft.value === null) return
   const count = Math.max(1, Math.min(LIMITS.leds, Math.round(countDraft.value)))
   const zone: LightZone = { effect: 'Rainbow', hue: 0, sat: 255, val: 255, speed: 60 }
+  // The other half of a split may have said what the lights show already.
+  const { keys, underglow } = lighting.value
+  const zones = keys.effect !== 'Off' || underglow.effect !== 'Off' ? {} : { keys: { ...zone }, underglow: { ...zone } }
   const done = await attempt(async () => {
-    await setLighting(props.session, { ...lighting.value, pin: pinDraft.value, leds: ring(props.session.layout, count), keys: { ...zone }, underglow: { ...zone } })
+    await setLighting(props.session, { ...lighting.value, pin: pinDraft.value, leds: ring(props.session.layout, count), ...zones })
     return true
   })
   if (done) await saveAndRestart()
@@ -229,6 +234,7 @@ const chainSummary = computed(() => {
         <div>
           <h2>Lights</h2>
           <p class="muted small">For a chain of addressable RGB lights (WS2812, SK6812) on one data wire.</p>
+          <p v-if="half" class="muted small" data-test="light-half">These are the lights of the half that is plugged in. Plug in the other half to set up its own.</p>
         </div>
         <div class="fields">
           <label class="field">Data pin
@@ -291,6 +297,8 @@ const chainSummary = computed(() => {
             </template>
           </div>
         </section>
+
+        <p v-if="half" class="muted small" data-test="light-shared">Both halves show the same once this is saved.</p>
 
         <!-- The wiring: set once, then folded away -->
         <section class="chain col" :class="{ open: showChain }">

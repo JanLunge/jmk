@@ -1188,6 +1188,55 @@ fn lighting_is_saved_and_a_save_from_before_lighting_still_loads() {
 }
 
 #[test]
+fn what_the_lights_show_follows_to_the_other_half() {
+    let (mut left, mut right) = saved_pair();
+    for half in [&mut left, &mut right] {
+        half.ok(Request::SetLighting(lighting(Effect::Off, Effect::Off)));
+        half.ok(Request::Save);
+    }
+    run_both(&mut left, &mut right, 1000);
+    let mut wanted = lighting(Effect::Breathing, Effect::Solid);
+    // The chain is each half's own: this one has a light fewer.
+    wanted.leds.pop();
+    left.ok(Request::SetLighting(wanted.clone()));
+    left.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    let Response::Lighting(got) = right.kb.request(Request::GetLighting) else { panic!() };
+    assert_eq!((got.keys, got.underglow), (wanted.keys, wanted.underglow));
+    assert_eq!(got.leds.len(), 3);
+    assert_eq!((split_status(&mut left).sync, split_status(&mut right).sync), (SplitSync::Same, SplitSync::Same));
+}
+
+#[test]
+fn the_lights_of_both_halves_answer_to_keys_of_either_and_move_as_one() {
+    let (mut left, mut right) = saved_pair();
+    // The right half has been running for half a breath longer.
+    right.kb.advance(1160);
+    let mut slow = lighting(Effect::Breathing, Effect::Reactive);
+    slow.keys.speed = 10;
+    for half in [&mut left, &mut right] {
+        half.ok(Request::SetLighting(slow.clone()));
+    }
+    for _ in 0..5 {
+        run_both(&mut left, &mut right, 300);
+        let level = |rig: &Rig| rig.kb.pins().lights()[0][1] as i32;
+        assert!((level(&left) - level(&right)).abs() <= 4, "breathing in step: {} and {}", level(&left), level(&right));
+    }
+
+    // A key of the half that types lights the other half's underglow too,
+    // and the other way round.
+    for (typed_on_left, key) in [(true, 0), (false, 1)] {
+        run_both(&mut left, &mut right, 700);
+        assert_eq!((left.kb.pins().lights()[2], right.kb.pins().lights()[2]), ([0; 3], [0; 3]));
+        if typed_on_left { &mut left } else { &mut right }.kb.set_key(key, true);
+        run_both(&mut left, &mut right, 60);
+        assert_ne!(left.kb.pins().lights()[2], [0; 3]);
+        assert_ne!(right.kb.pins().lights()[2], [0; 3]);
+        if typed_on_left { &mut left } else { &mut right }.kb.set_key(key, false);
+    }
+}
+
+#[test]
 fn macro_names_are_saved_and_follow_to_the_other_half() {
     let mut rig = Rig::wires(&[Wire::Ground(2)]);
     rig.ok(Request::SetHardware(direct(&[2])));
