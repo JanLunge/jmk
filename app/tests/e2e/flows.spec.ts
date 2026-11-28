@@ -581,6 +581,8 @@ test('changes save themselves and can be undone; an empty keyboard offers its le
 
   // Nothing types yet, and the quick way to the letters is pointed out.
   await expect(page.locator('[data-test=letters-nudge]')).toBeVisible()
+  const place = () => page.locator('[data-test=keymap-board]').boundingBox()
+  const before = await place()
   await page.click('[data-test=letters-nudge-open]')
   await expect(page.locator('[data-test=letters-dialog]')).toBeVisible()
   await page.keyboard.press('Escape')
@@ -589,6 +591,8 @@ test('changes save themselves and can be undone; an empty keyboard offers its le
   await assign(page, 0, 0x14) // Q
   await expect(first).toContainText('Q')
   await expect(page.locator('[data-test=letters-nudge]')).toHaveCount(0)
+  // The line going away must not move the keyboard.
+  expect(await place()).toEqual(before)
   await saved(page)
   await tap(page, 0)
   await expect(typed(page)).toHaveText('q')

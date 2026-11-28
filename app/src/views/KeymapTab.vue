@@ -464,16 +464,18 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
             </div>
           </div>
         </div>
-        <!-- Only when something is out of the ordinary: every line here costs the keyboard height. -->
-        <p v-if="wantsLetters && view === 'edit'" class="small hint nudge" data-test="letters-nudge">
-          No letters on this keyboard yet.
-          <button class="btn small primary" data-test="letters-nudge-open" @click="openLetters">Place the letters</button>
-          <span class="muted">QWERTY, Colemak or Dvorak in one go</span>
-        </p>
-        <p v-if="layerElsewhere || missingRemote" class="muted small hint" data-test="keymap-hint">
-          <template v-if="layerElsewhere">Layer {{ topLayer }} is active on the keyboard, so the faintly marked keys are doing what that layer says.</template>
-          <template v-if="missingRemote"> The other half is not connected right now; its keys can still be edited.</template>
-        </p>
+        <!-- The room for these is always kept: a line that comes and goes would make the keyboard jump. -->
+        <div class="small hints">
+          <span v-if="wantsLetters && view === 'edit'" class="nudge" data-test="letters-nudge">
+            No letters on this keyboard yet.
+            <button class="btn small primary" data-test="letters-nudge-open" @click="openLetters">Place the letters</button>
+            <span class="muted">QWERTY, Colemak or Dvorak in one go</span>
+          </span>
+          <span v-if="layerElsewhere || missingRemote" class="muted" data-test="keymap-hint">
+            <template v-if="layerElsewhere">Layer {{ topLayer }} is active on the keyboard, so the faintly marked keys are doing what that layer says.</template>
+            <template v-if="missingRemote"> The other half is not connected right now; its keys can still be edited.</template>
+          </span>
+        </div>
       </template>
     </div>
 
@@ -701,10 +703,13 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
   border: 2px solid var(--line);
 }
 
-.hint {
-  text-align: center;
+.hints {
+  flex: none;
+  height: 30px;
+  overflow: hidden;
 }
 
+.hints,
 .nudge {
   display: flex;
   justify-content: center;
