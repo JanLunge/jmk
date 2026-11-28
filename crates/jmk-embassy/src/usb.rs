@@ -249,7 +249,8 @@ impl<D: Driver<'static>> Usb<D> {
         // rule (app/linux/70-jmk-keyboard.rules) lets programs of the user
         // at the third interface, the settings channel, and at no other.
         // A new interface goes after these three; the mouse is the first
-        // that did.
+        // that did. Each one also counts against embassy-usb's handler and
+        // interface limits, set in this crate's Cargo.toml.
         let keyboard = HidReaderWriter::new(
             &mut builder,
             KEYBOARD_STATE.init(State::new()),
