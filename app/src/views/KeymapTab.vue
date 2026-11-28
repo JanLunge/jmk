@@ -384,7 +384,7 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
 
 <template>
   <div class="keymap" :class="{ all: view === 'all', minimized }">
-    <div class="stage col">
+    <div class="stage col" :class="{ gridded: arranger }">
       <div class="layers row" data-test="layers">
         <TransitionGroup name="pop">
           <button
@@ -793,11 +793,15 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
   padding: 4px 10px;
 }
 
-/* Arranging: the grid under the keys is all that tells it apart. It runs out towards the edges, with no box around it. */
-.board.gridded {
-  overflow: hidden;
-  mask-image: linear-gradient(to right, transparent, #000 48px, #000 calc(100% - 48px), transparent), linear-gradient(transparent, #000 28px, #000 calc(100% - 28px), transparent);
-  mask-composite: intersect;
+/* Arranging: the grid under the keys is all that tells it apart. It thins out around the keyboard, behind what is above and below it. */
+.stage.gridded {
+  overflow: clip;
+  overflow-clip-margin: 6px;
+}
+
+.stage.gridded .layers {
+  position: relative;
+  z-index: 1;
 }
 
 .board.gridded :deep(.key),
