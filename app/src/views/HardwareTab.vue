@@ -150,7 +150,7 @@ async function onAddProbe(contacts: Contact[]) {
   adding.value = 'idle'
   collector = undefined
   if (pos === undefined) return
-  toast('Key added. Move it into place under Layout, and give it something to do under Keymap.')
+  toast('Key added. Under Keymap, give it something to do and move it into place with Edit layout.')
 }
 onBeforeUnmount(stopAdding)
 

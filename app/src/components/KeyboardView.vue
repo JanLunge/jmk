@@ -4,7 +4,7 @@
 import { computed, ref } from 'vue'
 import { carriesKey } from '../lib/drag'
 import type { Legend } from '../lib/keycodes'
-import { bounds, hasKey, knobKey } from '../lib/layout'
+import { bounds, hasKey, knobKey, UNIT, type Bounds } from '../lib/layout'
 import type { KeyGeometry } from '../lib/protocol'
 
 const props = withDefaults(
@@ -32,6 +32,10 @@ const props = withDefaults(
     lights?: { x: number; y: number; color: string; under: boolean; marked?: boolean }[]
     /** Largest key size in pixels; the drawing shrinks to fit its box. */
     maxUnit?: number
+    /** The part of the picture to show, when it must hold still while keys are moved. Otherwise what the keys cover. */
+    frame?: Bounds
+    /** Draw the keys on a grid of key units, for arranging them. It thins out a couple of units past the keys, beyond the edge of the picture. */
+    grid?: boolean
   }>(),
   { maxUnit: 62 },
 )
@@ -57,9 +61,23 @@ function land(pos: number, event: DragEvent) {
 }
 
 const PAD = 14
-const box = computed(() => bounds(props.layout))
+const box = computed(() => props.frame ?? bounds(props.layout))
 const viewBox = computed(() => `${box.value.x - PAD} ${box.value.y - PAD} ${box.value.w + 2 * PAD} ${box.value.h + 2 * PAD}`)
-const maxWidth = computed(() => ((box.value.w + 2 * PAD) / 100) * props.maxUnit)
+const maxWidth = computed(() => ((box.value.w + 2 * PAD) / UNIT) * props.maxUnit)
+
+/** Room for the grid, far past any keyboard. */
+const FIELD = { x: -60 * UNIT, y: -60 * UNIT, width: 160 * UNIT, height: 160 * UNIT }
+/** How far past the keys the grid is whole, and where it has gone. */
+const GRID_WHOLE = UNIT / 2
+const GRID_GONE = UNIT * 2.5
+const fades = computed(() => {
+  const { x, y, w, h } = box.value
+  const edge = (size: number) => (GRID_GONE - GRID_WHOLE) / (size + 2 * GRID_GONE)
+  return [
+    { id: 'x', x1: x - GRID_GONE, x2: x + w + GRID_GONE, y1: 0, y2: 0, edge: edge(w) },
+    { id: 'y', x1: 0, x2: 0, y1: y - GRID_GONE, y2: y + h + GRID_GONE, edge: edge(h) },
+  ]
+})
 
 const isKnob = (pos: number) => !!props.knobs?.includes(pos)
 /** Per knob in the picture, the switch it sits on (-1: none). */
@@ -139,7 +157,27 @@ function fontSize(text: string, width: number): number {
       <filter id="jmk-glow" x="-150%" y="-150%" width="400%" height="400%">
         <feGaussianBlur stdDeviation="16" />
       </filter>
+      <template v-if="grid">
+        <pattern id="jmk-grid" :width="UNIT" :height="UNIT" patternUnits="userSpaceOnUse">
+          <path :d="`M ${UNIT} 0 H 0 V ${UNIT}`" class="grid-line" />
+        </pattern>
+        <!-- The grid is whole under the keys and thins out around them, once across and once down. -->
+        <template v-for="fade in fades" :key="fade.id">
+          <linearGradient :id="'jmk-fade-' + fade.id" gradientUnits="userSpaceOnUse" :x1="fade.x1" :y1="fade.y1" :x2="fade.x2" :y2="fade.y2">
+            <stop offset="0" stop-color="#fff" stop-opacity="0" />
+            <stop :offset="fade.edge" stop-color="#fff" />
+            <stop :offset="1 - fade.edge" stop-color="#fff" />
+            <stop offset="1" stop-color="#fff" stop-opacity="0" />
+          </linearGradient>
+          <mask :id="'jmk-mask-' + fade.id" maskUnits="userSpaceOnUse" v-bind="FIELD">
+            <rect v-bind="FIELD" :fill="`url(#jmk-fade-${fade.id})`" />
+          </mask>
+        </template>
+      </template>
     </defs>
+    <g v-if="grid" class="grid" mask="url(#jmk-mask-x)">
+      <rect v-bind="FIELD" fill="url(#jmk-grid)" mask="url(#jmk-mask-y)" />
+    </g>
     <g v-if="lights" class="glows">
       <template v-for="(light, index) in lights" :key="index">
         <circle v-if="light.under && light.color !== '#000000'" :cx="light.x" :cy="light.y" r="46" :fill="light.color" filter="url(#jmk-glow)" />
@@ -231,6 +269,18 @@ function fontSize(text: string, width: number): number {
   height: auto;
   user-select: none;
   touch-action: none;
+}
+
+/* Only to look at: what lies under it stays clickable. */
+.grid {
+  pointer-events: none;
+}
+
+.grid-line {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1.5;
+  opacity: 0.6;
 }
 
 .cap {

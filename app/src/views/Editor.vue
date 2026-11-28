@@ -12,13 +12,12 @@ import { knobPositions, needsRestart, refresh, restart, role, setMeta, type Sess
 import BehaviorsTab from './BehaviorsTab.vue'
 import HardwareTab from './HardwareTab.vue'
 import KeymapTab from './KeymapTab.vue'
-import LayoutTab from './LayoutTab.vue'
 import LightingTab from './LightingTab.vue'
 import ShareTab from './ShareTab.vue'
 
 const props = defineProps<{ session: Session }>()
 
-const tabs = ['keymap', 'layout', 'behaviours', 'lighting', 'hardware', 'share'] as const
+const tabs = ['keymap', 'behaviours', 'lighting', 'hardware', 'share'] as const
 type Tab = (typeof tabs)[number]
 const tab = ref<Tab>('keymap')
 const partner = computed(() => partnerOf(props.session))
@@ -378,7 +377,6 @@ onBeforeUnmount(() => {
     <div class="content">
       <Transition name="rise" mode="out-in">
         <KeymapTab v-if="tab === 'keymap'" :session="session" />
-        <LayoutTab v-else-if="tab === 'layout'" :session="session" />
         <BehaviorsTab v-else-if="tab === 'behaviours'" :session="session" />
         <LightingTab v-else-if="tab === 'lighting'" :key="lit.id" :session="lit" :main="session" :halves="lightHalves" @half="litId = $event" />
         <ShareTab v-else-if="tab === 'share'" :session="session" />
