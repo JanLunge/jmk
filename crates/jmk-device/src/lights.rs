@@ -48,7 +48,9 @@ impl Lights {
         }
     }
 
-    pub fn tick(&mut self, config: &LightingConfig, now: Millis, pins: &mut impl Pins) {
+    /// `clock` is the time the effects move by: the same on both halves of
+    /// a split, so they move as one.
+    pub fn tick(&mut self, config: &LightingConfig, now: Millis, clock: Millis, pins: &mut impl Pins) {
         if now < self.next_frame || config.leds.is_empty() {
             return;
         }
@@ -60,7 +62,7 @@ impl Lights {
             let rgb = match self.identify {
                 Some(shown) if shown as usize == index => [IDENTIFY; 3],
                 Some(_) => [0; 3],
-                None => scale(color(zone, led, self.heat[index], now), config.limit),
+                None => scale(color(zone, led, self.heat[index], clock), config.limit),
             };
             let wire = match config.order {
                 ColorOrder::Grb => [rgb[1], rgb[0], rgb[2]],

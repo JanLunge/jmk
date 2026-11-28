@@ -596,11 +596,19 @@ export function knobSpot(layout: KeyGeometry[]): KeyGeometry {
   return { x: Math.round(box.x + taken * UNIT * 1.25), y, w: UNIT, h: UNIT, r: 0 }
 }
 
-/** What both halves of a split must agree on, as text to compare. */
-function sharedPart(session: Session): string {
+/** Protocol version from which both halves of a split show the same on their lights. */
+export const SHARED_LIGHTS_PROTOCOL = 12
+export const sharesLights = (session: Session) => session.info.protocol >= SHARED_LIGHTS_PROTOCOL
+
+/** What both halves of a split must agree on, as text to compare. `lights`: what their lights show is part of it. */
+function sharedPart(session: Session, lights: boolean): string {
   const keymap = exportKeymap(session)
   // No colour chosen and colour 0 are the same thing.
-  const part = [session.layout, { ...keymap, layerColors: keymap.layers.map((_, layer) => keymap.layerColors?.[layer] ?? 0) }]
+  const part = [
+    session.layout,
+    { ...keymap, layerColors: keymap.layers.map((_, layer) => keymap.layerColors?.[layer] ?? 0) },
+    lights ? [session.lighting.keys, session.lighting.underglow] : [],
+  ]
   // What was read from a keyboard and what was made here list their fields in different orders.
   const sorted = (_: string, value: unknown) =>
     value && typeof value === 'object' && !Array.isArray(value)
@@ -629,10 +637,12 @@ export async function alignHalves(from: Session, to: Session): Promise<boolean> 
       await setHardware(second, { ...second.hardware, split: { Half: { ...split.Half, offset } } })
       changed = true
     }
-    if (sharedPart(from) !== sharedPart(to)) {
+    const lights = sharesLights(from) && sharesLights(to)
+    if (sharedPart(from, lights) !== sharedPart(to, lights)) {
       await to.client.setLayout(from.layout)
       await applyKeymap(to, exportKeymap(from))
       await refresh(to)
+      if (lights) await setLighting(to, { ...to.lighting, keys: from.lighting.keys, underglow: from.lighting.underglow })
       touch(to, 'reset')
       changed = true
     }

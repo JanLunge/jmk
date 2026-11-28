@@ -11,13 +11,14 @@ use jmk_core::{Action, Combo, ComboOptions, HoldTapProfile, MacroStep};
 use serde::{Deserialize, Serialize};
 
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours;
-/// 11 combo options, more groups of switches and [`Request::SetDoubles`].
-pub const PROTOCOL_VERSION: u16 = 11;
+/// 11 combo options, more groups of switches and [`Request::SetDoubles`]; from 12 the
+/// halves of a split share what their lights show.
+pub const PROTOCOL_VERSION: u16 = 12;
 
 /// What runs on the keyboard, as the app compares it with the firmware it
 /// carries to offer an update. Count it up with every change to the firmware
 /// that a keyboard should get, also one that leaves the protocol alone.
-pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 4, 0);
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 4, 1);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -280,7 +281,8 @@ pub struct LightingConfig {
     /// more current than the USB port gives.
     pub limit: u8,
     pub leds: Vec<Led, MAX_LEDS>,
-    /// The lights under keys.
+    /// The lights under keys. What the two zones show is the same on both
+    /// halves of a split; the rest is each half's own.
     pub keys: LightZone,
     pub underglow: LightZone,
 }

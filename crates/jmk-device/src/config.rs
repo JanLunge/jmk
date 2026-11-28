@@ -43,8 +43,8 @@ pub struct Config {
 }
 
 /// The part both halves of a split hold alike: the keyboard's name, keymap,
-/// behaviours, macros, key shapes and layer colours. The wiring, the lights
-/// and the controller's name are each half's own.
+/// behaviours, macros, key shapes, layer colours and what the lights show.
+/// The wiring, the light chain and the controller's name are each half's own.
 struct Shared<'a>(&'a Config);
 
 impl serde::Serialize for Shared<'_> {
@@ -66,7 +66,9 @@ impl serde::Serialize for Shared<'_> {
         }
         // Only when there are any, so that a keymap without named macros reads
         // the same as on firmware from before macros had names.
-        let options = config.combo_options.iter().any(|options| *options != ComboOptions::default());
+        let lights = (config.lighting.keys, config.lighting.underglow);
+        let lit = lights != Default::default();
+        let options = lit || config.combo_options.iter().any(|options| *options != ComboOptions::default());
         let rows = options || config.letter_rows.iter().any(|row| !row.is_empty());
         if rows || config.macro_names.iter().any(|name| !name.is_empty()) {
             parts.serialize_element(&config.macro_names)?;
@@ -78,6 +80,10 @@ impl serde::Serialize for Shared<'_> {
         // And the combo options, which came after the rows.
         if options {
             parts.serialize_element(&config.combo_options)?;
+        }
+        // And what the lights show, which came after the options.
+        if lit {
+            parts.serialize_element(&lights)?;
         }
         parts.end()
     }
@@ -244,6 +250,7 @@ impl Config {
         }
         self.letter_rows = if bytes.is_empty() { Self::NO_ROWS } else { take(&mut bytes)? };
         self.combo_options = if bytes.is_empty() { Vec::new() } else { take(&mut bytes)? };
+        (self.lighting.keys, self.lighting.underglow) = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
         bytes.is_empty().then_some(())
     }
 
