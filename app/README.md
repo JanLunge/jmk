@@ -22,6 +22,7 @@ screen for trying the app, and the tests use them.
 npm install
 npm run dev        # in a browser, with hot reload (run `npm run wasm` first)
 npm run start      # build and open the desktop app
+npm run start:fw   # the same, after building the firmware it carries anew
 npm run firmware   # copy the built firmware images into the desktop app
 npm test           # unit tests (logic, and the session layer on virtual keyboards)
 npm run e2e        # the whole app in headless Chromium on virtual keyboards
