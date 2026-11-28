@@ -81,7 +81,7 @@ test('editor tabs', async ({ page }) => {
   await page.click('[data-test=edit-layout]')
   await page.waitForTimeout(600)
   await shot(page, '11-layout')
-  await page.click('[data-test=edit-layout]')
+  await page.click('[data-test=view-keys]')
   for (const tab of ['behaviours', 'hardware', 'share']) {
     await page.click(`[data-test=nav-${tab}]`)
     await page.waitForTimeout(600)

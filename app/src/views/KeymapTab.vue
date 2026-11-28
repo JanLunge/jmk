@@ -24,6 +24,11 @@ const layer = ref(0)
 const view = ref<'edit' | 'layout' | 'all'>('edit')
 /** The layout tools while they are open. The keyboard is then drawn from their draft, and a press on a key goes to them. */
 const arranger = ref<InstanceType<typeof LayoutEditor>>()
+const VIEWS = [
+  { id: 'edit', name: 'Keys', test: 'view-keys', title: 'Choose what each key does', icon: 'M6 5h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2ZM9 15l3-6 3 6M10 13h4' },
+  { id: 'layout', name: 'Layout', test: 'edit-layout', title: 'Move, size and turn the keys so the picture matches your keyboard', icon: 'M12 3v18M3 12h18M12 3 9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5' },
+  { id: 'all', name: 'All layers', test: 'all-layers', title: 'See every layer side by side', icon: 'm12 4 9 4.5-9 4.5-9-4.5ZM3 13l9 4.5 9-4.5M3 17l9 4.5' },
+] as const
 /** The keys being edited. What is picked goes on all of them; the last one is the one shown. */
 const selection = ref<number[]>([props.session.layout.findIndex(hasKey)].filter((pos) => pos >= 0))
 const selected = computed<number | undefined>({
@@ -401,18 +406,33 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
         <button class="btn small ghost" title="Add a layer" :disabled="countingLayers || session.layers.length >= maxLayers" data-test="add-layer" @click="addLayer">+</button>
         <button v-if="session.layers.length > 1" class="btn small ghost" title="Remove the last layer" :disabled="countingLayers" data-test="remove-layer" @click="removeLayer">−</button>
         <span class="grow" />
-        <button v-if="view === 'edit'" class="btn small ghost" title="Put QWERTY, Colemak or Dvorak on this layer in one go" data-test="letters-open" @click="openLetters">Letters</button>
-        <label v-if="view === 'edit'" class="row typing small" title="Press a key on your computer's keyboard to put it on the selected key, and move on to the next">
-          <!-- Let go of the box once ticked: the next key press is meant for the keymap, not for the box. -->
-          <input v-model="typing" type="checkbox" data-test="typing" @change="($event.target as HTMLElement).blur()" />
-          Type to assign
-        </label>
-        <button v-if="view !== 'all'" class="btn small" :class="view === 'layout' ? 'primary' : 'ghost'" title="Move, size and turn the keys so the picture matches your keyboard" data-test="edit-layout" @click="view = view === 'layout' ? 'edit' : 'layout'">
-          {{ view === 'layout' ? 'Done arranging' : 'Edit layout' }}
-        </button>
-        <button v-if="view !== 'layout'" class="btn small" :class="view === 'all' ? 'primary' : 'ghost'" data-test="all-layers" @click="view = view === 'all' ? 'edit' : 'all'">
-          {{ view === 'all' ? 'Back to editing' : 'All layers' }}
-        </button>
+        <!-- Helpers for filling in the keys; they only make sense while doing that. -->
+        <template v-if="view === 'edit'">
+          <button class="tool" title="Put QWERTY, Colemak or Dvorak on this layer in one go" data-test="letters-open" @click="openLetters">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="3" /><path d="M7.5 10h.01M12 10h.01M16.5 10h.01M8 14h8" /></svg>
+            Place letters
+          </button>
+          <!-- Let go of the switch once flipped: the next key press is meant for the keymap, not for the switch. -->
+          <button
+            class="tool"
+            :class="{ on: typing }"
+            role="switch"
+            :aria-checked="typing"
+            title="Press a key on your computer's keyboard to put it on the selected key, and move on to the next"
+            data-test="typing"
+            @click="((typing = !typing), ($event.currentTarget as HTMLElement).blur())"
+          >
+            <span class="track" aria-hidden="true" />
+            Type to assign
+          </button>
+        </template>
+        <!-- What the keyboard below is for right now. Always in the same place, so it is also the way back. -->
+        <div class="views" role="tablist" aria-label="What to do with the keyboard">
+          <button v-for="each in VIEWS" :key="each.id" class="view" :class="{ on: view === each.id }" role="tab" :aria-selected="view === each.id" :title="each.title" :data-test="each.test" @click="((view = each.id), (coloring = false))">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="each.icon" /></svg>
+            {{ each.name }}
+          </button>
+        </div>
       </div>
 
       <Transition name="rise">
@@ -643,14 +663,106 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
   box-shadow: var(--shadow);
 }
 
-.typing {
-  gap: 6px;
-  color: var(--muted);
+.tool,
+.view {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  font-size: 0.87rem;
+  white-space: nowrap;
   cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
 
-.typing input {
-  accent-color: var(--accent);
+/* Only their own icons: the page around this tab is a .view as well. */
+.tool > svg,
+.views svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.tool {
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.tool:hover {
+  border-color: var(--muted);
+}
+
+.tool.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* A small switch: off to the left, on to the right. */
+.track {
+  width: 26px;
+  height: 15px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background 0.15s;
+}
+
+.track::after {
+  content: '';
+  display: block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 0.15s var(--ease);
+}
+
+.on .track {
+  background: var(--accent);
+}
+
+.on .track::after {
+  transform: translateX(11px);
+  background: var(--accent-ink);
+}
+
+/* One control with three positions, like the undo and save group above it. */
+.views {
+  display: flex;
+  margin-left: 8px;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.view {
+  height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+}
+
+.view:hover {
+  color: var(--text);
+}
+
+.view.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
 }
 
 .layer.live {
