@@ -94,6 +94,16 @@ export interface Session {
 
 let counter = 0
 
+const hostListeners = new Set<(session: Session, event: HostEvent, at: number) => void>()
+/**
+ * Hear what the virtual keyboards type the moment it arrives (`at`, on the
+ * clock of performance.now()), which `typed` alone does not keep. Returns how to stop hearing.
+ */
+export function onHostEvent(listener: (session: Session, event: HostEvent, at: number) => void): () => void {
+  hostListeners.add(listener)
+  return () => void hostListeners.delete(listener)
+}
+
 /** What a change means for the list of steps that can be undone: one more step, or a fresh start. */
 export type ChangeKind = 'edit' | 'reset'
 const listeners: ((session: Session, kind: ChangeKind) => void)[] = []
@@ -324,7 +334,9 @@ export async function openSession(transport: Transport, demo?: DemoHalf): Promis
   if (transport instanceof VirtualTransport) {
     transport.onLights = (colors) => (session.lights = colors)
     transport.onHost = (event) => {
+      const at = performance.now()
       session.typed.push(event)
+      for (const listener of hostListeners) listener(session, event, at)
       if (session.typed.length > 200) session.typed.splice(0, session.typed.length - 200)
     }
   }

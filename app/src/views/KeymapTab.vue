@@ -7,8 +7,8 @@ import LetterRows from '../components/LetterRows.vue'
 import { app, attempt, toast } from '../lib/app'
 import { localPositions } from '../lib/definition'
 import { dropped, landOn } from '../lib/drag'
-import { isModifierUsage, legend, usageForCode } from '../lib/keycodes'
-import { LAYER_COLORS, layerColor, layerColorNumber, onWith } from '../lib/layers'
+import { isModifierUsage, usageForCode } from '../lib/keycodes'
+import { heldOn, LAYER_COLORS, layerColor, layerColorNumber, layerLegend, topLayer as topLayerOf } from '../lib/layers'
 import { hasKey, nextInRow } from '../lib/layout'
 import type { Action, Basic } from '../lib/protocol'
 import { recordingKeys } from '../lib/recording'
@@ -29,49 +29,14 @@ const selected = computed<number | undefined>({
 watch(() => props.session.layers.length, (count) => (layer.value = Math.min(layer.value, count - 1)))
 
 const actions = computed(() => props.session.layers[layer.value] ?? [])
-/** The layers a see-through key of the open layer can fall to, highest first. */
-const under = computed(() => onWith(props.session.layersWith, layer.value).slice(1))
-const keyLegend = (pos: number) => {
-  const action = actions.value[pos]
-  if (action === undefined) return undefined
-  // A see-through key shows, faintly, what it falls through to.
-  if (action === 'Transparent') {
-    for (const below of under.value) {
-      const lower = props.session.layers[below][pos]
-      if (lower !== 'Transparent') return { ...legend(lower), kind: 'through' as const }
-    }
-  }
-  return named(action, legend(action))
-}
-
-/** A key that plays a named macro shows the name, as far as it fits. */
-function named(action: Action, drawn: ReturnType<typeof legend>) {
-  const basic = typeof action === 'object' && 'Basic' in action ? action.Basic : undefined
-  const index = typeof basic === 'object' && 'Macro' in basic ? basic.Macro : undefined
-  const name = index === undefined ? '' : (props.session.macroNames[index] ?? '')
-  if (!name) return drawn
-  return { ...drawn, main: name.length > 7 ? name.slice(0, 6) + '…' : name, sub: `M${index! + 1}` }
-}
-
-/** The layer whose action is drawn at a position: this one, or the first one a see-through key falls to that has a key. */
-function shownLayer(pos: number): number {
-  return [layer.value, ...under.value].find((at) => props.session.layers[at]?.[pos] !== 'Transparent') ?? 0
-}
+const keyLegend = (pos: number) => layerLegend(props.session, layer.value, pos)
 
 // A held key lights up fully only if the keyboard is doing what is drawn on
 // it here. Held keys that used another layer, or that the keyboard has not
 // acted on (an undecided hold-tap, part of a combo), are marked faintly.
-const held = computed(() => {
-  const here = new Set<number>()
-  const elsewhere = new Set<number>()
-  for (const pos of props.session.pressed) {
-    const exact = !props.session.layerAware || props.session.usedLayer.get(pos) === shownLayer(pos)
-    ;(exact ? here : elsewhere).add(pos)
-  }
-  return { here, elsewhere }
-})
+const held = computed(() => heldOn(props.session, layer.value))
 /** The layer new presses are looked up on first. */
-const topLayer = computed(() => (props.session.layerAware ? 31 - Math.clz32(props.session.activeLayers | 1) : undefined))
+const topLayer = computed(() => topLayerOf(props.session))
 const layerActive = (index: number) => props.session.layerAware && (props.session.activeLayers & (1 << index)) !== 0
 
 /** Knob directions live after this half's switches in the keymap. */

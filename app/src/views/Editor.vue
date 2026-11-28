@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import KeyboardView from '../components/KeyboardView.vue'
 import TryBox from '../components/TryBox.vue'
 import { attempt, cabled, openFarHalf, pairByCable, partnerOf, reconcile, resolveConflict, saveAll, sideOf, toast } from '../lib/app'
+import { hearVirtual, newTryout } from '../lib/tryout'
 import { carriedVersion, updateDue, updateFirmware, updating } from '../lib/firmware'
 import { historyOf, redo, startHistory, undo } from '../lib/history'
 import { legend } from '../lib/keycodes'
@@ -15,6 +16,7 @@ import KeymapTab from './KeymapTab.vue'
 import LayoutTab from './LayoutTab.vue'
 import LightingTab from './LightingTab.vue'
 import ShareTab from './ShareTab.vue'
+import TypingTest from './TypingTest.vue'
 
 const props = defineProps<{ session: Session }>()
 
@@ -35,6 +37,15 @@ const lit = computed(() => (partnerOpen.value && partner.value!.id === litId.val
 const lightHalves = computed(() =>
   isHalf.value && partnerOpen.value ? [props.session, partner.value!].map((half) => ({ id: half.id, side: sideOf(half) })).sort((a) => (a.side === 'left' ? -1 : 1)) : [],
 )
+/** Trying the keyboard out: the field in the header, its timing log and the typing test. */
+const tryout = reactive(newTryout())
+/**
+ * A virtual keyboard's keys do not reach this computer, so they are read from what it sends.
+ * For the tests, which have no other keyboards: with this set, the computer's own keyboard is
+ * listened to, as it is for a real keyboard.
+ */
+const virtualKeys = !!props.session.demo && localStorage.getItem('jmk.tryout.keys') !== 'computer'
+let stopHearing: (() => void) | undefined
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // Every change is written to the keyboard's flash by itself, a moment after
@@ -281,6 +292,8 @@ onMounted(async () => {
     props.session.stale = false
   }
   startHistory(props.session)
+  // A virtual keyboard types into nothing of this computer's: its keys are read from what it sends.
+  if (virtualKeys) stopHearing = hearVirtual(tryout, () => [props.session.id, partner.value?.id])
   window.addEventListener('keydown', onShortcut)
   if (props.session.unsaved) saveSoon()
   checkSplit()
@@ -288,6 +301,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   clearInterval(timer)
+  stopHearing?.()
   window.removeEventListener('keydown', onShortcut)
   // Leaving with a change still waiting: write it now.
   if (saveTimer) saveNow()
@@ -325,9 +339,9 @@ onBeforeUnmount(() => {
           </dl>
         </Transition>
       </div>
-      <span v-else class="muted small" data-test="key-count">{{ keyCount }} keys</span>
+      <span v-else class="muted small count" data-test="key-count">{{ keyCount }} keys</span>
       <span class="grow" />
-      <TryBox v-if="!session.demo" />
+      <TryBox :tryout="tryout" :virtual="virtualKeys" />
       <button v-if="outdated" class="btn small primary" :disabled="!!updating" :title="updateHint" data-test="firmware-due" @click="attempt(() => updateFirmware(session))">
         Update firmware
       </button>
@@ -348,7 +362,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <nav class="tabs row">
+    <nav v-if="!tryout.expanded" class="tabs row">
       <button v-for="t in tabs" :key="t" class="tab" :class="{ on: tab === t }" :data-test="'nav-' + t" @click="tab = t">{{ t }}</button>
     </nav>
 
@@ -377,7 +391,8 @@ onBeforeUnmount(() => {
 
     <div class="content">
       <Transition name="rise" mode="out-in">
-        <KeymapTab v-if="tab === 'keymap'" :session="session" />
+        <TypingTest v-if="tryout.expanded" :session="session" :tryout="tryout" :virtual="virtualKeys" @close="tryout.expanded = false" />
+        <KeymapTab v-else-if="tab === 'keymap'" :session="session" />
         <LayoutTab v-else-if="tab === 'layout'" :session="session" />
         <BehaviorsTab v-else-if="tab === 'behaviours'" :session="session" />
         <LightingTab v-else-if="tab === 'lighting'" :key="lit.id" :session="lit" :main="session" :halves="lightHalves" @half="litId = $event" />
@@ -392,6 +407,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .changes {
+  flex: none;
   gap: 0;
   align-items: stretch;
   height: 34px;
@@ -616,6 +632,10 @@ onBeforeUnmount(() => {
 
 .small {
   font-size: 0.85rem;
+}
+
+.count {
+  white-space: nowrap;
 }
 
 .tabs {
