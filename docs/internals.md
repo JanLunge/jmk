@@ -117,8 +117,17 @@ not know that yet, nor does it carry that image.
 ## Protocol stability
 
 `Request::GetInfo` and `Request::Reboot` keep their wire positions for ever,
-so any configurator can identify and update any firmware. Everything else
-may still change until the first release; new requests go at the end.
+so any configurator can identify and update any firmware. Nothing else that
+was released moves either: new requests, answers and events go at the end,
+and a struct that is sent or saved stays as it is.
+`crates/jmk-sim/tests/wire.rs` checks that against the list in `wire.txt`
+beside it.
+
+Work on two branches at once can add to the same end and take the same
+protocol version. The branch merged second moves its additions behind the
+first one's and takes the next version. To avoid that, a branch can claim its
+place first: a small change to `main` with the new requests (answered with
+`Unsupported`), the version and the app's constant for it.
 
 ## Firmware updates
 

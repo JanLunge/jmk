@@ -1,0 +1,30 @@
+enum Request: GetInfo Reboot GetHardware SetHardware GetLayerCount SetLayerCount GetActions SetActions GetHoldTapProfiles SetHoldTapProfile GetCombos SetCombos GetMacro SetMacro GetMeta SetMeta GetLayout SetLayout GetSplitStatus Save FactoryReset WatchKeys StartProbe StopProbe HoldLow GetLighting SetLighting IdentifyLed GetLayerColors SetLayerColors GetMacroName SetMacroName GetLetterRows SetLetterRows ResolveSplit SplitAgreed GetMoreWiring SetMoreWiring GetComboOptions SetComboOptions GetDoubles SetDoubles
+enum Response: Ok Error Info Hardware LayerCount Actions HoldTapProfiles Combos Macro Meta Layout SplitStatus Lighting LayerColors MacroName LetterRows MoreWiring ComboOptions Doubles
+enum Error: Malformed OutOfRange UnusablePin ReservedPin DuplicatePin TooManyKeys Full Unsupported Storage
+enum Event: Key Probe Resolved Layers
+enum DeviceMessage: Response Event
+struct Info: protocol firmware mcu usable_pins max_keys max_layers uid
+enum Mcu: Rp2040 Rp2350 Nrf52840 Simulated
+struct HardwareConfig: matrix reserved_pins debounce_ms encoders split
+enum MatrixConfig: None Direct Matrix
+enum DiodeDirection: Col2Row Row2Col Both
+struct EncoderConfig: a b steps_per_detent
+enum SplitConfig: None Half
+enum LinkConfig: Uart Ble Wire
+struct SplitStatus: connected remote_positions leading sync peer_uid revision peer_revision digest base
+enum SplitSync: Unknown Same Behind Ahead Conflict
+enum Contact: Ground Supply Link
+struct LightingConfig: pin order limit leds keys underglow
+struct LightZone: effect hue sat val speed
+struct Led: key x y
+enum ColorOrder: Grb Rgb
+enum Effect: Off Solid Breathing Rainbow Reactive
+struct KeyGeometry: x y w h r
+struct Meta: name controller
+enum Action: Transparent Basic HoldTap
+enum Basic: None Key Mods ModKey Consumer MomentaryLayer ToggleLayer ToLayer OneShotMods Macro Custom
+struct HoldTapProfile: flavor tapping_term_ms require_prior_idle_ms
+enum HoldTapFlavor: TapPreferred Balanced HoldPreferred
+struct Combo: keys action timeout_ms
+struct ComboOptions: layers sequence
+enum MacroStep: Tap Press Release DelayMs
