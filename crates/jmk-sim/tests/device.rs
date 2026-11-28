@@ -1393,6 +1393,39 @@ fn combo_options_are_saved_and_follow_to_the_other_half() {
 }
 
 #[test]
+fn layers_that_go_with_others_are_saved_and_follow_to_the_other_half() {
+    let (mut left, mut right) = saved_pair();
+    let with = [0, 0, 0, 0b110, 0, 0, 0, 0];
+    for half in [&mut left, &mut right] {
+        half.ok(Request::SetLayerCount(4));
+        half.ok(Request::SetActions {
+            layer: 0,
+            pos: 0,
+            actions: [Action::Basic(Basic::MomentaryLayer(1)), Action::Basic(Basic::MomentaryLayer(2))].into_iter().collect(),
+        });
+        half.ok(Request::SetActions { layer: 3, pos: 3, actions: [Action::key(kc::Z)].into_iter().collect() });
+        half.ok(Request::Save);
+    }
+    run_both(&mut left, &mut right, 1000);
+    left.ok(Request::SetLayersWith(with));
+    left.ok(Request::Save);
+    run_both(&mut left, &mut right, 1500);
+    assert_eq!(right.kb.request(Request::GetLayersWith), Response::LayersWith(with));
+    right.kb.reboot();
+    assert_eq!(right.kb.request(Request::GetLayersWith), Response::LayersWith(with));
+    run_both(&mut left, &mut right, 600);
+
+    // Both layer keys on the left half, the key on the right.
+    left.out();
+    left.kb.set_key(0, true);
+    left.kb.set_key(1, true);
+    run_both(&mut left, &mut right, 10);
+    right.kb.set_key(0, true);
+    run_both(&mut left, &mut right, 10);
+    assert_eq!(left.out(), ["00:1d"]);
+}
+
+#[test]
 fn layer_colors_are_saved() {
     let mut rig = Rig::wires(&[Wire::Ground(2)]);
     rig.ok(Request::SetHardware(direct(&[2])));

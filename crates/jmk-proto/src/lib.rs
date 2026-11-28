@@ -12,13 +12,14 @@ use serde::{Deserialize, Serialize};
 
 /// 2 added the layer events and [`Request::HoldLow`]; 3 added lighting; 4 layer colours;
 /// 11 combo options, more groups of switches and [`Request::SetDoubles`]; from 12 the
-/// halves of a split share what their lights show; 13 lights that show a state.
-pub const PROTOCOL_VERSION: u16 = 13;
+/// halves of a split share what their lights show; 13 lights that show a state;
+/// 14 layers that are on while others are.
+pub const PROTOCOL_VERSION: u16 = 14;
 
 /// What runs on the keyboard, as the app compares it with the firmware it
 /// carries to offer an update. Count it up with every change to the firmware
 /// that a keyboard should get, also one that leaves the protocol alone.
-pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 4, 2);
+pub const FIRMWARE_VERSION: (u8, u8, u8) = (0, 4, 3);
 
 pub const MAX_KEYS: usize = 128;
 pub const MAX_LAYERS: usize = 8;
@@ -344,6 +345,10 @@ pub struct Indicators {
     pub list: Vec<Indicator, MAX_INDICATORS>,
 }
 
+/// By the number of the layer: the layers, one bit each, that turn it on
+/// while all of them are on. 0 for a layer without such a rule.
+pub type LayersWith = [u8; MAX_LAYERS];
+
 /// Where a key sits on the keyboard, for drawing it. Units are hundredths of
 /// a standard key width; rotation is in tenths of a degree around the key's
 /// centre.
@@ -528,6 +533,8 @@ pub enum Request {
     SetDoubles(Doubles),
     GetIndicators,
     SetIndicators(Indicators),
+    GetLayersWith,
+    SetLayersWith(LayersWith),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -555,6 +562,7 @@ pub enum Response {
     ComboOptions(Vec<ComboOptions, MAX_COMBOS>),
     Doubles(Doubles),
     Indicators(Indicators),
+    LayersWith(LayersWith),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

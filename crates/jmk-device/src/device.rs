@@ -159,7 +159,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
         let (host, uid) = (self.host, self.board.uid);
         // What the indicator lights go by; on the half that does not type,
         // what the other one says.
-        let shows = (engine.active_layers() as u8, self.locks);
+        let shows = (engine.active_layers(&**config) as u8, self.locks);
         let shown = if *leading { shows } else { split.shows() };
         lights.tick(&config.lighting, &config.indicators, shown, now, split.clock(now, *leading), pins);
         let prober = match &mut self.mode {
@@ -256,7 +256,7 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                     for key in resolved {
                         event(Event::Resolved { pos: key.pos, layer: key.layer });
                     }
-                    let layers = engine.active_layers();
+                    let layers = engine.active_layers(config);
                     if *reported_layers != Some(layers) {
                         *reported_layers = Some(layers);
                         event(Event::Layers(layers));
@@ -658,6 +658,12 @@ impl<'a, P: Pins, F: NorFlash> Device<'a, P, F> {
                     return Err(Error::OutOfRange);
                 }
                 self.lights.identify(led);
+                Ok(Response::Ok)
+            }
+            Request::GetLayersWith => Ok(Response::LayersWith(self.config.layers_with)),
+            Request::SetLayersWith(with) => {
+                self.engine.reset(out);
+                self.config.layers_with = with;
                 Ok(Response::Ok)
             }
             Request::GetIndicators => Ok(Response::Indicators(self.config.indicators.clone())),

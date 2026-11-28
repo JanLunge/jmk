@@ -229,6 +229,9 @@ export type Request =
   | { SetComboOptions: ComboOptions[] }
   | 'GetDoubles'
   | { SetDoubles: number[] }
+  | 'GetLayersWith'
+  /** Per layer: the layers, one bit each, that turn it on while all of them are on. */
+  | { SetLayersWith: number[] }
   | 'GetIndicators'
   | { SetIndicators: Indicators }
   | { ResolveSplit: { keep_this: boolean } }
@@ -266,6 +269,7 @@ export type Response =
   | { ComboOptions: ComboOptions[] }
   | { Doubles: number[] }
   | { Indicators: Indicators }
+  | { LayersWith: number[] }
 
 export type DeviceEvent =
   | { Key: { pos: number; pressed: boolean } }

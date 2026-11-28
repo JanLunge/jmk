@@ -43,6 +43,8 @@ export interface Session {
   layers: Action[][]
   /** A colour number per layer; 0 where none was chosen. */
   layerColors: number[]
+  /** Per layer: the layers, one bit each, that turn it on while all of them are on; 0 for none. */
+  layersWith: number[]
   profiles: HoldTapProfile[]
   combos: Combo[]
   macros: MacroStep[][]
@@ -161,6 +163,17 @@ export function setLighting(session: Session, lighting: LightingConfig): Promise
   return sendNewest(session, 'lighting', () => session.client.setLighting(lighting))
 }
 
+/** Protocol version from which a layer can be on while others are. */
+export const LAYERS_WITH_PROTOCOL = 14
+export const canJoinLayers = (session: Session) => session.info.protocol >= LAYERS_WITH_PROTOCOL
+
+/** Say which layers, one bit each, turn `layer` on while all of them are on; 0 for none. */
+export function setLayerWith(session: Session, layer: number, mask: number): Promise<void> {
+  const masks = session.layers.map((_, index) => (index === layer ? mask : (session.layersWith[index] ?? 0)))
+  session.layersWith = masks
+  return sendNewest(session, 'layersWith', () => session.client.setLayersWith(masks))
+}
+
 /** Protocol version from which a light can show caps lock or a layer. */
 export const INDICATOR_PROTOCOL = 13
 export const canIndicate = (session: Session) => session.info.protocol >= INDICATOR_PROTOCOL
@@ -268,6 +281,7 @@ export async function openSession(transport: Transport, demo?: DemoHalf): Promis
     layout: [],
     layers: [],
     layerColors: [],
+    layersWith: [],
     profiles: [],
     combos: [],
     macros: [],
@@ -353,6 +367,7 @@ export async function refresh(session: Session): Promise<void> {
   session.lighting = canLight(session) ? await client.lighting() : noLighting()
   if (canIndicate(session)) session.indicators = await client.indicators()
   if (canColorLayers(session)) session.layerColors = await client.layerColors()
+  if (canJoinLayers(session)) session.layersWith = await client.layersWith()
   session.pressed.clear()
   session.usedLayer.clear()
   for (const listener of listeners) listener(session, 'reset')
@@ -529,6 +544,7 @@ export function exportKeymap(session: Session): Keymap {
       combos: session.combos,
       macros: session.macros,
       layerColors: session.layerColors.slice(0, session.layers.length),
+      layersWith: session.layers.map((_, layer) => session.layersWith[layer] ?? 0),
       macroNames: [...Array(LIMITS.macros).keys()].map((index) => session.macroNames[index] ?? ''),
     }),
   )
@@ -543,6 +559,7 @@ export async function applyKeymap(session: Session, keymap: Keymap): Promise<voi
   await client.setCombos(keymap.combos.slice(0, LIMITS.combos))
   for (let index = 0; index < LIMITS.macros; index++) await client.setMacro(index, keymap.macros[index] ?? [])
   if (canColorLayers(session)) await client.setLayerColors((keymap.layerColors ?? []).slice(0, session.info.max_layers))
+  if (canJoinLayers(session)) await client.setLayersWith(keymap.layersWith ?? [])
   if (canNameMacros(session)) for (let index = 0; index < LIMITS.macros; index++) await client.setMacroName(index, fitName(keymap.macroNames?.[index] ?? ''))
   touch(session, 'reset')
 }

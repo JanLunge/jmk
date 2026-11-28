@@ -13,7 +13,7 @@ import { hasKey, nextInRow } from '../lib/layout'
 import type { Action, Basic } from '../lib/protocol'
 import { recordingKeys } from '../lib/recording'
 import { ALPHAS, guessAlphas, letterActions } from '../lib/starter'
-import { canColorLayers, canKeepLetterRows, knobPositions, positionCount, setAction, setLayerColor, setLayerCount, setLetterRows, type Session } from '../lib/session'
+import { canColorLayers, canJoinLayers, canKeepLetterRows, knobPositions, positionCount, setAction, setLayerColor, setLayerCount, setLayerWith, setLetterRows, type Session } from '../lib/session'
 
 const props = defineProps<{ session: Session }>()
 
@@ -102,8 +102,11 @@ async function pickColor(number: number) {
   coloring.value = false
   await attempt(() => setLayerColor(props.session, layer.value, number))
 }
+/** The layers that turn the open one on while they are on together, one bit each. */
+const joined = computed(() => props.session.layersWith[layer.value] ?? 0)
+const toggleJoined = (other: number) => attempt(() => setLayerWith(props.session, layer.value, joined.value ^ (1 << other)))
 function openLayer(index: number) {
-  // A second click on the open layer offers its colours.
+  // A second click on the open layer offers its colours and what turns it on.
   coloring.value = view.value === 'edit' && layer.value === index && !coloring.value
   layer.value = index
   view.value = 'edit'
@@ -378,7 +381,7 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
             :class="{ on: view === 'edit' && layer === index, live: index > 0 && layerActive(index) }"
             :style="{ '--tint': layerColor(session, index) ?? 'var(--muted)' }"
             :data-test="'layer-' + index"
-            :title="view === 'edit' && layer === index ? 'Click again to change its colour' : ''"
+            :title="view === 'edit' && layer === index ? 'Click again to change its colour or what turns it on' : ''"
             @click="openLayer(index)"
           >
             <span class="swatch" :data-test="'layer-swatch-' + index" />
@@ -415,6 +418,14 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
             @click="pickColor(index + 1)"
           />
           <span v-if="!canColorLayers(session)" class="muted small">Update the firmware under Hardware for the keyboard to remember it.</span>
+          <template v-if="layer > 0 && session.layers.length > 3 && canJoinLayers(session)">
+            <span class="muted small joined" title="For a third layer reached with two layer keys: it is on for as long as all the layers chosen here are">Also on while these are on together</span>
+            <template v-for="(_, other) in session.layers" :key="other">
+              <button v-if="other > 0 && other !== layer" class="btn small" :class="{ primary: joined & (1 << other) }" :data-test="'join-' + other" @click="toggleJoined(other)">
+                Layer {{ other }}
+              </button>
+            </template>
+          </template>
         </div>
       </Transition>
 
@@ -567,6 +578,10 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
 .colors {
   gap: 7px;
   flex-wrap: wrap;
+}
+
+.joined {
+  margin-left: 14px;
 }
 
 .color {

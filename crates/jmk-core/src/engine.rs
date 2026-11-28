@@ -33,6 +33,12 @@ pub trait Keymap {
     fn macro_steps(&self, _index: u8) -> &[MacroStep] {
         &[]
     }
+    /// By the number of the layer: the layers (one bit each) that turn it on
+    /// while all of them are on. Nothing, or 0, for a layer without such a
+    /// rule.
+    fn layers_with(&self) -> &[u8] {
+        &[]
+    }
 }
 
 /// Where the engine sends its results.
@@ -119,7 +125,7 @@ impl Engine {
     /// Feed a physical key change. `pos` indexes the keymap.
     pub fn key_event(&mut self, keymap: &impl Keymap, out: &mut impl Output, pos: u16, pressed: bool, now: Millis) {
         let mut combos = core::mem::take(&mut self.combos);
-        let layer = (31 - self.active_layers().leading_zeros()) as u8;
+        let layer = (31 - self.active_layers(keymap).leading_zeros()) as u8;
         combos.key_event(all_combos(keymap), layer, pos, pressed, now, &mut |ev| self.push(keymap, out, ev, now));
         self.combos = combos;
     }
@@ -156,11 +162,17 @@ impl Engine {
     }
 
     /// Bitmask of active layers. Layer 0 is always active.
-    pub fn active_layers(&self) -> u32 {
+    pub fn active_layers(&self, keymap: &impl Keymap) -> u32 {
         let mut layers = 1 | self.toggled_layers;
         for held in &self.held {
             if let Basic::MomentaryLayer(layer) = held.action {
                 layers |= layer_bit(layer);
+            }
+        }
+        // Lowest first, so a layer turned on this way counts for the next.
+        for (layer, with) in keymap.layers_with().iter().enumerate() {
+            if *with != 0 && layers & *with as u32 == *with as u32 {
+                layers |= layer_bit(layer as u8);
             }
         }
         layers
@@ -258,7 +270,7 @@ impl Engine {
                 return (keymap.combos().get(index as usize).map_or(Action::NONE, |c| c.action), 0);
             }
         };
-        let active = self.active_layers();
+        let active = self.active_layers(keymap);
         (0..keymap.layer_count().min(32))
             .rev()
             .filter(|layer| active & layer_bit(*layer) != 0)

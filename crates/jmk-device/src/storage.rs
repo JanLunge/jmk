@@ -133,6 +133,7 @@ fn encode(config: &Config, buf: &mut [u8]) -> Option<usize> {
     put(buf, &mut used, &config.combo_options)?;
     put(buf, &mut used, &config.doubles)?;
     put(buf, &mut used, &config.indicators)?;
+    put(buf, &mut used, &config.layers_with)?;
     Some(used)
 }
 
@@ -172,6 +173,7 @@ fn decode(mut bytes: &[u8], config: &mut Config) -> Option<()> {
     config.combo_options = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
     config.doubles = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
     config.indicators = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
+    config.layers_with = if bytes.is_empty() { Default::default() } else { take(&mut bytes)? };
     config.hardware = hardware;
     config.layer_count = layer_count;
     config.profiles = profiles;
