@@ -234,7 +234,7 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
   const small = (await part(5).boundingBox())!
   await assign(page, 3, 4) // pressing the knob: A
   await expect(part(3)).toContainText('A')
-  expect((await part(5).boundingBox())!.width).toBeGreaterThan(small.width * 1.5)
+  await expect.poll(async () => (await part(5).boundingBox())!.width).toBeGreaterThan(small.width * 1.8)
   await part(5).dispatchEvent('pointerdown')
   await part(5).dispatchEvent('pointerup')
   await expect(part(5)).toHaveClass(/selected/)
@@ -243,7 +243,7 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
   // A click beside the keys lets go of the selection, and the tabs shrink again.
   await page.locator('[data-test=keymap-board]').locator('..').click({ position: { x: 20, y: 20 } })
   await expect(page.locator('[data-test=keymap-board] .selected')).toHaveCount(0)
-  expect((await part(5).boundingBox())!.width).toBeCloseTo(small.width, 0)
+  await expect.poll(async () => (await part(5).boundingBox())!.width).toBeCloseTo(small.width, 0)
 })
 
 const splitStatus = (page: Page) => page.locator('[data-test=split-status]')

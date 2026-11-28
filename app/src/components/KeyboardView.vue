@@ -93,7 +93,8 @@ const dials = computed(() =>
       const r = Math.min(key.w, key.h) / 2 - 5
       const press = presses.value.get(pos)!
       const open = [pos, pos + 1, press].some((part) => props.selected?.includes(part))
-      const [tw, th, top] = open ? [96, 46, cy - r - 36] : [r + 2, 24, cy - r - 4]
+      // Grown, each is three quarters of a key high and as wide as one.
+      const [tw, th, top] = open ? [100, 75, cy - r - 66] : [r + 2, 24, cy - r - 4]
       return {
         pos,
         cx,
@@ -108,11 +109,11 @@ const dials = computed(() =>
               { pos: pos + 1, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 1 ${cx} ${cy + r} Z`, x: cx + r / 2, y: cy + 6, arrow: '⟳', tab: '', room: r - 8, most: 18 },
             ]
           : [
-              { pos: press, d: `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z`, x: cx, y: cy + 14, arrow: '', tab: '', room: 1.6 * r, most: 30 },
+              { pos: press, d: `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z`, x: cx, y: cy, arrow: '', tab: '', room: 1.6 * r, most: 34 },
               ...[
                 { pos, x: cx - tw - 1, tab: '⟲ ' },
                 { pos: pos + 1, x: cx + 1, tab: '⟳ ' },
-              ].map((turn) => ({ ...turn, d: pill(turn.x, top, tw, th), x: turn.x + tw / 2, y: top + th / 2 + 4, arrow: '', room: tw - 10, most: open ? 22 : 13 })),
+              ].map((turn) => ({ ...turn, d: tabShape(turn.x, top, tw, th), x: turn.x + tw / 2, y: top + th / 2, arrow: '', room: tw - 14, most: open ? 30 : 13 })),
             ]
         ).map((half) => ({ ...half, text: half.tab + (props.legend?.(half.pos)?.main ?? '') })),
         open,
@@ -122,7 +123,9 @@ const dials = computed(() =>
     .sort((a, b) => Number(a.open) - Number(b.open)),
 )
 
-const pill = (x: number, y: number, w: number, h: number) => `M ${x + h / 2} ${y} h ${w - h} a ${h / 2} ${h / 2} 0 0 1 0 ${h} h ${h - w} a ${h / 2} ${h / 2} 0 0 1 0 ${-h} Z`
+/** A rounded box. Always the same commands, so that it can grow smoothly. */
+const tabShape = (x: number, y: number, w: number, h: number, q = 12) =>
+  `M ${x + q} ${y} h ${w - 2 * q} a ${q} ${q} 0 0 1 ${q} ${q} v ${h - 2 * q} a ${q} ${q} 0 0 1 ${-q} ${q} h ${2 * q - w} a ${q} ${q} 0 0 1 ${-q} ${-q} v ${2 * q - h} a ${q} ${q} 0 0 1 ${q} ${-q} Z`
 
 function fontSize(text: string, width: number): number {
   const fit = (width - 22) / Math.max(text.length, 1) / 0.6
@@ -198,7 +201,7 @@ function fontSize(text: string, width: number): number {
       >
         <path :d="half.d" />
         <text class="arrow" :x="half.x" :y="half.y - dial.r / 2.4 - 6">{{ half.arrow }}</text>
-        <text class="main" :x="half.x" :y="half.y" :font-size="Math.max(half.tab ? 9 : 11, Math.min(half.most, half.room / Math.max(half.text.length, 1) / 0.6))">
+        <text class="main" :style="{ transform: `translate(${half.x}px, ${half.y}px)`, fontSize: Math.max(half.tab ? 9 : 11, Math.min(half.most, half.room / Math.max(half.text.length, 1) / 0.6)) + 'px' }">
           {{ half.text }}
         </text>
       </g>
@@ -300,7 +303,11 @@ text {
   fill: var(--cap-top);
   stroke: var(--cap);
   stroke-width: 2;
-  transition: fill 0.12s;
+  transition: fill 0.12s, d 0.16s;
+}
+
+.half .main {
+  transition: transform 0.16s, font-size 0.16s;
 }
 
 .half .arrow {
