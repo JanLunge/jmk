@@ -523,10 +523,15 @@ describe('the Svalboard keyboard file', () => {
     // Its setup changes and is saved over the cable.
     const scan = { ...far.hardware.scan!, settle_us: 120 }
     await during(setHardware(far, { ...far.hardware, scan }))
+    // So do its lights: the chain's pin and how many there are.
+    const taken = new Set((JSON.stringify(far.hardware).match(/\d+/g) ?? []).map(Number))
+    const pin = [...Array(30).keys()].find((each) => !taken.has(each))!
+    await during(setLighting(far, { ...far.lighting, pin, leds: ring(far.layout, 3) }))
     await during(save(far))
     transports[1].setUsb(true)
     const again = await during(openSession(transports[1].again()))
     expect(again.hardware.scan?.settle_us).toBe(120)
+    expect([again.lighting.pin, again.lighting.leds.length]).toEqual([pin, 3])
   })
 })
 

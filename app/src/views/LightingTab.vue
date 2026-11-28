@@ -12,7 +12,17 @@ import type { Effect, Indicator, Indicators, Led, LightingConfig, LightZone, Pin
 import { LIMITS, PLAIN_LIGHT, UNDERGLOW } from '../lib/protocol'
 import { linkPins, canIndicate, canLight, followsPins, knobPositions, needsRestart, restart, role, save, setIndicators, setLighting, sharesLights, type Session } from '../lib/session'
 
-const props = defineProps<{ session: Session }>()
+// `session` is the half whose lights are shown. For a split with both halves
+// open, `halves` offers the choice and `main` is the half this editor is for.
+const props = defineProps<{ session: Session; main?: Session; halves?: { id: string; side: string }[] }>()
+const emit = defineEmits<{ half: [id: string] }>()
+/** What the lights show is the same on both halves: it is written to both, so neither overrules the other at the next save. */
+const sharing = computed(() => (props.main && props.main !== props.session ? [props.session, props.main] : [props.session]))
+const show = (zones: Partial<Pick<LightingConfig, 'keys' | 'underglow'>>) =>
+  attempt(async () => {
+    for (const each of sharing.value) await setLighting(each, { ...each.lighting, ...zones })
+    return true
+  })
 
 const lighting = computed(() => props.session.lighting)
 const board = computed(() => findBoard(props.session.meta.controller, props.session.info.mcu, props.session.info.usable_pins))
@@ -42,9 +52,10 @@ async function turnOn() {
   const { keys, underglow } = lighting.value
   const zones = keys.effect !== 'Off' || underglow.effect !== 'Off' ? {} : { keys: { ...zone }, underglow: { ...zone } }
   const done = await attempt(async () => {
-    await setLighting(props.session, { ...lighting.value, pin: pinDraft.value, leds: ring(props.session.layout, count), ...zones })
+    await setLighting(props.session, { ...lighting.value, pin: pinDraft.value, leds: ring(props.session.layout, count) })
     return true
   })
+  if (done && zones.keys) await show(zones)
   if (done) await saveAndRestart()
 }
 
@@ -190,7 +201,7 @@ const MODES: { id: LightMode; name: string; hint: string }[] = [
   { id: 'keys', name: 'Per key', hint: 'One light under each key. JMK lights them one at a time and you click the key each sits under.' },
   { id: 'both', name: 'Both', hint: 'Some under keys, some under the case. You say which is which while placing them.' },
 ]
-const patchZone = (id: 'keys' | 'underglow', patch: Partial<LightZone>) => change({ [id]: { ...lighting.value[id], ...patch } })
+const patchZone = (id: 'keys' | 'underglow', patch: Partial<LightZone>) => show({ [id]: { ...lighting.value[id], ...patch } })
 const number = (event: Event) => Number((event.target as HTMLInputElement).value)
 
 // --- Lights that show a state ---------------------------------------------------------
@@ -259,6 +270,11 @@ const chainSummary = computed(() => {
     </div>
 
     <aside class="side card col scroll">
+      <div v-if="halves?.length" class="modes row" data-test="light-halves" title="Each half has its own lights. The half without a USB cable is set up through the cable between them.">
+        <button v-for="each in halves" :key="each.id" class="mode" :class="{ on: each.id === session.id }" :data-test="'light-half-' + each.side" @click="emit('half', each.id)">
+          {{ each.side === 'left' ? 'Left half' : 'Right half' }}
+        </button>
+      </div>
       <div v-if="!canLight(session)" class="note warn" data-test="light-old">
         This keyboard's firmware is from before JMK could run lights. Update it under Hardware first.
       </div>
@@ -267,7 +283,7 @@ const chainSummary = computed(() => {
         <div>
           <h2>Lights</h2>
           <p class="muted small">For a chain of addressable RGB lights (WS2812, SK6812) on one data wire.</p>
-          <p v-if="half" class="muted small" data-test="light-half">These are the lights of the half that is plugged in. Plug in the other half to set up its own.</p>
+          <p v-if="half && !halves?.length" class="muted small" data-test="light-half">These are the lights of the half that is plugged in. Plug in the other half to set up its own.</p>
         </div>
         <div class="fields">
           <label class="field">Data pin

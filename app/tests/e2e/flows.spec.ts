@@ -897,6 +897,30 @@ test('lights: switched on, placed one by one and given an effect per group', asy
   await expect(page.locator('[data-test=indicator-led]')).toHaveValue('255')
 })
 
+test('split keyboard: the lights of both halves are set up from one editor', async ({ page }) => {
+  await openDemo(page, 'split')
+  await runSplitWizard(page)
+  await page.click('[data-test=nav-lighting]')
+  // The right half's chain, whichever half's editor this is.
+  await page.click('[data-test=light-half-right]')
+  await expect(page.locator('[data-test=light-half-right]')).toHaveClass(/on/)
+  await page.selectOption('[data-test=light-pin]', { index: 1 })
+  await page.fill('[data-test=light-count]', '4')
+  await page.click('[data-test=light-on]')
+  await expect(page.locator('[data-test=chain-summary]')).toContainText('4 lights')
+  // The left half has no chain yet, and what the lights show is there already.
+  await page.click('[data-test=light-half-left]')
+  await page.selectOption('[data-test=light-pin]', { index: 1 })
+  await page.fill('[data-test=light-count]', '2')
+  await page.click('[data-test=light-on]')
+  await expect(page.locator('[data-test=chain-summary]')).toContainText('2 lights')
+  await page.click('[data-test=effect-underglow-Solid]')
+  await saved(page)
+  await page.click('[data-test=light-half-right]')
+  await expect(page.locator('[data-test=chain-summary]')).toContainText('4 lights')
+  await expect(page.locator('[data-test=effect-underglow-Solid]')).toHaveClass(/on/)
+})
+
 test('split keyboard: finding the keys again covers both halves', async ({ page }) => {
   await openDemo(page, 'split')
   await runSplitWizard(page)
@@ -1097,7 +1121,6 @@ test('the language of the computer names the keys: Ö on a Swedish one', async (
   await page.locator('.picker [data-symbol="@"]').click()
   await expect(page.locator('[data-test=keymap-board] [data-pos="1"]')).toContainText('@')
   await expect(page.locator('[data-test=action-description]')).toContainText('@, typed as AltGr + 2')
-  if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT })
   // Kept for the next time.
   await page.reload()
   expect(await page.evaluate(() => localStorage.getItem('jmk.language'))).toBe('sv')
