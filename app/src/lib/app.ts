@@ -140,8 +140,17 @@ async function attach(bench: Bench, half: BenchHalf): Promise<void> {
   if (!half.usb) return
   const index = bench.halves.indexOf(half)
   const heard = half.transport.onHost
+  // The buttons held in this half's last mouse report.
+  let mouseButtons = 0
   half.transport.onHost = (event) => {
     heard(event)
+    // A moving cursor reports every few milliseconds and would push
+    // everything typed out of the list, so only keep mouse reports that
+    // press or release a button.
+    if ('Mouse' in event) {
+      if (event.Mouse.buttons === mouseButtons) return
+      mouseButtons = event.Mouse.buttons
+    }
     bench.typed.push({ half: index, event })
     if (bench.typed.length > 200) bench.typed.splice(0, bench.typed.length - 200)
   }

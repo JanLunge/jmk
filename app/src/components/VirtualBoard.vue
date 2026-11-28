@@ -164,13 +164,20 @@ const strip = computed(() => {
 const typed = computed(() => {
   const out: string[] = []
   const previous = new Map<number, number[]>()
+  const buttonsHeld = new Map<number, number>()
   for (const { half, event } of props.bench.typed) {
     if ('Consumer' in event) {
       if (event.Consumer) out.push('♪')
       continue
     }
-    // Nothing sends mouse reports yet.
-    if ('Mouse' in event) continue
+    if ('Mouse' in event) {
+      // Show a click when a button goes down; movement has no text.
+      const heldBefore = buttonsHeld.get(half) ?? 0
+      const newlyPressed = event.Mouse.buttons & ~heldBefore
+      if (newlyPressed !== 0) out.push('🖱')
+      buttonsHeld.set(half, event.Mouse.buttons)
+      continue
+    }
     const before = previous.get(half) ?? []
     const fresh = event.Keyboard.keys.filter((k) => !before.includes(k))
     previous.set(half, event.Keyboard.keys)

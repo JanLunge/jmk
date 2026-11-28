@@ -46,6 +46,24 @@ pub enum Direction {
     Right,
 }
 
+impl Direction {
+    /// Its bit in [`MouseKeys::moving`] and [`MouseKeys::scrolling`].
+    pub const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+/// The mouse keys held right now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseKeys {
+    /// As in [`Basic::MouseButtons`].
+    pub buttons: u8,
+    /// One bit per [`Direction`] held by a [`Basic::MouseMove`] key.
+    pub moving: u8,
+    /// One bit per [`Direction`] held by a [`Basic::MouseScroll`] key.
+    pub scrolling: u8,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     /// Fall through to the next lower active layer.

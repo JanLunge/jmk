@@ -1,6 +1,6 @@
 use jmk_core::keycode::{self as kc, mods};
 use jmk_core::{
-    Action, Basic, Combo, ComboOptions, Direction, Engine, HoldTapFlavor, HoldTapProfile, KeyboardReport, Keymap, MacroStep, MouseReport, Output,
+    Action, Basic, Combo, ComboOptions, Direction, Engine, HoldTapFlavor, HoldTapProfile, KeyboardReport, Keymap, MacroStep, MouseKeys, MouseReport, Output,
 };
 
 struct Map {
@@ -593,17 +593,50 @@ fn mouse_report_layout() {
 }
 
 #[test]
-fn mouse_keys_type_nothing_yet() {
+fn mouse_keys_are_held_state_not_reports() {
     let mut rig = Rig::new(vec![vec![
         basic(Basic::MouseButtons(1)),
+        basic(Basic::MouseButtons(2)),
         basic(Basic::MouseMove(Direction::Up)),
         basic(Basic::MouseScroll(Direction::Down)),
-        key(kc::A),
     ]]);
-    for pos in 0..3 {
-        rig.press(pos, pos as u64);
-        rig.release(pos, pos as u64 + 1);
-    }
-    rig.press(3, 10);
-    assert_eq!(rig.out(), ["00:04"]);
+    rig.press(0, 0);
+    rig.press(1, 1);
+    rig.press(2, 2);
+    rig.press(3, 3);
+    let (moving, scrolling) = (Direction::Up.bit(), Direction::Down.bit());
+    assert_eq!(rig.engine.mouse_keys(), MouseKeys { buttons: 3, moving, scrolling });
+    rig.release(0, 4);
+    rig.release(2, 5);
+    assert_eq!(rig.engine.mouse_keys(), MouseKeys { buttons: 2, moving: 0, scrolling });
+    // The engine sends no keyboard report for them; the cursor stage reads them.
+    assert!(rig.out().is_empty());
+}
+
+#[test]
+fn mouse_button_as_hold_and_on_a_layer() {
+    let mut rig = Rig::new(vec![
+        vec![Action::HoldTap { hold: Basic::MouseButtons(1), tap: Basic::Key(kc::A), profile: 0 }, basic(Basic::MomentaryLayer(1))],
+        vec![basic(Basic::MouseButtons(4)), Action::Transparent],
+    ]);
+    rig.press(0, 0);
+    rig.tick(300);
+    assert_eq!(rig.engine.mouse_keys().buttons, 1);
+    rig.release(0, 310);
+    assert_eq!(rig.engine.mouse_keys(), MouseKeys::default());
+    // Released after the layer key, the button still lets go.
+    rig.press(1, 400);
+    rig.press(0, 401);
+    assert_eq!(rig.engine.mouse_keys().buttons, 4);
+    rig.release(1, 402);
+    rig.release(0, 403);
+    assert_eq!(rig.engine.mouse_keys(), MouseKeys::default());
+}
+
+#[test]
+fn reset_lets_go_of_mouse_keys() {
+    let mut rig = Rig::new(vec![vec![basic(Basic::MouseButtons(1))]]);
+    rig.press(0, 0);
+    rig.engine.reset(&mut rig.log);
+    assert_eq!(rig.engine.mouse_keys(), MouseKeys::default());
 }

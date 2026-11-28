@@ -1,6 +1,6 @@
 use heapless::Vec;
 
-use crate::action::{Action, Basic, Combo, ComboOptions, HoldTapFlavor, HoldTapProfile, MacroStep};
+use crate::action::{Action, Basic, Combo, ComboOptions, HoldTapFlavor, HoldTapProfile, MacroStep, MouseKeys};
 use crate::combo::{ComboStage, Combos};
 use crate::keycode::modifier_bit;
 use crate::{Event, Millis, Source};
@@ -206,6 +206,21 @@ impl Engine {
         layers
     }
 
+    /// The mouse keys held now. Turning these into movement takes time and
+    /// settings, which is left to the caller.
+    pub fn mouse_keys(&self) -> MouseKeys {
+        let mut keys = MouseKeys::default();
+        for held in &self.held {
+            match held.action {
+                Basic::MouseButtons(buttons) => keys.buttons |= buttons,
+                Basic::MouseMove(direction) => keys.moving |= direction.bit(),
+                Basic::MouseScroll(direction) => keys.scrolling |= direction.bit(),
+                _ => {}
+            }
+        }
+        keys
+    }
+
     /// The key presses acted on since the last call, oldest first, each with
     /// the layer that supplied its action. A press waiting behind an
     /// undecided hold-tap appears once it is decided; keys swallowed by a
@@ -336,7 +351,7 @@ impl Engine {
                 }
             }
             Basic::Mods(_) => self.report(out),
-            // Stored, but nothing acts on them yet.
+            // Read through `mouse_keys`.
             Basic::MouseButtons(_) | Basic::MouseMove(_) | Basic::MouseScroll(_) => {}
             Basic::MomentaryLayer(_) | Basic::None => {}
         }
