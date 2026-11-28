@@ -223,19 +223,25 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
   // The knob is also a switch: on key 3 it is drawn as one round key, turned and pressed.
   // Slowly when filmed, so that each state can be seen.
   const pause = () => page.waitForTimeout(process.env.SHOTS ? 1500 : 0)
-  await page.click('[data-test=nav-layout]')
+  await page.click('[data-test=nav-keymap]')
   await pause()
-  await page.locator('[data-test=layout-canvas] [data-pos="3"]').dispatchEvent('pointerdown')
+  await page.click('[data-test=edit-layout]')
+  await pause()
+  await page.locator('[data-test=keymap-board] [data-pos="3"]').dispatchEvent('pointerdown')
   await page.dispatchEvent('body', 'pointerup')
   await pause()
   await page.selectOption('[data-test=knob-on-key]', '4')
-  await expect(page.locator('[data-test=layout-canvas] [data-pos="4"]')).toHaveCount(0)
+  await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos]')).toHaveCount(3)
   await pause()
-  await page.click('[data-test=nav-keymap]')
+  await page.click('[data-test=edit-layout]')
   await expect(page.locator('[data-test=keymap-board] .key[data-pos="3"]')).toHaveCount(0)
   await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos]')).toHaveCount(3)
   // The turns are small tabs on the key; with the knob selected they grow, to be easy to hit.
   const part = (pos: number) => page.locator(`[data-test=keymap-board] [data-knob="4"] [data-pos="${pos}"]`)
+  // The key is still selected from arranging it; let go of it first.
+  await page.locator('[data-test=keymap-board]').locator('..').click({ position: { x: 20, y: 20 } })
+  await expect(page.locator('[data-test=keymap-board] .selected')).toHaveCount(0)
+  await page.waitForTimeout(300) // the tabs shrink over a moment
   const small = (await part(5).boundingBox())!
   await pause()
   await assign(page, 3, 4) // pressing the knob: A
@@ -370,27 +376,49 @@ test('split keyboard: a half that was away catches up; two changed halves ask wh
 test('layout editor: drag, type exact values, import from keyboard-layout-editor', async ({ page }) => {
   await openDemo(page, 'macropad')
   await runWizard(page)
-  await page.click('[data-test=nav-layout]')
-  const key = page.locator('[data-test=layout-canvas] [data-pos="0"]')
+  // Slowly when filmed, so that each state can be seen.
+  const pause = () => page.waitForTimeout(process.env.SHOTS ? 1300 : 0)
+  // Arranging happens on the keymap's own keyboard: it gets a grid and tools under it, and stays where it is.
+  const key = page.locator('[data-test=keymap-board] [data-pos="0"]')
+  const atRest = await key.boundingBox()
+  await pause()
+  await page.click('[data-test=edit-layout]')
+  await expect(page.locator('[data-test=layout-tools]')).toBeVisible()
+  await expect(page.locator('[data-test=picker]')).toHaveCount(0)
   const box = (await key.boundingBox())!
+  expect(box).toEqual(atRest)
+  await pause()
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   await page.mouse.down()
   await page.mouse.move(box.x + box.width / 2 - box.width, box.y + box.height / 2, { steps: 4 })
+  await pause()
   await page.mouse.up()
   // Kept at once, and the picture moves back to start at the left edge.
   await expect(page.locator('[data-test=field-x]')).toHaveValue('0')
+  await pause()
   await page.fill('[data-test=field-w]', '2')
   await page.locator('[data-test=field-w]').blur()
-  await page.click('[data-test=nav-keymap]')
+  await pause()
+  // The tools fold down to a bar like the key picker does, and stay folded for it; a click anywhere on the bar opens them.
+  await page.click('[data-test=sheet-fold]')
+  await expect(page.locator('[data-test=field-w]')).toBeHidden()
+  await pause()
+  await page.click('[data-test=layout-target]')
+  await expect(page.locator('[data-test=field-w]')).toBeVisible()
+  await pause()
+  await page.click('[data-test=edit-layout]')
+  await expect(page.locator('[data-test=picker]')).toBeVisible()
   await expect(page.locator('[data-test=keymap-board] .key')).toHaveCount(6)
   const widths = await page.locator('[data-test=keymap-board] .key .base').evaluateAll((rects) => rects.map((r) => r.getAttribute('width')))
   expect(widths.filter((w) => w === '194')).toHaveLength(1)
+  await pause()
 
-  await page.click('[data-test=nav-layout]')
-  await page.click('[data-test=import-kle]')
+  await page.click('[data-test=edit-layout]')
   await page.fill('[data-test=kle-text]', '["A","B","C","D","E","F"]')
+  await pause()
   await page.click('[data-test=kle-apply]')
-  await page.click('[data-test=nav-keymap]')
+  await pause()
+  await page.click('[data-test=edit-layout]')
   await expect(page.locator('[data-test=keymap-board] .key')).toHaveCount(6)
   const ys = await page.locator('[data-test=keymap-board] .key .base').evaluateAll((rects) => new Set(rects.map((r) => r.getAttribute('y'))).size)
   expect(ys).toBe(1)
@@ -587,13 +615,17 @@ test('changes save themselves and can be undone; an empty keyboard offers its le
   const redo = page.locator('[data-test=redo]')
   await expect(undo).toBeDisabled()
 
-  // The key picker folds down to one bar, and searching for a key opens it again.
-  await page.click('[data-test=picker-fold]')
+  // The sheet under the keyboard folds down to one bar. Searching for a key opens it again, and so does a click anywhere on the bar.
+  await page.click('[data-test=sheet-fold]')
   await expect(page.locator('[data-test=tab-keys]')).toBeHidden()
   await expect(page.locator('[data-test=action-description]')).toBeVisible()
   await page.fill('[data-test=search]', 'esc')
   await expect(page.locator('[data-test=picker] .key-btn').first()).toBeVisible()
   await page.fill('[data-test=search]', '')
+  await expect(page.locator('[data-test=tab-keys]')).toBeVisible()
+  await page.click('[data-test=sheet-fold]')
+  await expect(page.locator('[data-test=tab-keys]')).toBeHidden()
+  await page.click('[data-test=action-description]')
   await expect(page.locator('[data-test=tab-keys]')).toBeVisible()
 
   // Nothing types yet, and the quick way to the letters is pointed out.
@@ -625,13 +657,13 @@ test('changes save themselves and can be undone; an empty keyboard offers its le
   await expect(first).toContainText('Q')
 
   // The picture of the keys is kept as it is changed, and undone the same way.
-  await page.click('[data-test=nav-layout]')
-  await page.locator('[data-test=layout-canvas] [data-pos="0"]').dispatchEvent('pointerdown')
+  await page.click('[data-test=edit-layout]')
+  await page.locator('[data-test=keymap-board] [data-pos="0"]').dispatchEvent('pointerdown')
   await page.dispatchEvent('body', 'pointerup')
   await page.fill('[data-test=field-w]', '2')
   await page.locator('[data-test=field-w]').blur()
   await saved(page)
-  await page.click('[data-test=nav-keymap]')
+  await page.click('[data-test=edit-layout]')
   const width = () => page.locator('[data-test=keymap-board] [data-pos="0"] .base').getAttribute('width')
   const wide = await width()
   await page.keyboard.press('ControlOrMeta+z')
@@ -700,20 +732,20 @@ test('a key skipped during setup is added afterwards', async ({ page }) => {
 test('layout editor: a rectangle selects several keys to move and resize together', async ({ page }) => {
   await openDemo(page, 'macropad')
   await runWizard(page)
-  await page.click('[data-test=nav-layout]')
-  const canvas = page.locator('[data-test=layout-canvas]')
-  const boxOf = async (pos: number) => (await canvas.locator(`[data-pos="${pos}"] rect`).boundingBox())!
+  await page.click('[data-test=edit-layout]')
+  const canvas = page.locator('[data-test=keymap-board]')
+  const boxOf = async (pos: number) => (await canvas.locator(`[data-pos="${pos}"] .base`).boundingBox())!
   const first = await boxOf(0)
   const second = await boxOf(1)
   // From the empty space above-left of the first key to the middle of the second.
   await page.mouse.move(first.x - 30, first.y - 30)
   await page.mouse.down()
   await page.mouse.move(second.x + second.width / 2, second.y + second.height / 2, { steps: 5 })
-  await expect(page.locator('[data-test=marquee]')).toBeVisible()
+  await expect(page.locator('[data-test=keymap-marquee]')).toBeVisible()
   await page.mouse.up()
-  await expect(page.locator('[data-test=marquee]')).toHaveCount(0)
+  await expect(page.locator('[data-test=keymap-marquee]')).toHaveCount(0)
   await expect(canvas.locator('.key.selected')).toHaveCount(2)
-  await expect(page.locator('.side h3').first()).toHaveText('2 keys')
+  await expect(page.locator('[data-test=layout-target]')).toHaveText('2 keys')
 
   // One width for both; the untouched third key keeps its own.
   await page.fill('[data-test=field-w]', '1.5')

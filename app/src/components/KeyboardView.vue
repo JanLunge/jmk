@@ -4,7 +4,7 @@
 import { computed, ref } from 'vue'
 import { carriesKey } from '../lib/drag'
 import type { Legend } from '../lib/keycodes'
-import { bounds, hasKey, knobKey } from '../lib/layout'
+import { bounds, hasKey, knobKey, UNIT, type Bounds } from '../lib/layout'
 import type { KeyGeometry } from '../lib/protocol'
 
 const props = withDefaults(
@@ -32,6 +32,10 @@ const props = withDefaults(
     lights?: { x: number; y: number; color: string; under: boolean; marked?: boolean }[]
     /** Largest key size in pixels; the drawing shrinks to fit its box. */
     maxUnit?: number
+    /** The part of the picture to show, when it must hold still while keys are moved. Otherwise what the keys cover. */
+    frame?: Bounds
+    /** Draw the keys on a grid of key units, for arranging them. It runs past the edge of the picture; the box around clips it. */
+    grid?: boolean
   }>(),
   { maxUnit: 62 },
 )
@@ -57,9 +61,9 @@ function land(pos: number, event: DragEvent) {
 }
 
 const PAD = 14
-const box = computed(() => bounds(props.layout))
+const box = computed(() => props.frame ?? bounds(props.layout))
 const viewBox = computed(() => `${box.value.x - PAD} ${box.value.y - PAD} ${box.value.w + 2 * PAD} ${box.value.h + 2 * PAD}`)
-const maxWidth = computed(() => ((box.value.w + 2 * PAD) / 100) * props.maxUnit)
+const maxWidth = computed(() => ((box.value.w + 2 * PAD) / UNIT) * props.maxUnit)
 
 const isKnob = (pos: number) => !!props.knobs?.includes(pos)
 /** Per knob in the picture, the switch it sits on (-1: none). */
@@ -139,7 +143,11 @@ function fontSize(text: string, width: number): number {
       <filter id="jmk-glow" x="-150%" y="-150%" width="400%" height="400%">
         <feGaussianBlur stdDeviation="16" />
       </filter>
+      <pattern v-if="grid" id="jmk-grid" :width="UNIT" :height="UNIT" patternUnits="userSpaceOnUse">
+        <path :d="`M ${UNIT} 0 H 0 V ${UNIT}`" class="grid-line" />
+      </pattern>
     </defs>
+    <rect v-if="grid" :x="-60 * UNIT" :y="-60 * UNIT" :width="160 * UNIT" :height="160 * UNIT" fill="url(#jmk-grid)" />
     <g v-if="lights" class="glows">
       <template v-for="(light, index) in lights" :key="index">
         <circle v-if="light.under && light.color !== '#000000'" :cx="light.x" :cy="light.y" r="46" :fill="light.color" filter="url(#jmk-glow)" />
@@ -231,6 +239,13 @@ function fontSize(text: string, width: number): number {
   height: auto;
   user-select: none;
   touch-action: none;
+}
+
+.grid-line {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1.5;
+  opacity: 0.6;
 }
 
 .cap {

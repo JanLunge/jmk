@@ -181,9 +181,6 @@ const summary = computed(() => {
         </optgroup>
       </select>
       <input v-model="search" class="input search" placeholder="Search keys…" data-test="search" />
-      <button class="fold" :title="minimized ? 'Open the key picker' : 'Minimise, so the keyboard has the room'" :aria-label="minimized ? 'Open the key picker' : 'Minimise the key picker'" :aria-expanded="!minimized" data-test="picker-fold" @click="emit('minimize', !minimized)">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path :d="minimized ? 'm18 15-6-6-6 6' : 'm6 9 6 6 6-6'" /></svg>
-      </button>
     </div>
 
     <div v-show="!minimized" class="tabs row">
@@ -351,6 +348,7 @@ const summary = computed(() => {
 .bar {
   gap: 16px;
   min-height: 40px;
+  padding-right: var(--fold-room, 0px);
 }
 
 .now {
@@ -443,38 +441,6 @@ const summary = computed(() => {
   flex: none;
   width: auto;
   max-width: 170px;
-}
-
-.fold {
-  flex: none;
-  width: 32px;
-  height: 32px;
-  margin-left: -6px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    color 0.15s;
-}
-
-.fold:hover {
-  background: var(--panel-2);
-  color: var(--text);
-}
-
-.fold svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .picker.minimized {

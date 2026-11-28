@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ActionPicker from '../components/ActionPicker.vue'
+import BottomSheet from '../components/BottomSheet.vue'
 import KeyboardView from '../components/KeyboardView.vue'
 import KeymapOverview from '../components/KeymapOverview.vue'
+import LayoutEditor from '../components/LayoutEditor.vue'
 import LetterRows from '../components/LetterRows.vue'
 import { app, attempt, toast } from '../lib/app'
 import { localPositions } from '../lib/definition'
@@ -18,8 +20,10 @@ import { canColorLayers, canJoinLayers, canKeepLetterRows, knobPositions, positi
 const props = defineProps<{ session: Session }>()
 
 const layer = ref(0)
-/** Editing one layer, or looking at all of them. */
-const view = ref<'edit' | 'all'>('edit')
+/** Editing one layer's keys, arranging the picture of the keyboard, or looking at all layers. */
+const view = ref<'edit' | 'layout' | 'all'>('edit')
+/** The layout tools while they are open. The keyboard is then drawn from their draft, and a press on a key goes to them. */
+const arranger = ref<InstanceType<typeof LayoutEditor>>()
 /** The keys being edited. What is picked goes on all of them; the last one is the one shown. */
 const selection = ref<number[]>([props.session.layout.findIndex(hasKey)].filter((pos) => pos >= 0))
 const selected = computed<number | undefined>({
@@ -43,6 +47,8 @@ const keyLegend = (pos: number) => {
   }
   return named(action, legend(action))
 }
+/** While arranging, every key also says which position of the keymap it is. */
+const boardLegend = (pos: number) => (arranger.value && actions.value[pos] !== undefined ? { ...keyLegend(pos)!, sub: String(pos) } : keyLegend(pos))
 
 /** A key that plays a named macro shows the name, as far as it fits. */
 function named(action: Action, drawn: ReturnType<typeof legend>) {
@@ -108,7 +114,7 @@ function openLayer(index: number) {
   // A second click on the open layer offers its colours and what turns it on.
   coloring.value = view.value === 'edit' && layer.value === index && !coloring.value
   layer.value = index
-  view.value = 'edit'
+  if (view.value === 'all') view.value = 'edit'
 }
 
 // --- Dragging ------------------------------------------------------------------
@@ -128,6 +134,7 @@ async function onDrop(pos: number, event: DragEvent) {
 const moving = ref<{ from: number; x: number; y: number; far: boolean }>()
 function onDown(pos: number, event: PointerEvent) {
   coloring.value = false
+  if (arranger.value) return arranger.value.down(pos, event)
   // With Shift, Cmd or Ctrl a key joins or leaves the selection.
   if (event.shiftKey || event.metaKey || event.ctrlKey) {
     selection.value = selection.value.includes(pos) ? selection.value.filter((key) => key !== pos) : [...selection.value, pos]
@@ -170,7 +177,7 @@ async function onUp(pos: number) {
 
 // --- Typing on the computer's own keyboard fills in the keymap ---------------
 const PICKER_KEY = 'jmk.keymap.picker'
-/** The key picker folded down to one bar; kept, as it is a way of working and not a passing state. */
+/** The sheet under the keyboard folded down to one bar; kept, as it is a way of working and not a passing state. */
 const minimized = ref(localStorage.getItem(PICKER_KEY) === 'min')
 watch(minimized, (on) => localStorage.setItem(PICKER_KEY, on ? 'min' : 'open'))
 const TYPING_KEY = 'jmk.keymap.typing'
@@ -234,7 +241,7 @@ function assignTyped(basic: Basic) {
 let loneModifier: number | undefined
 
 function wantsTyping(event: KeyboardEvent): number | undefined {
-  if (!typing.value || recordingKeys.value || lettersOpen.value || selected.value === undefined) return undefined
+  if (view.value !== 'edit' || !typing.value || recordingKeys.value || lettersOpen.value || selected.value === undefined) return undefined
   const target = event.target as HTMLElement | null
   if (target?.closest?.('input, textarea, select, [contenteditable]')) return undefined
   return usageForCode(event.code)
@@ -379,7 +386,7 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
             v-for="(_, index) in session.layers"
             :key="index"
             class="layer"
-            :class="{ on: view === 'edit' && layer === index, live: index > 0 && layerActive(index) }"
+            :class="{ on: view !== 'all' && layer === index, live: index > 0 && layerActive(index) }"
             :style="{ '--tint': layerColor(session, index) ?? 'var(--muted)' }"
             :data-test="'layer-' + index"
             :title="view === 'edit' && layer === index ? 'Click again to change its colour or what turns it on' : ''"
@@ -400,7 +407,10 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
           <input v-model="typing" type="checkbox" data-test="typing" @change="($event.target as HTMLElement).blur()" />
           Type to assign
         </label>
-        <button class="btn small ghost" :class="{ primary: view === 'all' }" data-test="all-layers" @click="view = view === 'all' ? 'edit' : 'all'">
+        <button v-if="view !== 'all'" class="btn small" :class="view === 'layout' ? 'primary' : 'ghost'" title="Move, size and turn the keys so the picture matches your keyboard" data-test="edit-layout" @click="view = view === 'layout' ? 'edit' : 'layout'">
+          {{ view === 'layout' ? 'Done arranging' : 'Edit layout' }}
+        </button>
+        <button v-if="view !== 'layout'" class="btn small" :class="view === 'all' ? 'primary' : 'ghost'" data-test="all-layers" @click="view = view === 'all' ? 'edit' : 'all'">
           {{ view === 'all' ? 'Back to editing' : 'All layers' }}
         </button>
       </div>
@@ -433,24 +443,27 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
       <KeymapOverview v-if="view === 'all'" :session="session" />
 
       <template v-else>
-        <div ref="board" class="board" title="Drag a key onto another to swap them. Shift-click or drag across keys to change several at once." @pointerdown="bandDown">
+        <!-- One keyboard for both: arranging it puts it on a grid, in a box, and nothing moves. -->
+        <div ref="board" class="board" :class="{ boxed: arranger }" :title="arranger ? '' : 'Drag a key onto another to swap them. Shift-click or drag across keys to change several at once.'" @pointerdown="bandDown">
           <KeyboardView
-            :layout="session.layout"
-            :legend="keyLegend"
+            :layout="arranger?.draft ?? session.layout"
+            :frame="arranger?.frame"
+            :grid="!!arranger"
+            :legend="boardLegend"
             :tint="keyTint"
             :pressed="held.here"
             :pressed-elsewhere="held.elsewhere"
-            :selected="selection"
+            :selected="arranger?.selected ?? selection"
             :knobs="knobPositions(session)"
             :max-unit="minimized ? 84 : 62"
             interactive
-            droppable
+            :droppable="!arranger"
             data-test="keymap-board"
             @down="onDown"
             @up="onUp"
             @drop="onDrop"
           />
-          <div v-if="looseKnobs.length" class="knobs row">
+          <div v-if="looseKnobs.length" class="knobs row" :class="{ away: arranger }">
             <div v-for="knob in looseKnobs" :key="knob.index" class="knob row">
               <button class="turn" :class="{ on: selected === knob.ccw }" :data-test="'knob-' + knob.index + '-ccw'" @click="selected = knob.ccw">
                 ⟲ <strong>{{ keyLegend(knob.ccw)?.main || '·' }}</strong>
@@ -464,12 +477,13 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
         </div>
         <!-- The room for these is always kept: a line that comes and goes would make the keyboard jump. -->
         <div class="small hints">
-          <span v-if="wantsLetters && view === 'edit'" class="nudge" data-test="letters-nudge">
+          <span v-if="view === 'layout'" class="muted" data-test="layout-hint">Drag keys to where they sit on your keyboard. Drag across the grid to select several; arrow keys nudge, R turns.</span>
+          <span v-else-if="wantsLetters" class="nudge" data-test="letters-nudge">
             No letters on this keyboard yet.
             <button class="btn small primary" data-test="letters-nudge-open" @click="openLetters">Place the letters</button>
             <span class="muted">QWERTY, Colemak or Dvorak in one go</span>
           </span>
-          <span v-if="layerElsewhere || missingRemote" class="muted" data-test="keymap-hint">
+          <span v-if="view === 'edit' && (layerElsewhere || missingRemote)" class="muted" data-test="keymap-hint">
             <template v-if="layerElsewhere">Layer {{ topLayer }} is active on the keyboard, so the faintly marked keys are doing what that layer says.</template>
             <template v-if="missingRemote"> The other half is not connected right now; its keys can still be edited.</template>
           </span>
@@ -477,7 +491,8 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
       </template>
     </div>
 
-    <aside v-if="view === 'edit'" class="side card" :class="{ minimized }" data-test="picker">
+    <LayoutEditor v-if="view === 'layout'" ref="arranger" v-model:selection="selection" v-model:minimized="minimized" :session="session" />
+    <BottomSheet v-else-if="view === 'edit'" v-model:minimized="minimized" data-test="picker">
       <ActionPicker
         :action="selectedAction"
         :layer-count="session.layers.length"
@@ -490,7 +505,7 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
         @change="change"
         @minimize="minimized = $event"
       />
-    </aside>
+    </BottomSheet>
 
     <div v-if="marquee" class="marquee" :style="{ left: marquee.x + 'px', top: marquee.y + 'px', width: marquee.w + 'px', height: marquee.h + 'px' }" data-test="keymap-marquee" />
     <div v-if="moving?.far" class="carried" :style="{ left: moving.x + 'px', top: moving.y + 'px' }">
@@ -523,6 +538,8 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
 <style scoped>
 .keymap {
   display: grid;
+  /* As wide as the page, however much the sheet holds. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(150px, 1fr) minmax(230px, min(54%, 440px));
   gap: 14px;
   height: 100%;
@@ -662,6 +679,28 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
   justify-content: center;
   gap: 10px;
   padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  transition:
+    background 0.2s,
+    border-color 0.2s;
+}
+
+/* Arranging: the grid under the keys runs to the edge of this box. */
+.board.boxed {
+  overflow: hidden;
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.board.boxed :deep(.key),
+.board.boxed :deep(.half) {
+  cursor: grab;
+}
+
+/* Knobs with no place in the picture keep their room, so the keyboard stays put. */
+.knobs.away {
+  visibility: hidden;
 }
 
 /* The drawing shrinks to the room there is, in both directions. */
@@ -706,23 +745,6 @@ const missingRemote = computed(() => props.session.layout.length > positionCount
   justify-content: center;
   align-items: center;
   gap: 10px;
-}
-
-/* The picker floats over the page, apart from the keyboard it works on. */
-.side {
-  min-height: 0;
-  width: min(100%, 1180px);
-  justify-self: center;
-  padding: 12px 16px 14px;
-  background: color-mix(in srgb, var(--panel) 92%, var(--text));
-  box-shadow: var(--shadow);
-}
-
-.side.minimized {
-  width: auto;
-  max-width: 100%;
-  padding: 7px 10px 7px 20px;
-  border-radius: 999px;
 }
 
 .overlay {
