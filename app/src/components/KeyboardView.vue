@@ -92,13 +92,16 @@ const dials = computed(() =>
       const cy = key.y + key.h / 2
       const r = Math.min(key.w, key.h) / 2 - 5
       const press = presses.value.get(pos)!
+      const open = [pos, pos + 1, press].some((part) => props.selected?.includes(part))
+      const [tw, th, top] = open ? [96, 46, cy - r - 36] : [r + 2, 24, cy - r - 4]
       return {
         pos,
         cx,
         cy,
         r,
         transform: `rotate(${key.r / 10} ${cx} ${cy})`,
-        // Left turns one way, right the other. A knob on a switch is that key, round, with the two turns as tabs on its top edge.
+        // Left turns one way, right the other. A knob on a switch is that key, round, with the two turns as tabs
+        // on its top edge; they grow while one of the three is selected, to be easy to hit.
         halves: (press < 0
           ? [
               { pos, d: `M ${cx} ${cy - r} A ${r} ${r} 0 0 0 ${cx} ${cy + r} Z`, x: cx - r / 2, y: cy + 6, arrow: '⟲', tab: '', room: r - 8, most: 18 },
@@ -106,16 +109,20 @@ const dials = computed(() =>
             ]
           : [
               { pos: press, d: `M ${cx - r} ${cy} a ${r} ${r} 0 1 0 ${2 * r} 0 a ${r} ${r} 0 1 0 ${-2 * r} 0 Z`, x: cx, y: cy + 14, arrow: '', tab: '', room: 1.6 * r, most: 30 },
-              { pos, d: tab(cx - r - 3, cy - r - 4, r + 2), x: cx - r / 2 - 2, y: cy - r + 12, arrow: '', tab: '⟲ ', room: r - 6, most: 13 },
-              { pos: pos + 1, d: tab(cx + 1, cy - r - 4, r + 2), x: cx + r / 2 + 2, y: cy - r + 12, arrow: '', tab: '⟳ ', room: r - 6, most: 13 },
+              ...[
+                { pos, x: cx - tw - 1, tab: '⟲ ' },
+                { pos: pos + 1, x: cx + 1, tab: '⟳ ' },
+              ].map((turn) => ({ ...turn, d: pill(turn.x, top, tw, th), x: turn.x + tw / 2, y: top + th / 2 + 4, arrow: '', room: tw - 10, most: open ? 22 : 13 })),
             ]
         ).map((half) => ({ ...half, text: half.tab + (props.legend?.(half.pos)?.main ?? '') })),
+        open,
       }
-    }),
+    })
+    // The one with its tabs grown goes on top.
+    .sort((a, b) => Number(a.open) - Number(b.open)),
 )
 
-/** A pill, 24 high. */
-const tab = (x: number, y: number, w: number) => `M ${x + 12} ${y} h ${w - 24} a 12 12 0 0 1 0 24 h ${24 - w} a 12 12 0 0 1 0 -24 Z`
+const pill = (x: number, y: number, w: number, h: number) => `M ${x + h / 2} ${y} h ${w - h} a ${h / 2} ${h / 2} 0 0 1 0 ${h} h ${h - w} a ${h / 2} ${h / 2} 0 0 1 0 ${-h} Z`
 
 function fontSize(text: string, width: number): number {
   const fit = (width - 22) / Math.max(text.length, 1) / 0.6

@@ -229,13 +229,21 @@ test('knob pad: direct wiring and a rotary encoder', async ({ page }) => {
   await page.click('[data-test=nav-keymap]')
   await expect(page.locator('[data-test=keymap-board] .key[data-pos="3"]')).toHaveCount(0)
   await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos]')).toHaveCount(3)
-  // Its three parts are small in the picture, so they have buttons under it too.
-  await page.click('[data-test=knob-0-press]')
-  await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos="3"]')).toHaveClass(/selected/)
+  // The turns are small tabs on the key; with the knob selected they grow, to be easy to hit.
+  const part = (pos: number) => page.locator(`[data-test=keymap-board] [data-knob="4"] [data-pos="${pos}"]`)
+  const small = (await part(5).boundingBox())!
   await assign(page, 3, 4) // pressing the knob: A
-  await expect(page.locator('[data-test=keymap-board] [data-knob="4"] [data-pos="3"]')).toContainText('A')
+  await expect(part(3)).toContainText('A')
+  expect((await part(5).boundingBox())!.width).toBeGreaterThan(small.width * 1.5)
+  await part(5).dispatchEvent('pointerdown')
+  await part(5).dispatchEvent('pointerup')
+  await expect(part(5)).toHaveClass(/selected/)
   await saved(page)
   if (process.env.SHOTS) await page.locator('[data-test=keymap-board]').locator('..').screenshot({ path: `${process.env.SHOTS}/knob-on-key.png` })
+  // A click beside the keys lets go of the selection, and the tabs shrink again.
+  await page.locator('[data-test=keymap-board]').locator('..').click({ position: { x: 20, y: 20 } })
+  await expect(page.locator('[data-test=keymap-board] .selected')).toHaveCount(0)
+  expect((await part(5).boundingBox())!.width).toBeCloseTo(small.width, 0)
 })
 
 const splitStatus = (page: Page) => page.locator('[data-test=split-status]')
