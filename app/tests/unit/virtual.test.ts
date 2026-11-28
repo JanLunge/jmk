@@ -12,7 +12,7 @@ import { lightMode, placeAtKey, hsvToRgb, rgbToHsv, ring, underKeys } from '../.
 import { keymapPoster } from '../../src/lib/poster'
 import { layerHex } from '../../src/lib/layers'
 import { gridLayout } from '../../src/lib/layout'
-import { addKey, alignHalves, canTuneCombos, knobPositions, setCombos, needsRestart, save, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
+import { addKey, alignHalves, canTuneCombos, knobPositions, setCombos, needsRestart, save, setIndicators, setLighting, openSession, setAction, setHardware, setLayerCount, starterLayout, setLayout, type Session } from '../../src/lib/session'
 import { starterAction } from './keys'
 import { advanceVirtualTime, VirtualTransport } from '../../src/lib/transport'
 import { loadBridge } from '../../src/lib/wasm'
@@ -317,6 +317,19 @@ describe('lights', () => {
 
     // A pin in use for keys is refused.
     await expect(during(session.client.setLighting({ ...session.lighting, pin: 3 }))).rejects.toThrow('used twice')
+
+    // A light of the chain that turns blue while layer 1 is on; it comes back with a fresh read.
+    const indicators = { pin: 25, active_low: false, list: [{ led: 1, shows: { Layer: 1 }, hue: 172, sat: 255 }] }
+    await during(setLayerCount(session, 2))
+    await during(setAction(session, 0, 0, { Basic: { MomentaryLayer: 1 } }))
+    await during(setIndicators(session, indicators))
+    expect(await during(session.client.indicators())).toEqual(indicators)
+    transport.setKey(0, true)
+    advanceVirtualTime(40)
+    expect(session.lights[1]).toEqual([0, 0, 255])
+    transport.setKey(0, false)
+    advanceVirtualTime(40)
+    expect(session.lights[1]).toEqual([0, 0, 0])
     transport.close()
   })
 

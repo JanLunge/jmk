@@ -60,6 +60,13 @@ impl Pins for NrfPins {
         }
     }
 
+    fn drive_high(&mut self, pin: Pin) {
+        if let Some(flex) = self.pin(pin) {
+            flex.set_high();
+            flex.set_as_output(OutputDrive::Standard);
+        }
+    }
+
     fn read(&mut self, pin: Pin) -> bool {
         self.pin(pin).is_some_and(|flex| flex.is_high())
     }

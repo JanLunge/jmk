@@ -3,8 +3,9 @@
 use jmk_core::keycode as kc;
 use jmk_core::{Action, Basic, MacroStep};
 use jmk_proto::{
-    ColorOrder, Contact, DiodeDirection, Effect, EncoderConfig, Error, Event, HardwareConfig, KeyGeometry, Led,
-    LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, SplitConfig, SplitStatus, SplitSync,
+    ColorOrder, Contact, DiodeDirection, Effect, EncoderConfig, Error, Event, HardwareConfig, Indicator, Indicators, KeyGeometry,
+    Led, LightZone, LightingConfig, LinkConfig, MatrixConfig, Meta, Pin, Request, Response, Shows, SplitConfig, SplitStatus,
+    SplitSync,
 };
 use jmk_sim::{HostEvent, VirtualKeyboard, Wire, Wiring};
 
@@ -1234,6 +1235,76 @@ fn the_lights_of_both_halves_answer_to_keys_of_either_and_move_as_one() {
         assert_ne!(right.kb.pins().lights()[2], [0; 3]);
         if typed_on_left { &mut left } else { &mut right }.kb.set_key(key, false);
     }
+}
+
+fn indicators(pin: Option<Pin>, list: &[Indicator]) -> Indicators {
+    Indicators { pin, active_low: false, list: list.iter().copied().collect() }
+}
+
+#[test]
+fn a_light_shows_caps_lock_or_a_layer_instead_of_its_effect() {
+    let mut rig = Rig::wires(&[Wire::Ground(2), Wire::Ground(3)]);
+    rig.ok(Request::SetHardware(HardwareConfig { reserved_pins: pins(&[25]), ..direct(&[2, 3]) }));
+    rig.ok(Request::SetLayerCount(2));
+    rig.ok(Request::SetActions { layer: 0, pos: 0, actions: [Action::Basic(Basic::MomentaryLayer(1))].into_iter().collect() });
+    rig.ok(Request::SetLighting(lighting(Effect::Solid, Effect::Off)));
+    // The first light of the chain turns blue with caps lock; the board's
+    // own light, on a reserved pin, is on while layer 1 is.
+    let caps = Indicator { led: 0, shows: Shows::CapsLock, hue: 172, sat: 255 };
+    let layer = Indicator { led: Indicator::BOARD, shows: Shows::Layer(1), hue: 0, sat: 0 };
+    let wanted = indicators(Some(25), &[caps, layer]);
+    rig.ok(Request::SetIndicators(wanted.clone()));
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights()[0], [0, 255, 0]);
+    assert!(!rig.kb.pins().drives_high(25));
+
+    rig.kb.set_locks(0b010);
+    rig.kb.set_key(0, true);
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights()[..2], [[0, 0, 255], [0, 255, 0]]);
+    assert!(rig.kb.pins().drives_high(25));
+    rig.kb.set_locks(0);
+    rig.kb.set_key(0, false);
+    rig.run(30);
+    assert_eq!(rig.kb.pins().lights()[0], [0, 255, 0]);
+    assert!(!rig.kb.pins().drives_high(25));
+
+    // A light that is lit by a low pin; it is saved with the rest.
+    rig.ok(Request::SetIndicators(Indicators { active_low: true, ..wanted.clone() }));
+    rig.run(30);
+    assert!(rig.kb.pins().drives_high(25));
+    rig.ok(Request::Save);
+    rig.kb.reboot();
+    assert_eq!(rig.kb.request(Request::GetIndicators), Response::Indicators(Indicators { active_low: true, ..wanted }));
+
+    // Its pin cannot be a key's or the chain's, and is never probed.
+    rig.refused(Request::SetIndicators(indicators(Some(3), &[])), Error::DuplicatePin(3));
+    rig.refused(Request::SetIndicators(indicators(Some(9), &[])), Error::DuplicatePin(9));
+    rig.refused(Request::StartProbe(pins(&[24, 25])), Error::ReservedPin(25));
+}
+
+#[test]
+fn the_half_that_does_not_type_shows_the_layers_and_locks_of_the_one_that_does() {
+    let (mut left, mut right) = saved_pair();
+    for half in [&mut left, &mut right] {
+        half.ok(Request::SetLayerCount(2));
+        half.ok(Request::SetActions { layer: 0, pos: 0, actions: [Action::Basic(Basic::MomentaryLayer(1))].into_iter().collect() });
+    }
+    let on_layer = Indicator { led: Indicator::BOARD, shows: Shows::Layer(1), hue: 0, sat: 0 };
+    let on_caps = Indicator { led: Indicator::BOARD, shows: Shows::CapsLock, hue: 0, sat: 0 };
+    right.ok(Request::SetIndicators(indicators(Some(20), &[on_layer, on_caps])));
+    run_both(&mut left, &mut right, 600);
+    assert!(!right.kb.pins().drives_high(20));
+
+    left.kb.set_key(0, true);
+    run_both(&mut left, &mut right, 40);
+    assert!(right.kb.pins().drives_high(20), "the layer held on the other half");
+    left.kb.set_key(0, false);
+    run_both(&mut left, &mut right, 40);
+    assert!(!right.kb.pins().drives_high(20));
+    left.kb.set_locks(0b010);
+    run_both(&mut left, &mut right, 40);
+    assert!(right.kb.pins().drives_high(20), "caps lock, which only the typing half hears of");
 }
 
 #[test]

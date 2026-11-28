@@ -9,12 +9,15 @@ pub enum Pull {
 
 /// Run-time access to GPIOs by number, and to the light chain. The only way
 /// this crate ever drives a pin is low, and only pins the hardware
-/// configuration names; the light chain's data pin belongs to the port.
+/// configuration names; the one exception is the pin of a plain light. The
+/// light chain's data pin belongs to the port.
 pub trait Pins {
     /// Bit n is set if GPIO n may be used for keyboard wiring.
     fn usable(&self) -> u64;
     fn input(&mut self, pin: Pin, pull: Pull);
     fn drive_low(&mut self, pin: Pin);
+    /// Only ever called for the pin of a plain light.
+    fn drive_high(&mut self, pin: Pin);
     /// True if the pin reads high.
     fn read(&mut self, pin: Pin) -> bool;
     /// Whether this chip can run a split link as described. Called before a

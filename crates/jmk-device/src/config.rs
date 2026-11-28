@@ -1,7 +1,7 @@
 use heapless::{String, Vec};
 use jmk_core::{Action, Combo, ComboOptions, HoldTapFlavor, HoldTapProfile, Keymap, MacroStep};
 use jmk_proto::{
-    Doubles, HardwareConfig, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
+    Doubles, HardwareConfig, Indicators, KeyGeometry, LetterRows, LightingConfig, MoreWiring, MatrixConfig, Meta, SplitConfig, MAX_COMBOS, MAX_HOLD_TAP_PROFILES, MAX_KEYS,
     MAX_LAYERS, MAX_MACROS, MAX_MACRO_NAME, MAX_MACRO_STEPS,
 };
 
@@ -35,6 +35,7 @@ pub struct Config {
     pub more_wiring: MoreWiring,
     /// Positions that read a switch a second time and are not reported.
     pub doubles: Doubles,
+    pub indicators: Indicators,
     /// How many times the shared part was saved with a change in it; see
     /// [`crate::sync`].
     pub revision: u32,
@@ -145,6 +146,7 @@ impl Config {
             letter_rows: Self::NO_ROWS,
             more_wiring: Vec::new(),
             doubles: Vec::new(),
+            indicators: Indicators { pin: None, active_low: false, list: Vec::new() },
             revision: 0,
             base: None,
         }
@@ -169,6 +171,7 @@ impl Config {
             letter_rows,
             more_wiring,
             doubles,
+            indicators,
             revision,
             base,
         } = self;
@@ -188,6 +191,7 @@ impl Config {
         *letter_rows = Self::NO_ROWS;
         more_wiring.clear();
         doubles.clear();
+        *indicators = Self::new().indicators;
         *revision = 0;
         *base = None;
     }

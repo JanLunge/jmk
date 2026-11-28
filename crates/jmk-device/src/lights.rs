@@ -1,7 +1,7 @@
 //! Works out what colour every light shows.
 
 use jmk_core::Millis;
-use jmk_proto::{ColorOrder, Effect, Led, LightZone, LightingConfig, MAX_LEDS};
+use jmk_proto::{ColorOrder, Effect, Indicator, Indicators, Led, LightZone, LightingConfig, Shows, MAX_LEDS};
 
 use crate::pins::Pins;
 
@@ -22,11 +22,13 @@ pub(crate) struct Lights {
     next_frame: Millis,
     last_sent: Option<Millis>,
     identify: Option<u8>,
+    /// Whether the plain light is on, once it was set.
+    plain: Option<bool>,
 }
 
 impl Lights {
     pub const fn new() -> Self {
-        Self { frame: [[0; 3]; MAX_LEDS], heat: [0; MAX_LEDS], next_frame: 0, last_sent: None, identify: None }
+        Self { frame: [[0; 3]; MAX_LEDS], heat: [0; MAX_LEDS], next_frame: 0, last_sent: None, identify: None, plain: None }
     }
 
     /// Show only this light, or go back to the effects.
@@ -38,6 +40,7 @@ impl Lights {
     /// Send the next picture even if it looks the same.
     pub fn changed(&mut self) {
         self.last_sent = None;
+        self.plain = None;
     }
 
     pub fn key_pressed(&mut self, config: &LightingConfig, pos: u16) {
@@ -49,12 +52,28 @@ impl Lights {
     }
 
     /// `clock` is the time the effects move by: the same on both halves of
-    /// a split, so they move as one.
-    pub fn tick(&mut self, config: &LightingConfig, now: Millis, clock: Millis, pins: &mut impl Pins) {
-        if now < self.next_frame || config.leds.is_empty() {
+    /// a split, so they move as one. `state` is the active layers and the
+    /// lock keys as the computer reports them, for the indicators.
+    pub fn tick(&mut self, config: &LightingConfig, indicators: &Indicators, state: (u8, u8), now: Millis, clock: Millis, pins: &mut impl Pins) {
+        if now < self.next_frame {
             return;
         }
         self.next_frame = now + FRAME_MS;
+        let shown = |led: usize| indicators.list.iter().rev().find(|i| i.led as usize == led && is_on(i.shows, state));
+        if let Some(pin) = indicators.pin {
+            let plain = shown(Indicator::BOARD as usize).is_some();
+            if self.plain != Some(plain) {
+                self.plain = Some(plain);
+                if plain != indicators.active_low {
+                    pins.drive_high(pin);
+                } else {
+                    pins.drive_low(pin);
+                }
+            }
+        }
+        if config.leds.is_empty() {
+            return;
+        }
         let count = config.leds.len();
         let mut different = false;
         for (index, led) in config.leds.iter().enumerate() {
@@ -62,7 +81,10 @@ impl Lights {
             let rgb = match self.identify {
                 Some(shown) if shown as usize == index => [IDENTIFY; 3],
                 Some(_) => [0; 3],
-                None => scale(color(zone, led, self.heat[index], clock), config.limit),
+                None => {
+                    let rgb = shown(index).map_or_else(|| color(zone, led, self.heat[index], clock), |i| hsv(i.hue, i.sat, 255));
+                    scale(rgb, config.limit)
+                }
             };
             let wire = match config.order {
                 ColorOrder::Grb => [rgb[1], rgb[0], rgb[2]],
@@ -76,6 +98,16 @@ impl Lights {
             self.last_sent = Some(now);
             pins.show_lights(&self.frame[..count]);
         }
+    }
+}
+
+fn is_on(shows: Shows, (layers, locks): (u8, u8)) -> bool {
+    // The lock keys as in the keyboard's output report.
+    match shows {
+        Shows::NumLock => locks & 1 != 0,
+        Shows::CapsLock => locks & 2 != 0,
+        Shows::ScrollLock => locks & 4 != 0,
+        Shows::Layer(layer) => layer < 8 && layers >> layer & 1 != 0,
     }
 }
 
